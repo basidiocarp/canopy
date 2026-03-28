@@ -66,11 +66,11 @@ Current foundation fields:
 - `worktree_id`
 - `status`
 - `current_task_id`
+- `heartbeat_at`
 
 Planned additions after the foundation slice:
 
 - `capabilities`
-- `heartbeat_at`
 - `registered_at`
 - `last_error`
 
@@ -91,14 +91,41 @@ Current foundation fields:
 - `owner_agent_id`
 - `project_root`
 - `status`
+- `verification_state`
+- `blocked_reason`
+- `verified_by`
+- `verified_at`
+- `closed_by`
+- `closure_summary`
+- `closed_at`
 
 Planned additions after the foundation slice:
 
 - `priority`
-- `verification_state`
 - `created_at`
 - `updated_at`
-- `closed_at`
+
+### TaskEvent
+
+Current foundation fields:
+
+- `event_id`
+- `task_id`
+- `event_type`
+- `actor`
+- `from_status`
+- `to_status`
+- `verification_state`
+- `owner_agent_id`
+- `note`
+- `created_at`
+
+Supported `event_type` values for the current ledger:
+
+- `created`
+- `assigned`
+- `ownership_transferred`
+- `status_changed`
 
 ### TaskAssignment
 
@@ -159,7 +186,7 @@ Supported `message_type` values for the MVP:
 
 ### EvidenceRef
 
-This is a planned next-slice entity. It is not in the first Rust foundation yet.
+Current foundation fields:
 
 - `evidence_id`
 - `task_id`
@@ -167,6 +194,10 @@ This is a planned next-slice entity. It is not in the first Rust foundation yet.
 - `source_ref`
 - `label`
 - `summary`
+- `related_handoff_id`
+
+Planned additions after the foundation slice:
+
 - `created_at`
 
 Expected `source_kind` values:
@@ -251,6 +282,7 @@ The store should contain:
 - agent registrations
 - tasks
 - assignments
+- task events
 - handoffs
 - council messages
 - evidence refs
@@ -259,7 +291,7 @@ The store should contain:
 Likely next schema additions after the current foundation:
 
 - heartbeat history beyond the latest heartbeat
-- richer task verification and closure metadata
+- richer task timeline metadata beyond the current event rows
 
 It should not duplicate:
 
@@ -285,6 +317,7 @@ Instead, store references and small summaries.
 
 - show active agents
 - show task ledger and task state
+- show task lifecycle history and ownership changes
 - show pending handoffs and blocked tasks
 - show `Council` thread summaries per task
 - consume `Canopy` through an API or CLI surface, not by reading `canopy.db` directly

@@ -1,6 +1,6 @@
 use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, TaskStatus,
+    HandoffType, TaskEventType, TaskStatus, VerificationState,
 };
 use canopy::store::Store;
 use tempfile::tempdir;
@@ -59,6 +59,14 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("create task");
     assert_eq!(task.status, TaskStatus::Open);
     assert!(task.owner_agent_id.is_none());
+
+    let initial_events = store
+        .list_task_events(&task.task_id)
+        .expect("list initial events");
+    assert_eq!(initial_events.len(), 1);
+    assert_eq!(initial_events[0].event_type, TaskEventType::Created);
+    assert_eq!(initial_events[0].to_status, TaskStatus::Open);
+    assert_eq!(initial_events[0].actor, "operator");
 
     let assigned = store
         .assign_task(
@@ -123,6 +131,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         Some(reviewer.agent_id.as_str())
     );
     assert_eq!(transferred.status, TaskStatus::Assigned);
+    assert_eq!(transferred.verification_state, VerificationState::Unknown);
 
     let message = store
         .add_council_message(
@@ -154,16 +163,106 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let evidence_refs = store.list_evidence(&task.task_id).expect("list evidence");
     assert_eq!(evidence_refs, vec![evidence]);
 
+    let review_required = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            Some(VerificationState::Pending),
+            None,
+            None,
+        )
+        .expect("mark review required");
+    assert_eq!(review_required.status, TaskStatus::ReviewRequired);
+    assert_eq!(
+        review_required.verification_state,
+        VerificationState::Pending
+    );
+    assert_eq!(review_required.verified_by.as_deref(), Some("operator"));
+    assert!(review_required.verified_at.is_some());
+    assert!(review_required.closed_at.is_none());
+
+    let blocked = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Blocked,
+            "operator",
+            None,
+            Some("waiting on a second opinion"),
+            None,
+        )
+        .expect("mark blocked");
+    assert_eq!(blocked.status, TaskStatus::Blocked);
+    assert_eq!(
+        blocked.blocked_reason.as_deref(),
+        Some("waiting on a second opinion")
+    );
+
+    let completed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "claude-1",
+            Some(VerificationState::Passed),
+            None,
+            Some("review completed and accepted"),
+        )
+        .expect("complete task");
+    assert_eq!(completed.status, TaskStatus::Completed);
+    assert_eq!(completed.verification_state, VerificationState::Passed);
+    assert_eq!(completed.closed_by.as_deref(), Some("claude-1"));
+    assert_eq!(
+        completed.closure_summary.as_deref(),
+        Some("review completed and accepted")
+    );
+    assert!(completed.closed_at.is_some());
+    assert!(completed.blocked_reason.is_none());
+
+    let events = store
+        .list_task_events(&task.task_id)
+        .expect("list task events");
+    assert_eq!(events.len(), 6);
+    assert_eq!(events[1].event_type, TaskEventType::Assigned);
+    assert_eq!(events[1].to_status, TaskStatus::Assigned);
+    assert_eq!(
+        events[1].owner_agent_id.as_deref(),
+        Some(agent.agent_id.as_str())
+    );
+    assert_eq!(events[2].event_type, TaskEventType::OwnershipTransferred);
+    assert_eq!(
+        events[2].owner_agent_id.as_deref(),
+        Some(reviewer.agent_id.as_str())
+    );
+    assert_eq!(events[3].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[3].to_status, TaskStatus::ReviewRequired);
+    assert_eq!(
+        events[3].verification_state,
+        Some(VerificationState::Pending)
+    );
+    assert_eq!(events[4].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[4].to_status, TaskStatus::Blocked);
+    assert_eq!(
+        events[4].note.as_deref(),
+        Some("waiting on a second opinion")
+    );
+    assert_eq!(events[5].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[5].to_status, TaskStatus::Completed);
+    assert_eq!(
+        events[5].verification_state,
+        Some(VerificationState::Passed)
+    );
+    assert_eq!(
+        events[5].note.as_deref(),
+        Some("review completed and accepted")
+    );
+
     let refreshed_agents = store.list_agents().expect("list agents after transfer");
     let refreshed_reviewer = refreshed_agents
         .iter()
         .find(|candidate| candidate.agent_id == reviewer.agent_id)
         .expect("reviewer agent present");
-    assert_eq!(
-        refreshed_reviewer.current_task_id.as_deref(),
-        Some(task.task_id.as_str())
-    );
-    assert_eq!(refreshed_reviewer.status, AgentStatus::Assigned);
+    assert_eq!(refreshed_reviewer.current_task_id.as_deref(), None);
+    assert_eq!(refreshed_reviewer.status, AgentStatus::Idle);
     assert!(refreshed_reviewer.heartbeat_at.is_some());
 
     let refreshed_owner = refreshed_agents

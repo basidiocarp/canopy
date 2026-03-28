@@ -39,6 +39,19 @@ pub enum TaskStatus {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum VerificationState {
+    Unknown,
+    Pending,
+    Passed,
+    Failed,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum HandoffType {
     RequestHelp,
     RequestReview,
@@ -96,6 +109,19 @@ pub enum EvidenceSourceKind {
     ManualNote,
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskEventType {
+    Created,
+    Assigned,
+    OwnershipTransferred,
+    StatusChanged,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRegistration {
     pub agent_id: String,
@@ -118,7 +144,14 @@ pub struct Task {
     pub requested_by: String,
     pub project_root: String,
     pub status: TaskStatus,
+    pub verification_state: VerificationState,
     pub owner_agent_id: Option<String>,
+    pub blocked_reason: Option<String>,
+    pub verified_by: Option<String>,
+    pub verified_at: Option<String>,
+    pub closed_by: Option<String>,
+    pub closure_summary: Option<String>,
+    pub closed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +187,20 @@ pub struct EvidenceRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskEvent {
+    pub event_id: String,
+    pub task_id: String,
+    pub event_type: TaskEventType,
+    pub actor: String,
+    pub from_status: Option<TaskStatus>,
+    pub to_status: TaskStatus,
+    pub verification_state: Option<VerificationState>,
+    pub owner_agent_id: Option<String>,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
     pub agents: Vec<AgentRegistration>,
     pub tasks: Vec<Task>,
@@ -164,6 +211,7 @@ pub struct ApiSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskDetail {
     pub task: Task,
+    pub events: Vec<TaskEvent>,
     pub handoffs: Vec<Handoff>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,

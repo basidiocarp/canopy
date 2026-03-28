@@ -1,5 +1,6 @@
 use crate::models::{
     AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus, HandoffType,
+    VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -121,6 +122,20 @@ pub enum TaskCommand {
         assigned_by: String,
         #[arg(long)]
         reason: Option<String>,
+    },
+    Status {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        status: crate::models::TaskStatus,
+        #[arg(long)]
+        changed_by: String,
+        #[arg(long)]
+        verification_state: Option<VerificationState>,
+        #[arg(long)]
+        blocked_reason: Option<String>,
+        #[arg(long)]
+        closure_summary: Option<String>,
     },
     List,
     Show {

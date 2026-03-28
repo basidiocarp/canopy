@@ -92,6 +92,24 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 store.assign_task(&task_id, &assigned_to, &assigned_by, reason.as_deref())?;
             print_json(&task)?;
         }
+        TaskCommand::Status {
+            task_id,
+            status,
+            changed_by,
+            verification_state,
+            blocked_reason,
+            closure_summary,
+        } => {
+            let task = store.update_task_status(
+                &task_id,
+                status,
+                &changed_by,
+                verification_state,
+                blocked_reason.as_deref(),
+                closure_summary.as_deref(),
+            )?;
+            print_json(&task)?;
+        }
         TaskCommand::List => {
             print_json(&store.list_tasks()?)?;
         }

@@ -14,6 +14,10 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
   - agent registry
   - latest heartbeat tracking
   - tasks
+    - verification state
+    - blocked reason
+    - closure metadata
+    - persisted task-event history
   - handoffs
   - council messages
   - evidence refs
@@ -28,15 +32,13 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
 Complete the first local orchestration store beyond the current foundation with:
 
 - stronger typed protocol/state validation
-- richer task status mutation beyond assignment and handoff acceptance
 - heartbeat history beyond the latest heartbeat
-- richer closure and verification state
+- richer task timeline metadata beyond the current event rows
 
 ### MVP CLI
 
 Finish the first CLI surface with:
 
-- task status mutation
 - stronger filtering or query options on read surfaces
 
 ### Read API transport

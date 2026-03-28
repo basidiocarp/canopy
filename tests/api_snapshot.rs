@@ -109,6 +109,25 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .assert()
         .success();
 
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
     let snapshot_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
         .args([
@@ -128,4 +147,28 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(snapshot["tasks"].as_array().expect("tasks").len(), 1);
     assert_eq!(snapshot["handoffs"].as_array().expect("handoffs").len(), 1);
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
+
+    let task_detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&task_detail_output).expect("parse task detail");
+    assert_eq!(detail["task"]["status"], "review_required");
+    assert_eq!(detail["task"]["verification_state"], "pending");
+    assert_eq!(detail["events"].as_array().expect("events").len(), 2);
+    assert_eq!(detail["events"][0]["event_type"], "created");
+    assert_eq!(detail["events"][1]["event_type"], "status_changed");
+    assert_eq!(detail["handoffs"].as_array().expect("handoffs").len(), 1);
+    assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
 }

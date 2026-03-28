@@ -24,6 +24,7 @@ pub fn snapshot(store: &Store) -> StoreResult<ApiSnapshot> {
 pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     Ok(TaskDetail {
         task: store.get_task(task_id)?,
+        events: store.list_task_events(task_id)?,
         handoffs: store.list_handoffs(Some(task_id))?,
         messages: store.list_council_messages(task_id)?,
         evidence: store.list_evidence(task_id)?,

@@ -156,6 +156,31 @@ fn cli_creates_and_resolves_handoffs() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"status\": \"accepted\""));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "completed",
+            "--changed-by",
+            "claude-1",
+            "--verification-state",
+            "passed",
+            "--closure-summary",
+            "review accepted",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"verification_state\": \"passed\"",
+        ))
+        .stdout(predicate::str::contains("\"closed_by\": \"claude-1\""));
 }
 
 #[test]
@@ -182,4 +207,52 @@ fn cli_rejects_invalid_council_message_type() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("possible values"));
+}
+
+#[test]
+fn cli_requires_blocked_reason_for_blocked_status() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Blocked task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "blocked",
+            "--changed-by",
+            "operator",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "blocked tasks require a blocked reason",
+        ));
 }

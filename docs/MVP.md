@@ -8,12 +8,16 @@ The current codebase only implements the foundation layer of this MVP:
 - agent registry
 - latest heartbeat tracking
 - tasks
+  - verification state
+  - blocked reason
+  - closure metadata
+  - task-event history rows for creation, assignment, transfer, and status changes
 - handoffs
 - council messages
 - evidence refs
 - explicit read models through `api snapshot` and `api task`
 
-Heartbeat history beyond the latest heartbeat, richer task status mutation, and HTTP transport are still next-slice work.
+Heartbeat history beyond the latest heartbeat and HTTP transport are still next-slice work.
 
 ## Goal
 
@@ -89,6 +93,7 @@ canopy agent list
 canopy agent heartbeat
 canopy task create
 canopy task assign
+canopy task status
 canopy task list
 canopy task show
 canopy handoff create
@@ -136,6 +141,14 @@ The first useful views are:
 - handoff queue
 - per-agent activity panel
 
+Task detail should include:
+
+- latest task state
+- lifecycle event history
+- handoffs
+- council messages
+- evidence refs
+
 ## First `Stipe` Integration
 
 `Stipe` should not run `Council` logic. It should only ensure that:
@@ -157,4 +170,5 @@ The first useful views are:
 - two agents on different local host adapters or host instances can share one task with explicit ownership transfer
 - an operator can see the handoff and evidence in one place
 - a blocked task is visible without reading raw logs
-- a completed task records who did the work and what evidence justified closure
+- a completed task records who closed it, its verification state, and what evidence justified closure
+- an operator can inspect the sequence of task lifecycle changes without inferring it from snapshots
