@@ -261,6 +261,25 @@ pub enum HandoffAttentionReason {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+pub enum OperatorActionKind {
+    AcknowledgeTask,
+    VerifyTask,
+    ReassignTask,
+    FollowUpHandoff,
+    ExpireHandoff,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum OperatorActionTargetKind {
+    Task,
+    Handoff,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum AgentAttentionReason {
     AgingHeartbeat,
     StaleHeartbeat,
@@ -334,6 +353,16 @@ pub struct Handoff {
     pub created_at: String,
     pub updated_at: String,
     pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskAssignment {
+    pub assignment_id: String,
+    pub task_id: String,
+    pub assigned_to: String,
+    pub assigned_by: String,
+    pub reason: Option<String>,
+    pub assigned_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -415,15 +444,68 @@ pub struct SnapshotAttentionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskOwnershipSummary {
+    pub task_id: String,
+    pub current_owner_agent_id: Option<String>,
+    pub assignment_count: usize,
+    pub reassignment_count: usize,
+    pub last_assigned_to: Option<String>,
+    pub last_assigned_by: Option<String>,
+    pub last_assigned_at: Option<String>,
+    pub last_assignment_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskHeartbeatSummary {
+    pub task_id: String,
+    pub heartbeat_count: usize,
+    pub related_agent_count: usize,
+    pub fresh_agents: usize,
+    pub aging_agents: usize,
+    pub stale_agents: usize,
+    pub missing_agents: usize,
+    pub last_heartbeat_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentHeartbeatSummary {
+    pub agent_id: String,
+    pub current_task_id: Option<String>,
+    pub heartbeat_count: usize,
+    pub last_heartbeat_at: Option<String>,
+    pub last_status: Option<AgentStatus>,
+    pub freshness: Freshness,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorAction {
+    pub action_id: String,
+    pub kind: OperatorActionKind,
+    pub target_kind: OperatorActionTargetKind,
+    pub level: AttentionLevel,
+    pub task_id: Option<String>,
+    pub handoff_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub due_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
     pub attention: SnapshotAttentionSummary,
     pub agents: Vec<AgentRegistration>,
     pub agent_attention: Vec<AgentAttention>,
+    pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub tasks: Vec<Task>,
     pub task_attention: Vec<TaskAttention>,
+    pub task_heartbeat_summaries: Vec<TaskHeartbeatSummary>,
+    pub ownership: Vec<TaskOwnershipSummary>,
     pub handoffs: Vec<Handoff>,
     pub handoff_attention: Vec<HandoffAttention>,
+    pub operator_actions: Vec<OperatorAction>,
     pub evidence: Vec<EvidenceRef>,
 }
 
@@ -431,11 +513,16 @@ pub struct ApiSnapshot {
 pub struct TaskDetail {
     pub attention: TaskAttention,
     pub agent_attention: Vec<AgentAttention>,
+    pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
     pub task: Task,
+    pub ownership: TaskOwnershipSummary,
+    pub heartbeat_summary: TaskHeartbeatSummary,
+    pub assignments: Vec<TaskAssignment>,
     pub events: Vec<TaskEvent>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub handoffs: Vec<Handoff>,
     pub handoff_attention: Vec<HandoffAttention>,
+    pub operator_actions: Vec<OperatorAction>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
 }

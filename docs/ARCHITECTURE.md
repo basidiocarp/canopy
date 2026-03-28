@@ -115,6 +115,8 @@ Current read-model additions:
 - task freshness summary
 - owner heartbeat freshness summary
 - open-handoff freshness summary
+- ownership summary from assignment history
+- operator action hints derived from attention and due/expiry state
 
 ### TaskEvent
 
@@ -148,10 +150,11 @@ Current foundation fields:
 - `reason`
 - `assigned_at`
 
-Planned additions after the foundation slice:
+Current read-model additions:
 
-- `accepted_at`
-- `released_at`
+- assignment count
+- reassignment count
+- latest assignment actor/reason/timestamp
 
 ### Handoff
 
@@ -173,6 +176,34 @@ Current read-model additions:
 - derived handoff attention level
 - handoff freshness summary
 - `resolved_at`
+
+### Heartbeat summaries
+
+Current read-model additions:
+
+- task-scoped heartbeat summaries:
+  - related agent count
+  - heartbeat count
+  - freshness bucket counts
+  - latest heartbeat timestamp
+- agent-scoped heartbeat summaries:
+  - heartbeat count
+  - latest heartbeat timestamp and status
+  - derived freshness
+
+### OperatorAction
+
+Current read-model additions:
+
+- explicit operator action hints with a primary target kind:
+  - `task`
+  - `handoff`
+- current action kinds:
+  - `acknowledge_task`
+  - `verify_task`
+  - `reassign_task`
+  - `follow_up_handoff`
+  - `expire_handoff`
 
 ### CouncilMessage
 

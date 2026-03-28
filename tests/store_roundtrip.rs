@@ -61,6 +61,20 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     assert!(task.owner_agent_id.is_none());
     assert!(!task.created_at.is_empty());
     assert!(!task.updated_at.is_empty());
+    assert!(
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::InProgress, None)
+            .is_err()
+    );
+    assert!(
+        store
+            .heartbeat_agent(
+                &agent.agent_id,
+                AgentStatus::InProgress,
+                Some(&task.task_id)
+            )
+            .is_err()
+    );
 
     let initial_events = store
         .list_task_events(&task.task_id)
@@ -82,6 +96,24 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     assert_eq!(
         assigned.owner_agent_id.as_deref(),
         Some(agent.agent_id.as_str())
+    );
+    assert!(
+        store
+            .register_agent(&AgentRegistration {
+                status: AgentStatus::Idle,
+                current_task_id: Some(task.task_id.clone()),
+                ..agent.clone()
+            })
+            .is_err()
+    );
+    assert!(
+        store
+            .register_agent(&AgentRegistration {
+                status: AgentStatus::InProgress,
+                current_task_id: None,
+                ..reviewer.clone()
+            })
+            .is_err()
     );
 
     let heartbeat = store
@@ -126,11 +158,23 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("resolve handoff");
     assert_eq!(resolved.status, HandoffStatus::Accepted);
     assert!(resolved.resolved_at.is_some());
+    assert!(
+        store
+            .resolve_handoff(&handoff.handoff_id, HandoffStatus::Completed, "claude-1")
+            .is_err()
+    );
 
     let handoffs = store
         .list_handoffs(Some(&task.task_id))
         .expect("list handoffs");
     assert_eq!(handoffs, vec![resolved]);
+    let assignments = store
+        .list_task_assignments(Some(&task.task_id))
+        .expect("list assignments");
+    assert_eq!(assignments.len(), 2);
+    assert_eq!(assignments[0].assigned_to, agent.agent_id);
+    assert_eq!(assignments[1].assigned_to, reviewer.agent_id);
+    assert_eq!(assignments[1].assigned_by, "claude-1");
 
     let transferred = store.get_task(&task.task_id).expect("reload task");
     assert_eq!(

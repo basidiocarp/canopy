@@ -1,7 +1,8 @@
 use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
     CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType, Task,
-    TaskEvent, TaskEventType, TaskPriority, TaskSeverity, TaskStatus, VerificationState,
+    TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskSeverity, TaskStatus,
+    VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -212,6 +213,7 @@ impl Store {
     /// Returns an error if the underlying database write fails.
     pub fn register_agent(&self, agent: &AgentRegistration) -> StoreResult<AgentRegistration> {
         self.in_transaction(|conn| {
+            validate_agent_registration(conn, agent)?;
             conn.execute(
                 r"
                 INSERT INTO agents (
@@ -287,6 +289,7 @@ impl Store {
     ) -> StoreResult<AgentRegistration> {
         self.ensure_agent_exists(agent_id)?;
         self.in_transaction(|conn| {
+            validate_agent_task_link(conn, agent_id, status, current_task_id)?;
             conn.execute(
                 r"
                 UPDATE agents
@@ -738,6 +741,16 @@ impl Store {
     ) -> StoreResult<Handoff> {
         self.in_transaction(|conn| {
             let handoff = get_handoff_in_connection(conn, handoff_id)?;
+            if handoff.status != HandoffStatus::Open {
+                return Err(StoreError::Validation(
+                    "only open handoffs can be resolved".to_string(),
+                ));
+            }
+            if status == HandoffStatus::Open {
+                return Err(StoreError::Validation(
+                    "handoff resolution cannot transition back to open".to_string(),
+                ));
+            }
             if status != HandoffStatus::Expired && handoff_is_expired(&handoff)? {
                 return Err(StoreError::Validation(
                     "expired handoffs cannot be resolved to a non-expired status".to_string(),
@@ -814,6 +827,42 @@ impl Store {
             }
         }
         Ok(handoffs)
+    }
+
+    /// Lists assignment history globally or for one task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn list_task_assignments(&self, task_id: Option<&str>) -> StoreResult<Vec<TaskAssignment>> {
+        let mut assignments = Vec::new();
+        if let Some(task_id) = task_id {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT assignment_id, task_id, assigned_to, assigned_by, reason, assigned_at
+                FROM task_assignments
+                WHERE task_id = ?1
+                ORDER BY rowid
+                ",
+            )?;
+            let rows = stmt.query_map([task_id], map_task_assignment)?;
+            for row in rows {
+                assignments.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT assignment_id, task_id, assigned_to, assigned_by, reason, assigned_at
+                FROM task_assignments
+                ORDER BY rowid
+                ",
+            )?;
+            let rows = stmt.query_map([], map_task_assignment)?;
+            for row in rows {
+                assignments.push(row?);
+            }
+        }
+        Ok(assignments)
     }
 
     /// Appends a council message to a task thread.
@@ -1127,14 +1176,13 @@ impl Store {
             FROM agent_heartbeat_events
             WHERE agent_id IN (SELECT agent_id FROM related_agents)
               AND created_at >= ?2
-              AND created_at <= ?3
               AND (current_task_id = ?1 OR related_task_id = ?1)
             ORDER BY rowid DESC
-            LIMIT ?4
+            LIMIT ?3
             ",
         )?;
         let rows = stmt.query_map(
-            params![task_id, task.created_at, task.updated_at, limit_i64],
+            params![task_id, task.created_at, limit_i64],
             map_agent_heartbeat,
         )?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -1547,6 +1595,101 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
     .ok_or(StoreError::NotFound("task"))
 }
 
+fn validate_agent_task_link(
+    conn: &Connection,
+    agent_id: &str,
+    status: AgentStatus,
+    current_task_id: Option<&str>,
+) -> StoreResult<()> {
+    match status {
+        AgentStatus::Idle if current_task_id.is_some() => {
+            return Err(StoreError::Validation(
+                "idle heartbeats cannot include a current task".to_string(),
+            ));
+        }
+        AgentStatus::Assigned
+        | AgentStatus::InProgress
+        | AgentStatus::Blocked
+        | AgentStatus::ReviewRequired
+            if current_task_id.is_none() =>
+        {
+            return Err(StoreError::Validation(
+                "non-idle heartbeats must include a current task".to_string(),
+            ));
+        }
+        AgentStatus::Idle
+        | AgentStatus::Assigned
+        | AgentStatus::InProgress
+        | AgentStatus::Blocked
+        | AgentStatus::ReviewRequired => {}
+    }
+
+    let Some(task_id) = current_task_id else {
+        return Ok(());
+    };
+
+    let task = get_task_in_connection(conn, task_id)?;
+    let agent = get_agent_in_connection(conn, agent_id)?;
+
+    if task.project_root != agent.project_root {
+        return Err(StoreError::Validation(
+            "heartbeat task must belong to the same project as the agent".to_string(),
+        ));
+    }
+
+    if task.owner_agent_id.as_deref() != Some(agent_id) {
+        return Err(StoreError::Validation(
+            "heartbeat task must be owned by the reporting agent".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_agent_registration(conn: &Connection, agent: &AgentRegistration) -> StoreResult<()> {
+    match agent.status {
+        AgentStatus::Idle if agent.current_task_id.is_some() => {
+            return Err(StoreError::Validation(
+                "idle registrations cannot include a current task".to_string(),
+            ));
+        }
+        AgentStatus::Assigned
+        | AgentStatus::InProgress
+        | AgentStatus::Blocked
+        | AgentStatus::ReviewRequired
+            if agent.current_task_id.is_none() =>
+        {
+            return Err(StoreError::Validation(
+                "non-idle registrations must include a current task".to_string(),
+            ));
+        }
+        AgentStatus::Idle
+        | AgentStatus::Assigned
+        | AgentStatus::InProgress
+        | AgentStatus::Blocked
+        | AgentStatus::ReviewRequired => {}
+    }
+
+    let Some(task_id) = agent.current_task_id.as_deref() else {
+        return Ok(());
+    };
+    let task = get_task_in_connection(conn, task_id)?;
+
+    if task.project_root != agent.project_root {
+        return Err(StoreError::Validation(
+            "registration task must belong to the same project as the agent".to_string(),
+        ));
+    }
+
+    if task.owner_agent_id.as_deref() != Some(agent.agent_id.as_str()) {
+        return Err(StoreError::Validation(
+            "registration task must be owned by the registering agent".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn touch_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<()> {
     conn.execute(
         "UPDATE tasks SET updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
@@ -1689,6 +1832,17 @@ fn map_handoff(row: &rusqlite::Row<'_>) -> rusqlite::Result<Handoff> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         resolved_at: row.get(12)?,
+    })
+}
+
+fn map_task_assignment(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskAssignment> {
+    Ok(TaskAssignment {
+        assignment_id: row.get(0)?,
+        task_id: row.get(1)?,
+        assigned_to: row.get(2)?,
+        assigned_by: row.get(3)?,
+        reason: row.get(4)?,
+        assigned_at: row.get(5)?,
     })
 }
 

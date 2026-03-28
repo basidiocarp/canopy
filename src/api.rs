@@ -1,7 +1,9 @@
 use crate::models::{
-    AgentAttention, AgentAttentionReason, AgentRegistration, ApiSnapshot, AttentionLevel,
-    Freshness, Handoff, HandoffAttention, HandoffAttentionReason, SnapshotAttentionSummary,
-    SnapshotPreset, Task, TaskAttention, TaskAttentionReason, TaskDetail, TaskPriority,
+    AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
+    AgentRegistration, ApiSnapshot, AttentionLevel, Freshness, Handoff, HandoffAttention,
+    HandoffAttentionReason, OperatorAction, OperatorActionKind, OperatorActionTargetKind,
+    SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment, TaskAttention,
+    TaskAttentionReason, TaskDetail, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
     TaskSeverity, TaskSort, TaskStatus, TaskView, VerificationState,
 };
 use crate::store::{Store, StoreError, StoreResult};
@@ -48,6 +50,7 @@ struct ResolvedSnapshotOptions {
 /// # Errors
 ///
 /// Returns an error if any underlying store query fails.
+#[allow(clippy::too_many_lines)]
 pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiSnapshot> {
     let options = resolve_snapshot_options(options);
     let mut agents = store.list_agents()?;
@@ -113,6 +116,26 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|attention| agent_ids.contains(&attention.agent_id))
         .collect::<Vec<_>>();
+    let filtered_assignments = store
+        .list_task_assignments(None)?
+        .into_iter()
+        .filter(|assignment| task_ids.contains(&assignment.task_id))
+        .collect::<Vec<_>>();
+    let ownership = derive_task_ownership_summaries(&tasks, &filtered_assignments);
+    let task_heartbeat_summaries =
+        derive_task_heartbeat_summaries(&tasks, &heartbeats, &filtered_agent_attention);
+    let agent_heartbeat_summaries =
+        derive_agent_heartbeat_summaries(&agents, &heartbeats, &filtered_agent_attention);
+    let filtered_handoffs = handoffs
+        .into_iter()
+        .filter(|handoff| task_ids.contains(&handoff.task_id))
+        .collect::<Vec<_>>();
+    let operator_actions = derive_operator_actions(
+        &tasks,
+        &filtered_task_attention,
+        &filtered_handoffs,
+        &filtered_handoff_attention,
+    );
     let attention = summarize_attention(
         &filtered_task_attention,
         &filtered_handoff_attention,
@@ -123,14 +146,15 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         attention,
         agents,
         agent_attention: filtered_agent_attention,
+        agent_heartbeat_summaries,
         heartbeats,
         tasks,
         task_attention: filtered_task_attention,
-        handoffs: handoffs
-            .into_iter()
-            .filter(|handoff| task_ids.contains(&handoff.task_id))
-            .collect(),
+        task_heartbeat_summaries,
+        ownership,
+        handoffs: filtered_handoffs,
         handoff_attention: filtered_handoff_attention,
+        operator_actions,
         evidence: store
             .list_all_evidence()?
             .into_iter()
@@ -148,14 +172,20 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
 pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let task = store.get_task(task_id)?;
     let handoffs = store.list_handoffs(Some(task_id))?;
+    let assignments = store.list_task_assignments(Some(task_id))?;
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
     let now = OffsetDateTime::now_utc();
+    let related_handoff_agents: HashSet<_> = handoffs
+        .iter()
+        .flat_map(|handoff| [handoff.from_agent_id.as_str(), handoff.to_agent_id.as_str()])
+        .collect();
     let agent_attention = derive_agent_attention(&agents, now)
         .into_iter()
         .filter(|attention| {
             attention.current_task_id.as_deref() == Some(task_id)
                 || task.owner_agent_id.as_deref() == Some(attention.agent_id.as_str())
+                || related_handoff_agents.contains(attention.agent_id.as_str())
                 || heartbeats
                     .iter()
                     .any(|heartbeat| heartbeat.agent_id == attention.agent_id)
@@ -173,15 +203,49 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     .ok_or(StoreError::Validation(
         "task attention could not be derived".to_string(),
     ))?;
+    let ownership = derive_task_ownership_summaries(std::slice::from_ref(&task), &assignments)
+        .into_iter()
+        .next()
+        .ok_or(StoreError::Validation(
+            "task ownership could not be derived".to_string(),
+        ))?;
+    let heartbeat_summary =
+        derive_task_heartbeat_summaries(std::slice::from_ref(&task), &heartbeats, &agent_attention)
+            .into_iter()
+            .next()
+            .ok_or(StoreError::Validation(
+                "task heartbeat summary could not be derived".to_string(),
+            ))?;
+    let related_agents = agents
+        .into_iter()
+        .filter(|agent| {
+            agent_attention
+                .iter()
+                .any(|attention| attention.agent_id == agent.agent_id)
+        })
+        .collect::<Vec<_>>();
+    let agent_heartbeat_summaries =
+        derive_agent_heartbeat_summaries(&related_agents, &heartbeats, &agent_attention);
+    let operator_actions = derive_operator_actions(
+        std::slice::from_ref(&task),
+        std::slice::from_ref(&attention),
+        &handoffs,
+        &handoff_attention,
+    );
 
     Ok(TaskDetail {
         attention,
         agent_attention,
+        agent_heartbeat_summaries,
         task,
+        ownership,
+        heartbeat_summary,
+        assignments,
         events: store.list_task_events(task_id)?,
         heartbeats,
         handoffs,
         handoff_attention,
+        operator_actions,
         messages: store.list_council_messages(task_id)?,
         evidence: store.list_evidence(task_id)?,
     })
@@ -391,6 +455,269 @@ fn attention_sort_key(attention: Option<&TaskAttention>) -> (u8, u8, u8, u8) {
         u8::from(attention.acknowledged),
         u8::try_from(attention.reasons.len()).unwrap_or(u8::MAX),
     )
+}
+
+fn derive_task_ownership_summaries(
+    tasks: &[Task],
+    assignments: &[TaskAssignment],
+) -> Vec<TaskOwnershipSummary> {
+    let mut assignments_by_task: HashMap<&str, Vec<&TaskAssignment>> = HashMap::new();
+    for assignment in assignments {
+        assignments_by_task
+            .entry(assignment.task_id.as_str())
+            .or_default()
+            .push(assignment);
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            let history = assignments_by_task
+                .get(task.task_id.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            let last_assignment = history.last().copied();
+            let reassignment_count = history
+                .windows(2)
+                .filter(|window| window[0].assigned_to != window[1].assigned_to)
+                .count();
+
+            TaskOwnershipSummary {
+                task_id: task.task_id.clone(),
+                current_owner_agent_id: task.owner_agent_id.clone(),
+                assignment_count: history.len(),
+                reassignment_count,
+                last_assigned_to: last_assignment.map(|assignment| assignment.assigned_to.clone()),
+                last_assigned_by: last_assignment.map(|assignment| assignment.assigned_by.clone()),
+                last_assigned_at: last_assignment.map(|assignment| assignment.assigned_at.clone()),
+                last_assignment_reason: last_assignment
+                    .and_then(|assignment| assignment.reason.clone()),
+            }
+        })
+        .collect()
+}
+
+fn derive_task_heartbeat_summaries(
+    tasks: &[Task],
+    heartbeats: &[AgentHeartbeatEvent],
+    agent_attention: &[AgentAttention],
+) -> Vec<TaskHeartbeatSummary> {
+    let attention_by_agent: HashMap<_, _> = agent_attention
+        .iter()
+        .map(|attention| (attention.agent_id.as_str(), attention))
+        .collect();
+
+    tasks
+        .iter()
+        .map(|task| {
+            let related_heartbeats = heartbeats
+                .iter()
+                .filter(|heartbeat| {
+                    heartbeat.current_task_id.as_deref() == Some(task.task_id.as_str())
+                        || heartbeat.related_task_id.as_deref() == Some(task.task_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let mut related_agents: HashSet<&str> = related_heartbeats
+                .iter()
+                .map(|heartbeat| heartbeat.agent_id.as_str())
+                .collect();
+            if let Some(owner_agent_id) = task.owner_agent_id.as_deref() {
+                related_agents.insert(owner_agent_id);
+            }
+
+            let mut fresh_agents = 0;
+            let mut aging_agents = 0;
+            let mut stale_agents = 0;
+            let mut missing_agents = 0;
+
+            for agent_id in &related_agents {
+                match attention_by_agent
+                    .get(agent_id)
+                    .map_or(Freshness::Missing, |attention| attention.freshness)
+                {
+                    Freshness::Fresh => fresh_agents += 1,
+                    Freshness::Aging => aging_agents += 1,
+                    Freshness::Stale => stale_agents += 1,
+                    Freshness::Missing => missing_agents += 1,
+                }
+            }
+
+            TaskHeartbeatSummary {
+                task_id: task.task_id.clone(),
+                heartbeat_count: related_heartbeats.len(),
+                related_agent_count: related_agents.len(),
+                fresh_agents,
+                aging_agents,
+                stale_agents,
+                missing_agents,
+                last_heartbeat_at: latest_heartbeat_timestamp(&related_heartbeats),
+            }
+        })
+        .collect()
+}
+
+fn derive_agent_heartbeat_summaries(
+    agents: &[AgentRegistration],
+    heartbeats: &[AgentHeartbeatEvent],
+    agent_attention: &[AgentAttention],
+) -> Vec<AgentHeartbeatSummary> {
+    let attention_by_agent: HashMap<_, _> = agent_attention
+        .iter()
+        .map(|attention| (attention.agent_id.as_str(), attention))
+        .collect();
+
+    agents
+        .iter()
+        .map(|agent| {
+            let history = heartbeats
+                .iter()
+                .filter(|heartbeat| heartbeat.agent_id == agent.agent_id)
+                .collect::<Vec<_>>();
+            let latest = latest_heartbeat_event(&history);
+            AgentHeartbeatSummary {
+                agent_id: agent.agent_id.clone(),
+                current_task_id: agent.current_task_id.clone(),
+                heartbeat_count: history.len(),
+                last_heartbeat_at: latest.map(|heartbeat| heartbeat.created_at.clone()),
+                last_status: latest.map(|heartbeat| heartbeat.status),
+                freshness: attention_by_agent
+                    .get(agent.agent_id.as_str())
+                    .map_or(Freshness::Missing, |attention| attention.freshness),
+            }
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn derive_operator_actions(
+    tasks: &[Task],
+    task_attention: &[TaskAttention],
+    handoffs: &[Handoff],
+    handoff_attention: &[HandoffAttention],
+) -> Vec<OperatorAction> {
+    let task_attention_by_id: HashMap<_, _> = task_attention
+        .iter()
+        .map(|attention| (attention.task_id.as_str(), attention))
+        .collect();
+    let handoff_attention_by_id: HashMap<_, _> = handoff_attention
+        .iter()
+        .map(|attention| (attention.handoff_id.as_str(), attention))
+        .collect();
+
+    let mut actions = Vec::new();
+
+    for task in tasks {
+        let Some(attention) = task_attention_by_id.get(task.task_id.as_str()) else {
+            continue;
+        };
+
+        if attention
+            .reasons
+            .contains(&TaskAttentionReason::Unacknowledged)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:acknowledge", task.task_id),
+                kind: OperatorActionKind::AcknowledgeTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: attention.level,
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Acknowledge {}", task.title),
+                summary: "Task attention has not been acknowledged yet.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::ReviewRequired
+            || task.verification_state == VerificationState::Pending
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:verify", task.task_id),
+                kind: OperatorActionKind::VerifyTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Review {}", task.title),
+                summary: "Task is waiting on verification or operator review.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.owner_agent_id.is_some()
+            && attention.reasons.iter().any(|reason| {
+                matches!(
+                    reason,
+                    TaskAttentionReason::Blocked
+                        | TaskAttentionReason::StaleOwnerHeartbeat
+                        | TaskAttentionReason::MissingOwnerHeartbeat
+                )
+            })
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:reassign", task.task_id),
+                kind: OperatorActionKind::ReassignTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: attention.level,
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Reassign {}", task.title),
+                summary: "Owner state suggests the task may need reassignment or escalation."
+                    .to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+    }
+
+    for handoff in handoffs
+        .iter()
+        .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
+    {
+        let Some(attention) = handoff_attention_by_id.get(handoff.handoff_id.as_str()) else {
+            continue;
+        };
+
+        match attention.freshness {
+            Freshness::Aging => actions.push(OperatorAction {
+                action_id: format!("handoff:{}:follow_up", handoff.handoff_id),
+                kind: OperatorActionKind::FollowUpHandoff,
+                target_kind: OperatorActionTargetKind::Handoff,
+                level: attention.level,
+                task_id: Some(handoff.task_id.clone()),
+                handoff_id: Some(handoff.handoff_id.clone()),
+                agent_id: Some(handoff.to_agent_id.clone()),
+                title: format!("Follow up handoff {}", handoff.handoff_id),
+                summary: handoff.summary.clone(),
+                due_at: handoff.due_at.clone(),
+                expires_at: handoff.expires_at.clone(),
+            }),
+            Freshness::Stale => actions.push(OperatorAction {
+                action_id: format!("handoff:{}:expire", handoff.handoff_id),
+                kind: OperatorActionKind::ExpireHandoff,
+                target_kind: OperatorActionTargetKind::Handoff,
+                level: attention.level,
+                task_id: Some(handoff.task_id.clone()),
+                handoff_id: Some(handoff.handoff_id.clone()),
+                agent_id: Some(handoff.to_agent_id.clone()),
+                title: format!("Resolve expired handoff {}", handoff.handoff_id),
+                summary: handoff.summary.clone(),
+                due_at: handoff.due_at.clone(),
+                expires_at: handoff.expires_at.clone(),
+            }),
+            Freshness::Fresh | Freshness::Missing => {}
+        }
+    }
+
+    actions
 }
 
 fn derive_agent_attention(
@@ -757,6 +1084,26 @@ fn compare_timestamp_desc(left: &str, right: &str) -> std::cmp::Ordering {
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => right.cmp(left),
     }
+}
+
+fn latest_heartbeat_event<'a>(
+    heartbeats: &'a [&'a AgentHeartbeatEvent],
+) -> Option<&'a AgentHeartbeatEvent> {
+    heartbeats.iter().copied().max_by(|left, right| {
+        match (
+            parse_timestamp(&left.created_at),
+            parse_timestamp(&right.created_at),
+        ) {
+            (Some(left_ts), Some(right_ts)) => left_ts.cmp(&right_ts),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => left.created_at.cmp(&right.created_at),
+        }
+    })
+}
+
+fn latest_heartbeat_timestamp(heartbeats: &[&AgentHeartbeatEvent]) -> Option<String> {
+    latest_heartbeat_event(heartbeats).map(|heartbeat| heartbeat.created_at.clone())
 }
 
 fn freshness_rank(freshness: Freshness) -> u8 {

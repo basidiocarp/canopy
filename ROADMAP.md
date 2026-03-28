@@ -37,6 +37,10 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
     - acknowledgment state
     - operator note
   - handoff due/expiry semantics with validation
+  - assignment-history-backed ownership summaries
+  - task and agent heartbeat summaries
+  - operator action hints for task acknowledgment, review, reassignment, and handoff follow-up/expiry
+  - stronger registration/heartbeat linkage invariants
   - CLI coverage and tests
 
 ## Next
@@ -48,6 +52,7 @@ Complete the first local orchestration store beyond the current foundation with:
 - stronger typed protocol/state validation
 - richer task timeline metadata beyond the current event rows
 - richer task/operator action metadata beyond the current triage foundation
+- operator mutations that consume the new action hints cleanly
 
 ### MVP CLI
 

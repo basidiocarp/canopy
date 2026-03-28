@@ -223,8 +223,43 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         snapshot["heartbeats"].as_array().expect("heartbeats").len(),
         2
     );
+    assert_eq!(
+        snapshot["task_heartbeat_summaries"]
+            .as_array()
+            .expect("task heartbeat summaries")
+            .len(),
+        1
+    );
+    assert_eq!(
+        snapshot["task_heartbeat_summaries"][0]["heartbeat_count"],
+        2
+    );
+    assert_eq!(
+        snapshot["agent_heartbeat_summaries"]
+            .as_array()
+            .expect("agent heartbeat summaries")
+            .len(),
+        2
+    );
+    assert_eq!(
+        snapshot["ownership"].as_array().expect("ownership").len(),
+        1
+    );
+    assert_eq!(snapshot["ownership"][0]["assignment_count"], 1);
+    assert_eq!(snapshot["ownership"][0]["last_assigned_to"], "codex-1");
     assert_eq!(snapshot["tasks"].as_array().expect("tasks").len(), 1);
     assert_eq!(snapshot["handoffs"].as_array().expect("handoffs").len(), 1);
+    assert_eq!(
+        snapshot["operator_actions"]
+            .as_array()
+            .expect("operator actions")
+            .len(),
+        2
+    );
+    assert_eq!(snapshot["operator_actions"][0]["kind"], "acknowledge_task");
+    assert_eq!(snapshot["operator_actions"][0]["target_kind"], "task");
+    assert_eq!(snapshot["operator_actions"][1]["kind"], "verify_task");
+    assert_eq!(snapshot["operator_actions"][1]["target_kind"], "task");
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
 
     let task_detail_output = Command::cargo_bin("canopy")
@@ -255,6 +290,19 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         detail["heartbeats"].as_array().expect("heartbeats").len(),
         2
     );
+    assert_eq!(detail["heartbeat_summary"]["heartbeat_count"], 2);
+    assert_eq!(
+        detail["agent_heartbeat_summaries"]
+            .as_array()
+            .expect("agent heartbeat summaries")
+            .len(),
+        2
+    );
+    assert_eq!(detail["ownership"]["assignment_count"], 1);
+    assert_eq!(
+        detail["assignments"].as_array().expect("assignments").len(),
+        1
+    );
     assert_eq!(detail["handoffs"].as_array().expect("handoffs").len(), 1);
     assert_eq!(
         detail["handoff_attention"]
@@ -262,6 +310,13 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .expect("handoff attention")
             .len(),
         1
+    );
+    assert_eq!(
+        detail["operator_actions"]
+            .as_array()
+            .expect("operator actions")
+            .len(),
+        2
     );
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");

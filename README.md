@@ -93,6 +93,11 @@ The first `Canopy` release should start small:
   - server-side `attention` task view
   - explicit snapshot attention counts instead of dashboard-side heuristics
   - first-class snapshot presets and server-side triage filters
+- runtime ownership and triage summaries:
+  - assignment history
+  - reassignment counts and latest assignment metadata
+  - operator action hints for acknowledgment, review, reassignment, and aging/expired handoffs
+- stronger agent/task linkage invariants for registration and heartbeat updates
 
 ## Storage Boundary
 
