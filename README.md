@@ -52,11 +52,13 @@ The first `Canopy` release should start small:
   - `host_instance`
   - heartbeat and status
 - durable task creation, assignment, handoff, and closure
+- timestamped task and handoff records for operator aging/sorting
 - task lifecycle mutation with:
   - verification state
   - blocked reason
   - closure metadata
   - persisted task-event history for creation, assignment, transfer, and status changes
+- heartbeat history, not just latest heartbeat state
 - typed protocol values for:
   - agent status
   - task status
@@ -74,7 +76,8 @@ The first `Canopy` release should start small:
   - `rhizome` impact-analysis results
   - `mycelium` explain or economics output
 - an explicit read surface for operator tools via `Canopy` commands instead of direct database access
-- task detail read models that include lifecycle timeline rows, not just latest task state
+- explicit filter/sort-aware read models for snapshot consumers
+- task detail read models that include lifecycle timeline rows and related heartbeat history, not just latest task state
 
 ## Storage Boundary
 

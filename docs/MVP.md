@@ -7,17 +7,20 @@ The current codebase only implements the foundation layer of this MVP:
 - local SQLite ledger
 - agent registry
 - latest heartbeat tracking
+- heartbeat history
 - tasks
   - verification state
   - blocked reason
   - closure metadata
   - task-event history rows for creation, assignment, transfer, and status changes
+  - created/updated timestamps for operator sorting and aging
 - handoffs
+  - created/updated/resolved timestamps
 - council messages
 - evidence refs
+- evidence navigation fields so downstream operator tools do not have to infer every link from `source_kind`
 - explicit read models through `api snapshot` and `api task`
-
-Heartbeat history beyond the latest heartbeat and HTTP transport are still next-slice work.
+- snapshot filters and sorting for server-side saved-view support
 
 ## Goal
 
@@ -91,10 +94,12 @@ Recommended first commands:
 canopy agent register
 canopy agent list
 canopy agent heartbeat
+canopy agent history
 canopy task create
 canopy task assign
 canopy task status
 canopy task list
+canopy task list-view
 canopy task show
 canopy handoff create
 canopy handoff resolve
@@ -113,6 +118,7 @@ Recommended first endpoints:
 - `POST /agents/register`
 - `POST /agents/{id}/heartbeat`
 - `GET /agents`
+- `GET /agents/heartbeats`
 - `POST /tasks`
 - `POST /tasks/{id}/assign`
 - `POST /tasks/{id}/status`
@@ -140,6 +146,7 @@ The first useful views are:
 - task detail drawer
 - handoff queue
 - per-agent activity panel
+- saved views that can be backed by Canopy-side filters instead of purely client heuristics
 
 Task detail should include:
 

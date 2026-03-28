@@ -1,7 +1,7 @@
 use crate::models::{
-    AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType, EvidenceRef,
-    EvidenceSourceKind, Handoff, HandoffStatus, HandoffType, Task, TaskEvent, TaskEventType,
-    TaskStatus, VerificationState,
+    AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
+    CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType, Task,
+    TaskEvent, TaskEventType, TaskStatus, VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -39,6 +39,126 @@ struct TaskEventWrite<'a> {
     note: Option<&'a str>,
 }
 
+#[derive(Debug)]
+struct AgentHeartbeatWrite<'a> {
+    agent_id: &'a str,
+    status: AgentStatus,
+    current_task_id: Option<&'a str>,
+    related_task_id: Option<&'a str>,
+    source: AgentHeartbeatSource,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvidenceLinkRefs<'a> {
+    pub related_handoff_id: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub memory_query: Option<&'a str>,
+    pub symbol: Option<&'a str>,
+    pub file: Option<&'a str>,
+}
+
+const BASE_SCHEMA: &str = r"
+    CREATE TABLE IF NOT EXISTS agents (
+        agent_id TEXT PRIMARY KEY,
+        host_id TEXT NOT NULL,
+        host_type TEXT NOT NULL,
+        host_instance TEXT NOT NULL,
+        model TEXT NOT NULL,
+        project_root TEXT NOT NULL,
+        worktree_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_task_id TEXT NULL,
+        heartbeat_at TEXT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+        task_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NULL,
+        requested_by TEXT NOT NULL,
+        project_root TEXT NOT NULL,
+        status TEXT NOT NULL,
+        verification_state TEXT NOT NULL,
+        owner_agent_id TEXT NULL REFERENCES agents(agent_id),
+        blocked_reason TEXT NULL,
+        verified_by TEXT NULL,
+        verified_at TEXT NULL,
+        closed_by TEXT NULL,
+        closure_summary TEXT NULL,
+        closed_at TEXT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS task_assignments (
+        assignment_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        assigned_to TEXT NOT NULL REFERENCES agents(agent_id),
+        assigned_by TEXT NOT NULL,
+        reason TEXT NULL,
+        assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        from_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+        to_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+        handoff_type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        requested_action TEXT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TEXT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS council_messages (
+        message_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        author_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+        message_type TEXT NOT NULL,
+        body TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS evidence_refs (
+        evidence_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        label TEXT NOT NULL,
+        summary TEXT NULL,
+        related_handoff_id TEXT NULL REFERENCES handoffs(handoff_id),
+        related_session_id TEXT NULL,
+        related_memory_query TEXT NULL,
+        related_symbol TEXT NULL,
+        related_file TEXT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_events (
+        event_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        from_status TEXT NULL,
+        to_status TEXT NOT NULL,
+        verification_state TEXT NULL,
+        owner_agent_id TEXT NULL,
+        note TEXT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
+        heartbeat_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        current_task_id TEXT NULL REFERENCES tasks(task_id) ON DELETE SET NULL,
+        related_task_id TEXT NULL REFERENCES tasks(task_id) ON DELETE SET NULL,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+";
+
 impl Store {
     /// Opens the Canopy store and creates the schema when needed.
     ///
@@ -54,90 +174,9 @@ impl Store {
 
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(
-            r"
-            CREATE TABLE IF NOT EXISTS agents (
-                agent_id TEXT PRIMARY KEY,
-                host_id TEXT NOT NULL,
-                host_type TEXT NOT NULL,
-                host_instance TEXT NOT NULL,
-                model TEXT NOT NULL,
-                project_root TEXT NOT NULL,
-                worktree_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                current_task_id TEXT NULL,
-                heartbeat_at TEXT NULL
-            );
+        conn.execute_batch(BASE_SCHEMA)?;
 
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                description TEXT NULL,
-                requested_by TEXT NOT NULL,
-                project_root TEXT NOT NULL,
-                status TEXT NOT NULL,
-                verification_state TEXT NOT NULL,
-                owner_agent_id TEXT NULL REFERENCES agents(agent_id),
-                blocked_reason TEXT NULL,
-                verified_by TEXT NULL,
-                verified_at TEXT NULL,
-                closed_by TEXT NULL,
-                closure_summary TEXT NULL,
-                closed_at TEXT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS task_assignments (
-                assignment_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                assigned_to TEXT NOT NULL REFERENCES agents(agent_id),
-                assigned_by TEXT NOT NULL,
-                reason TEXT NULL,
-                assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS handoffs (
-                handoff_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                from_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
-                to_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
-                handoff_type TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                requested_action TEXT NULL,
-                status TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS council_messages (
-                message_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                author_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
-                message_type TEXT NOT NULL,
-                body TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS evidence_refs (
-                evidence_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                source_kind TEXT NOT NULL,
-                source_ref TEXT NOT NULL,
-                label TEXT NOT NULL,
-                summary TEXT NULL,
-                related_handoff_id TEXT NULL REFERENCES handoffs(handoff_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS task_events (
-                event_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-                event_type TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                from_status TEXT NULL,
-                to_status TEXT NOT NULL,
-                verification_state TEXT NULL,
-                owner_agent_id TEXT NULL,
-                note TEXT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            ",
-        )?;
+        migrate_schema(&conn)?;
 
         Ok(Self { conn })
     }
@@ -148,36 +187,48 @@ impl Store {
     ///
     /// Returns an error if the underlying database write fails.
     pub fn register_agent(&self, agent: &AgentRegistration) -> StoreResult<AgentRegistration> {
-        self.conn.execute(
-            r"
-            INSERT INTO agents (
-                agent_id, host_id, host_type, host_instance, model,
-                project_root, worktree_id, status, current_task_id, heartbeat_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
-            ON CONFLICT(agent_id) DO UPDATE SET
-                host_id = excluded.host_id,
-                host_type = excluded.host_type,
-                host_instance = excluded.host_instance,
-                model = excluded.model,
-                project_root = excluded.project_root,
-                worktree_id = excluded.worktree_id,
-                status = excluded.status,
-                current_task_id = excluded.current_task_id,
-                heartbeat_at = CURRENT_TIMESTAMP
-            ",
-            params![
-                agent.agent_id,
-                agent.host_id,
-                agent.host_type,
-                agent.host_instance,
-                agent.model,
-                agent.project_root,
-                agent.worktree_id,
-                agent.status.to_string(),
-                agent.current_task_id,
-            ],
-        )?;
-        self.get_agent(&agent.agent_id)
+        self.in_transaction(|conn| {
+            conn.execute(
+                r"
+                INSERT INTO agents (
+                    agent_id, host_id, host_type, host_instance, model,
+                    project_root, worktree_id, status, current_task_id, heartbeat_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    host_id = excluded.host_id,
+                    host_type = excluded.host_type,
+                    host_instance = excluded.host_instance,
+                    model = excluded.model,
+                    project_root = excluded.project_root,
+                    worktree_id = excluded.worktree_id,
+                    status = excluded.status,
+                    current_task_id = excluded.current_task_id,
+                    heartbeat_at = CURRENT_TIMESTAMP
+                ",
+                params![
+                    agent.agent_id,
+                    agent.host_id,
+                    agent.host_type,
+                    agent.host_instance,
+                    agent.model,
+                    agent.project_root,
+                    agent.worktree_id,
+                    agent.status.to_string(),
+                    agent.current_task_id,
+                ],
+            )?;
+            record_agent_heartbeat_in_connection(
+                conn,
+                &AgentHeartbeatWrite {
+                    agent_id: &agent.agent_id,
+                    status: agent.status,
+                    current_task_id: agent.current_task_id.as_deref(),
+                    related_task_id: agent.current_task_id.as_deref(),
+                    source: AgentHeartbeatSource::Register,
+                },
+            )?;
+            get_agent_in_connection(conn, &agent.agent_id)
+        })
     }
 
     /// Lists the registered agents in stable identifier order.
@@ -211,17 +262,29 @@ impl Store {
         current_task_id: Option<&str>,
     ) -> StoreResult<AgentRegistration> {
         self.ensure_agent_exists(agent_id)?;
-        self.conn.execute(
-            r"
-            UPDATE agents
-            SET status = ?2,
-                current_task_id = ?3,
-                heartbeat_at = CURRENT_TIMESTAMP
-            WHERE agent_id = ?1
-            ",
-            params![agent_id, status.to_string(), current_task_id],
-        )?;
-        self.get_agent(agent_id)
+        self.in_transaction(|conn| {
+            conn.execute(
+                r"
+                UPDATE agents
+                SET status = ?2,
+                    current_task_id = ?3,
+                    heartbeat_at = CURRENT_TIMESTAMP
+                WHERE agent_id = ?1
+                ",
+                params![agent_id, status.to_string(), current_task_id],
+            )?;
+            record_agent_heartbeat_in_connection(
+                conn,
+                &AgentHeartbeatWrite {
+                    agent_id,
+                    status,
+                    current_task_id,
+                    related_task_id: current_task_id,
+                    source: AgentHeartbeatSource::Heartbeat,
+                },
+            )?;
+            get_agent_in_connection(conn, agent_id)
+        })
     }
 
     /// Creates a new task in the local ledger.
@@ -251,14 +314,16 @@ impl Store {
             closed_by: None,
             closure_summary: None,
             closed_at: None,
+            created_at: String::new(),
+            updated_at: String::new(),
         };
         self.conn.execute(
             r"
             INSERT INTO tasks (
                 task_id, title, description, requested_by, project_root, status,
                 verification_state, owner_agent_id, blocked_reason, verified_by,
-                verified_at, closed_by, closure_summary, closed_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ",
             params![
                 task.task_id,
@@ -287,7 +352,7 @@ impl Store {
             owner_agent_id: None,
             note: description,
         })?;
-        Ok(task)
+        self.get_task(&task.task_id)
     }
 
     /// Assigns a task to an agent and records the assignment event.
@@ -321,7 +386,7 @@ impl Store {
             r"
             SELECT task_id, title, description, requested_by, project_root, status,
                    verification_state, owner_agent_id, blocked_reason, verified_by,
-                   verified_at, closed_by, closure_summary, closed_at
+                   verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
             FROM tasks
             ORDER BY rowid
             ",
@@ -346,19 +411,7 @@ impl Store {
     ///
     /// Returns an error if the agent does not exist or the query fails.
     pub fn get_agent(&self, agent_id: &str) -> StoreResult<AgentRegistration> {
-        self.conn
-            .query_row(
-                r"
-                SELECT agent_id, host_id, host_type, host_instance, model,
-                       project_root, worktree_id, status, current_task_id, heartbeat_at
-                FROM agents
-                WHERE agent_id = ?1
-                ",
-                [agent_id],
-                map_agent,
-            )
-            .optional()?
-            .ok_or(StoreError::NotFound("agent"))
+        get_agent_in_connection(&self.conn, agent_id)
     }
 
     /// Updates task lifecycle, verification, and closure metadata.
@@ -409,7 +462,8 @@ impl Store {
                     verified_at = COALESCE(?6, verified_at),
                     closed_by = ?7,
                     closure_summary = ?8,
-                    closed_at = CASE WHEN ?9 THEN CURRENT_TIMESTAMP ELSE NULL END
+                    closed_at = CASE WHEN ?9 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE task_id = ?1
                 ",
                 params![
@@ -492,13 +546,16 @@ impl Store {
             summary: summary.to_string(),
             requested_action: requested_action.map(ToOwned::to_owned),
             status: HandoffStatus::Open,
+            created_at: String::new(),
+            updated_at: String::new(),
+            resolved_at: None,
         };
         self.conn.execute(
             r"
             INSERT INTO handoffs (
                 handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                summary, requested_action, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                summary, requested_action, status, created_at, updated_at, resolved_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
             ",
             params![
                 handoff.handoff_id,
@@ -511,7 +568,8 @@ impl Store {
                 handoff.status.to_string(),
             ],
         )?;
-        Ok(handoff)
+        touch_task_in_connection(&self.conn, task_id)?;
+        self.get_handoff(&handoff.handoff_id)
     }
 
     /// Resolves an existing handoff with a terminal or accepted state.
@@ -524,7 +582,16 @@ impl Store {
         self.in_transaction(|conn| {
             let handoff = get_handoff_in_connection(conn, handoff_id)?;
             let updated = conn.execute(
-                "UPDATE handoffs SET status = ?2 WHERE handoff_id = ?1",
+                r"
+                UPDATE handoffs
+                SET status = ?2,
+                    updated_at = CURRENT_TIMESTAMP,
+                    resolved_at = CASE
+                        WHEN ?2 = 'open' THEN NULL
+                        ELSE CURRENT_TIMESTAMP
+                    END
+                WHERE handoff_id = ?1
+                ",
                 params![handoff_id, status.to_string()],
             )?;
             if updated == 0 {
@@ -539,6 +606,8 @@ impl Store {
                     &handoff.from_agent_id,
                     Some("accepted handoff"),
                 )?;
+            } else {
+                touch_task_in_connection(conn, &handoff.task_id)?;
             }
 
             get_handoff_in_connection(conn, handoff_id)
@@ -556,7 +625,7 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, status
+                       summary, requested_action, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 WHERE task_id = ?1
                 ORDER BY rowid
@@ -570,7 +639,7 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, status
+                       summary, requested_action, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 ORDER BY rowid
                 ",
@@ -619,6 +688,7 @@ impl Store {
                 message.body
             ],
         )?;
+        touch_task_in_connection(&self.conn, task_id)?;
         Ok(message)
     }
 
@@ -655,13 +725,22 @@ impl Store {
         source_ref: &str,
         label: &str,
         summary: Option<&str>,
-        related_handoff_id: Option<&str>,
+        links: EvidenceLinkRefs<'_>,
     ) -> StoreResult<EvidenceRef> {
         self.ensure_task_exists(task_id)?;
-        if let Some(handoff_id) = related_handoff_id {
+        if let Some(handoff_id) = links.related_handoff_id {
             let _ = self.list_handoffs(Some(task_id))?;
             self.get_handoff(handoff_id)?;
         }
+
+        let navigation = normalize_evidence_navigation(
+            source_kind,
+            source_ref,
+            links.session_id,
+            links.memory_query,
+            links.symbol,
+            links.file,
+        );
 
         let evidence = EvidenceRef {
             evidence_id: Ulid::new().to_string(),
@@ -670,13 +749,18 @@ impl Store {
             source_ref: source_ref.to_string(),
             label: label.to_string(),
             summary: summary.map(ToOwned::to_owned),
-            related_handoff_id: related_handoff_id.map(ToOwned::to_owned),
+            related_handoff_id: links.related_handoff_id.map(ToOwned::to_owned),
+            related_session_id: navigation.session_id.map(ToOwned::to_owned),
+            related_memory_query: navigation.memory_query.map(ToOwned::to_owned),
+            related_symbol: navigation.symbol.map(ToOwned::to_owned),
+            related_file: navigation.file.map(ToOwned::to_owned),
         };
         self.conn.execute(
             r"
             INSERT INTO evidence_refs (
-                evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
+                related_session_id, related_memory_query, related_symbol, related_file
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 evidence.evidence_id,
@@ -685,9 +769,14 @@ impl Store {
                 evidence.source_ref,
                 evidence.label,
                 evidence.summary,
-                evidence.related_handoff_id
+                evidence.related_handoff_id,
+                evidence.related_session_id,
+                evidence.related_memory_query,
+                evidence.related_symbol,
+                evidence.related_file,
             ],
         )?;
+        touch_task_in_connection(&self.conn, task_id)?;
         Ok(evidence)
     }
 
@@ -700,7 +789,8 @@ impl Store {
         self.ensure_task_exists(task_id)?;
         let mut stmt = self.conn.prepare(
             r"
-            SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id
+            SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
+                   related_session_id, related_memory_query, related_symbol, related_file
             FROM evidence_refs
             WHERE task_id = ?1
             ORDER BY rowid
@@ -719,12 +809,166 @@ impl Store {
     pub fn list_all_evidence(&self) -> StoreResult<Vec<EvidenceRef>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id
+            SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
+                   related_session_id, related_memory_query, related_symbol, related_file
             FROM evidence_refs
             ORDER BY rowid
             ",
         )?;
         let rows = stmt.query_map([], map_evidence)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Lists heartbeat events, optionally filtered by agent or task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn list_agent_heartbeats(
+        &self,
+        agent_id: Option<&str>,
+        task_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<AgentHeartbeatEvent>> {
+        let limit = limit.max(1);
+        let limit_i64 = i64::try_from(limit).map_err(|_| {
+            StoreError::Validation("heartbeat limit exceeds supported range".to_string())
+        })?;
+
+        let mut heartbeats = Vec::new();
+        match (agent_id, task_id) {
+            (Some(agent_id), Some(task_id)) => {
+                let mut stmt = self.conn.prepare(
+                    r"
+                    SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+                    FROM agent_heartbeat_events
+                    WHERE agent_id = ?1 AND (current_task_id = ?2 OR related_task_id = ?2)
+                    ORDER BY rowid DESC
+                    LIMIT ?3
+                    ",
+                )?;
+                let rows =
+                    stmt.query_map(params![agent_id, task_id, limit_i64], map_agent_heartbeat)?;
+                for row in rows {
+                    heartbeats.push(row?);
+                }
+            }
+            (Some(agent_id), None) => {
+                let mut stmt = self.conn.prepare(
+                    r"
+                    SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+                    FROM agent_heartbeat_events
+                    WHERE agent_id = ?1
+                    ORDER BY rowid DESC
+                    LIMIT ?2
+                    ",
+                )?;
+                let rows = stmt.query_map(params![agent_id, limit_i64], map_agent_heartbeat)?;
+                for row in rows {
+                    heartbeats.push(row?);
+                }
+            }
+            (None, Some(task_id)) => {
+                let mut stmt = self.conn.prepare(
+                    r"
+                    SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+                    FROM agent_heartbeat_events
+                    WHERE current_task_id = ?1 OR related_task_id = ?1
+                    ORDER BY rowid DESC
+                    LIMIT ?2
+                    ",
+                )?;
+                let rows = stmt.query_map(params![task_id, limit_i64], map_agent_heartbeat)?;
+                for row in rows {
+                    heartbeats.push(row?);
+                }
+            }
+            (None, None) => {
+                let mut stmt = self.conn.prepare(
+                    r"
+                    SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+                    FROM agent_heartbeat_events
+                    ORDER BY rowid DESC
+                    LIMIT ?1
+                    ",
+                )?;
+                let rows = stmt.query_map(params![limit_i64], map_agent_heartbeat)?;
+                for row in rows {
+                    heartbeats.push(row?);
+                }
+            }
+        }
+
+        Ok(heartbeats)
+    }
+
+    /// Lists all heartbeat events without pre-filter truncation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn list_all_agent_heartbeats(&self) -> StoreResult<Vec<AgentHeartbeatEvent>> {
+        let mut stmt = self.conn.prepare(
+            r"
+            SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+            FROM agent_heartbeat_events
+            ORDER BY rowid DESC
+            ",
+        )?;
+        let rows = stmt.query_map([], map_agent_heartbeat)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Lists heartbeat history relevant to a task, including stop/idle events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the query fails.
+    pub fn list_task_heartbeats(
+        &self,
+        task_id: &str,
+        limit: usize,
+    ) -> StoreResult<Vec<AgentHeartbeatEvent>> {
+        let task = self.get_task(task_id)?;
+        let limit_i64 = i64::try_from(limit.max(1)).map_err(|_| {
+            StoreError::Validation("heartbeat limit exceeds supported range".to_string())
+        })?;
+
+        let mut stmt = self.conn.prepare(
+            r"
+            WITH related_agents AS (
+                SELECT owner_agent_id AS agent_id
+                FROM task_events
+                WHERE task_id = ?1 AND owner_agent_id IS NOT NULL
+                UNION
+                SELECT from_agent_id AS agent_id
+                FROM handoffs
+                WHERE task_id = ?1
+                UNION
+                SELECT to_agent_id AS agent_id
+                FROM handoffs
+                WHERE task_id = ?1
+                UNION
+                SELECT owner_agent_id AS agent_id
+                FROM tasks
+                WHERE task_id = ?1 AND owner_agent_id IS NOT NULL
+            )
+            SELECT heartbeat_id, agent_id, status, current_task_id, related_task_id, source, created_at
+            FROM agent_heartbeat_events
+            WHERE agent_id IN (SELECT agent_id FROM related_agents)
+              AND created_at >= ?2
+              AND created_at <= ?3
+              AND (current_task_id = ?1 OR related_task_id = ?1)
+            ORDER BY rowid DESC
+            LIMIT ?4
+            ",
+        )?;
+        let rows = stmt.query_map(
+            params![task_id, task.created_at, task.updated_at, limit_i64],
+            map_agent_heartbeat,
+        )?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
     }
@@ -796,6 +1040,125 @@ impl Store {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EvidenceNavigation<'a> {
+    session_id: Option<&'a str>,
+    memory_query: Option<&'a str>,
+    symbol: Option<&'a str>,
+    file: Option<&'a str>,
+}
+
+fn migrate_schema(conn: &Connection) -> StoreResult<()> {
+    ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
+    conn.execute(
+        r"
+        UPDATE tasks
+        SET created_at = COALESCE(
+                created_at,
+                (SELECT MIN(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
+                CURRENT_TIMESTAMP
+            ),
+            updated_at = COALESCE(
+                updated_at,
+                (SELECT MAX(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
+                closed_at,
+                verified_at,
+                created_at,
+                CURRENT_TIMESTAMP
+            )
+        ",
+        [],
+    )?;
+
+    ensure_column(conn, "handoffs", "created_at", "TEXT NULL")?;
+    ensure_column(conn, "handoffs", "updated_at", "TEXT NULL")?;
+    ensure_column(conn, "handoffs", "resolved_at", "TEXT NULL")?;
+    conn.execute(
+        r"
+        UPDATE handoffs
+        SET created_at = COALESCE(
+                created_at,
+                (SELECT created_at FROM tasks WHERE tasks.task_id = handoffs.task_id),
+                CURRENT_TIMESTAMP
+            ),
+            updated_at = COALESCE(
+                updated_at,
+                resolved_at,
+                (SELECT updated_at FROM tasks WHERE tasks.task_id = handoffs.task_id),
+                created_at,
+                CURRENT_TIMESTAMP
+            )
+        ",
+        [],
+    )?;
+
+    ensure_column(conn, "evidence_refs", "related_session_id", "TEXT NULL")?;
+    ensure_column(conn, "evidence_refs", "related_memory_query", "TEXT NULL")?;
+    ensure_column(conn, "evidence_refs", "related_symbol", "TEXT NULL")?;
+    ensure_column(conn, "evidence_refs", "related_file", "TEXT NULL")?;
+    ensure_column(
+        conn,
+        "agent_heartbeat_events",
+        "related_task_id",
+        "TEXT NULL",
+    )?;
+
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> StoreResult<()> {
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&pragma)?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+
+    for existing in columns {
+        if existing? == column {
+            return Ok(());
+        }
+    }
+
+    let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+    conn.execute(&alter, [])?;
+    Ok(())
+}
+
+fn normalize_evidence_navigation<'a>(
+    source_kind: EvidenceSourceKind,
+    source_ref: &'a str,
+    session_id: Option<&'a str>,
+    memory_query: Option<&'a str>,
+    symbol: Option<&'a str>,
+    file: Option<&'a str>,
+) -> EvidenceNavigation<'a> {
+    match source_kind {
+        EvidenceSourceKind::HyphaeSession => EvidenceNavigation {
+            session_id: session_id.or(Some(source_ref)),
+            memory_query,
+            symbol,
+            file,
+        },
+        EvidenceSourceKind::HyphaeRecall
+        | EvidenceSourceKind::HyphaeOutcome
+        | EvidenceSourceKind::CortinaEvent
+        | EvidenceSourceKind::ManualNote
+        | EvidenceSourceKind::RhizomeImpact
+        | EvidenceSourceKind::RhizomeExport
+        | EvidenceSourceKind::MyceliumCommand
+        | EvidenceSourceKind::MyceliumExplain => EvidenceNavigation {
+            session_id,
+            memory_query,
+            symbol,
+            file,
+        },
+    }
+}
+
 fn assign_task_in_connection(
     conn: &Connection,
     task_id: &str,
@@ -824,7 +1187,7 @@ fn assign_task_in_connection(
     conn.execute(
         r"
         UPDATE tasks
-        SET owner_agent_id = ?2, status = 'assigned'
+        SET owner_agent_id = ?2, status = 'assigned', updated_at = CURRENT_TIMESTAMP
         WHERE task_id = ?1
         ",
         params![task_id, assigned_to],
@@ -873,6 +1236,16 @@ fn assign_task_in_connection(
             ",
             params![previous_owner, task_id],
         )?;
+        record_agent_heartbeat_in_connection(
+            conn,
+            &AgentHeartbeatWrite {
+                agent_id: &previous_owner,
+                status: AgentStatus::Idle,
+                current_task_id: None,
+                related_task_id: Some(task_id),
+                source: AgentHeartbeatSource::TaskSync,
+            },
+        )?;
     }
 
     conn.execute(
@@ -882,6 +1255,16 @@ fn assign_task_in_connection(
         WHERE agent_id = ?1
         ",
         params![assigned_to, task_id],
+    )?;
+    record_agent_heartbeat_in_connection(
+        conn,
+        &AgentHeartbeatWrite {
+            agent_id: assigned_to,
+            status: AgentStatus::Assigned,
+            current_task_id: Some(task_id),
+            related_task_id: Some(task_id),
+            source: AgentHeartbeatSource::TaskSync,
+        },
     )?;
 
     Ok(())
@@ -926,6 +1309,16 @@ fn sync_owner_for_task_status(
         ",
         params![owner_agent_id, agent_status.to_string(), current_task_id],
     )?;
+    record_agent_heartbeat_in_connection(
+        conn,
+        &AgentHeartbeatWrite {
+            agent_id: &owner_agent_id,
+            status: agent_status,
+            current_task_id,
+            related_task_id: Some(task_id),
+            source: AgentHeartbeatSource::TaskSync,
+        },
+    )?;
 
     Ok(())
 }
@@ -935,7 +1328,7 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
         r"
         SELECT task_id, title, description, requested_by, project_root, status,
                verification_state, owner_agent_id, blocked_reason, verified_by,
-               verified_at, closed_by, closure_summary, closed_at
+               verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
         ",
@@ -944,6 +1337,14 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
     )
     .optional()?
     .ok_or(StoreError::NotFound("task"))
+}
+
+fn touch_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<()> {
+    conn.execute(
+        "UPDATE tasks SET updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+        [task_id],
+    )?;
+    Ok(())
 }
 
 fn record_task_event_in_connection(
@@ -972,11 +1373,33 @@ fn record_task_event_in_connection(
     Ok(())
 }
 
+fn record_agent_heartbeat_in_connection(
+    conn: &Connection,
+    heartbeat: &AgentHeartbeatWrite<'_>,
+) -> StoreResult<()> {
+    conn.execute(
+        r"
+        INSERT INTO agent_heartbeat_events (
+            heartbeat_id, agent_id, status, current_task_id, related_task_id, source
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ",
+        params![
+            Ulid::new().to_string(),
+            heartbeat.agent_id,
+            heartbeat.status.to_string(),
+            heartbeat.current_task_id,
+            heartbeat.related_task_id,
+            heartbeat.source.to_string(),
+        ],
+    )?;
+    Ok(())
+}
+
 fn get_handoff_in_connection(conn: &Connection, handoff_id: &str) -> StoreResult<Handoff> {
     conn.query_row(
         r"
         SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-               summary, requested_action, status
+               summary, requested_action, status, created_at, updated_at, resolved_at
         FROM handoffs
         WHERE handoff_id = ?1
         ",
@@ -985,6 +1408,21 @@ fn get_handoff_in_connection(conn: &Connection, handoff_id: &str) -> StoreResult
     )
     .optional()?
     .ok_or(StoreError::NotFound("handoff"))
+}
+
+fn get_agent_in_connection(conn: &Connection, agent_id: &str) -> StoreResult<AgentRegistration> {
+    conn.query_row(
+        r"
+        SELECT agent_id, host_id, host_type, host_instance, model,
+               project_root, worktree_id, status, current_task_id, heartbeat_at
+        FROM agents
+        WHERE agent_id = ?1
+        ",
+        [agent_id],
+        map_agent,
+    )
+    .optional()?
+    .ok_or(StoreError::NotFound("agent"))
 }
 
 fn map_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRegistration> {
@@ -1018,6 +1456,8 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_by: row.get(11)?,
         closure_summary: row.get(12)?,
         closed_at: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -1031,6 +1471,9 @@ fn map_handoff(row: &rusqlite::Row<'_>) -> rusqlite::Result<Handoff> {
         summary: row.get(5)?,
         requested_action: row.get(6)?,
         status: parse_enum_column(row, 7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+        resolved_at: row.get(10)?,
     })
 }
 
@@ -1053,6 +1496,10 @@ fn map_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRef> {
         label: row.get(4)?,
         summary: row.get(5)?,
         related_handoff_id: row.get(6)?,
+        related_session_id: row.get(7)?,
+        related_memory_query: row.get(8)?,
+        related_symbol: row.get(9)?,
+        related_file: row.get(10)?,
     })
 }
 
@@ -1068,6 +1515,18 @@ fn map_task_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskEvent> {
         owner_agent_id: row.get(7)?,
         note: row.get(8)?,
         created_at: row.get(9)?,
+    })
+}
+
+fn map_agent_heartbeat(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentHeartbeatEvent> {
+    Ok(AgentHeartbeatEvent {
+        heartbeat_id: row.get(0)?,
+        agent_id: row.get(1)?,
+        status: parse_enum_column(row, 2)?,
+        current_task_id: row.get(3)?,
+        related_task_id: row.get(4)?,
+        source: parse_enum_column(row, 5)?,
+        created_at: row.get(6)?,
     })
 }
 

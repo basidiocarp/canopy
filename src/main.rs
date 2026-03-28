@@ -5,6 +5,7 @@ use canopy::cli::{
     TaskCommand,
 };
 use canopy::models::{AgentRegistration, AgentStatus};
+use canopy::store::EvidenceLinkRefs;
 use canopy::store::Store;
 use clap::Parser;
 use serde::Serialize;
@@ -65,6 +66,17 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
         AgentCommand::List => {
             print_json(&store.list_agents()?)?;
         }
+        AgentCommand::History {
+            agent_id,
+            task_id,
+            limit,
+        } => {
+            print_json(&store.list_agent_heartbeats(
+                agent_id.as_deref(),
+                task_id.as_deref(),
+                limit,
+            )?)?;
+        }
     }
 
     Ok(())
@@ -112,6 +124,21 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         }
         TaskCommand::List => {
             print_json(&store.list_tasks()?)?;
+        }
+        TaskCommand::ListView {
+            project_root,
+            view,
+            sort,
+        } => {
+            let snapshot = api::snapshot(
+                store,
+                api::SnapshotOptions {
+                    project_root: project_root.as_deref(),
+                    sort,
+                    view,
+                },
+            )?;
+            print_json(&snapshot.tasks)?;
         }
         TaskCommand::Show { task_id } => {
             print_json(&store.get_task(&task_id)?)?;
@@ -163,6 +190,10 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
             label,
             summary,
             related_handoff_id,
+            related_session_id,
+            related_memory_query,
+            related_symbol,
+            related_file,
         } => {
             let evidence = store.add_evidence(
                 &task_id,
@@ -170,7 +201,13 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
                 &source_ref,
                 &label,
                 summary.as_deref(),
-                related_handoff_id.as_deref(),
+                EvidenceLinkRefs {
+                    related_handoff_id: related_handoff_id.as_deref(),
+                    session_id: related_session_id.as_deref(),
+                    memory_query: related_memory_query.as_deref(),
+                    symbol: related_symbol.as_deref(),
+                    file: related_file.as_deref(),
+                },
             )?;
             print_json(&evidence)?;
         }
@@ -205,8 +242,19 @@ fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> 
 
 fn handle_api_command(store: &Store, command: ApiCommand) -> Result<()> {
     match command {
-        ApiCommand::Snapshot => {
-            print_json(&api::snapshot(store)?)?;
+        ApiCommand::Snapshot {
+            project_root,
+            view,
+            sort,
+        } => {
+            print_json(&api::snapshot(
+                store,
+                api::SnapshotOptions {
+                    project_root: project_root.as_deref(),
+                    sort,
+                    view,
+                },
+            )?)?;
         }
         ApiCommand::Task { task_id } => {
             print_json(&api::task_detail(store, &task_id)?)?;

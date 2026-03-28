@@ -2,7 +2,7 @@ use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
     HandoffType, TaskEventType, TaskStatus, VerificationState,
 };
-use canopy::store::Store;
+use canopy::store::{EvidenceLinkRefs, Store};
 use tempfile::tempdir;
 
 #[test]
@@ -59,6 +59,8 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("create task");
     assert_eq!(task.status, TaskStatus::Open);
     assert!(task.owner_agent_id.is_none());
+    assert!(!task.created_at.is_empty());
+    assert!(!task.updated_at.is_empty());
 
     let initial_events = store
         .list_task_events(&task.task_id)
@@ -114,11 +116,15 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("create handoff");
     assert_eq!(handoff.status, HandoffStatus::Open);
     assert_eq!(handoff.handoff_type, HandoffType::RequestReview);
+    assert!(!handoff.created_at.is_empty());
+    assert!(!handoff.updated_at.is_empty());
+    assert!(handoff.resolved_at.is_none());
 
     let resolved = store
         .resolve_handoff(&handoff.handoff_id, HandoffStatus::Accepted)
         .expect("resolve handoff");
     assert_eq!(resolved.status, HandoffStatus::Accepted);
+    assert!(resolved.resolved_at.is_some());
 
     let handoffs = store
         .list_handoffs(Some(&task.task_id))
@@ -151,9 +157,17 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             "session:01KMSCANOPY",
             "hyphae session",
             Some("session backing the review"),
-            Some(&handoff.handoff_id),
+            EvidenceLinkRefs {
+                related_handoff_id: Some(&handoff.handoff_id),
+                ..EvidenceLinkRefs::default()
+            },
         )
         .expect("create evidence");
+    assert_eq!(
+        evidence.related_session_id.as_deref(),
+        Some("session:01KMSCANOPY")
+    );
+    assert!(evidence.related_memory_query.is_none());
 
     let messages = store
         .list_council_messages(&task.task_id)
@@ -271,4 +285,18 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("owner agent present");
     assert!(refreshed_owner.current_task_id.is_none());
     assert_eq!(refreshed_owner.status, AgentStatus::Idle);
+
+    let task_heartbeats = store
+        .list_task_heartbeats(&task.task_id, 20)
+        .expect("list task heartbeats");
+    assert!(
+        task_heartbeats
+            .iter()
+            .any(|heartbeat| heartbeat.agent_id == reviewer.agent_id)
+    );
+    assert!(
+        task_heartbeats
+            .iter()
+            .any(|heartbeat| heartbeat.agent_id == agent.agent_id)
+    );
 }

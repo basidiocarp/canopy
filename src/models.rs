@@ -22,6 +22,18 @@ pub enum AgentStatus {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum AgentHeartbeatSource {
+    Register,
+    Heartbeat,
+    TaskSync,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum TaskStatus {
     Open,
     Assigned,
@@ -31,6 +43,34 @@ pub enum TaskStatus {
     Completed,
     Closed,
     Cancelled,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskView {
+    All,
+    Active,
+    Blocked,
+    Review,
+    Handoffs,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskSort {
+    Status,
+    Title,
+    UpdatedAt,
+    CreatedAt,
+    Verification,
 }
 
 #[derive(
@@ -137,6 +177,17 @@ pub struct AgentRegistration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentHeartbeatEvent {
+    pub heartbeat_id: String,
+    pub agent_id: String,
+    pub status: AgentStatus,
+    pub current_task_id: Option<String>,
+    pub related_task_id: Option<String>,
+    pub source: AgentHeartbeatSource,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
     pub task_id: String,
     pub title: String,
@@ -152,6 +203,8 @@ pub struct Task {
     pub closed_by: Option<String>,
     pub closure_summary: Option<String>,
     pub closed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -164,6 +217,9 @@ pub struct Handoff {
     pub summary: String,
     pub requested_action: Option<String>,
     pub status: HandoffStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub resolved_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,6 +240,10 @@ pub struct EvidenceRef {
     pub label: String,
     pub summary: Option<String>,
     pub related_handoff_id: Option<String>,
+    pub related_session_id: Option<String>,
+    pub related_memory_query: Option<String>,
+    pub related_symbol: Option<String>,
+    pub related_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,6 +263,7 @@ pub struct TaskEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
     pub agents: Vec<AgentRegistration>,
+    pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub tasks: Vec<Task>,
     pub handoffs: Vec<Handoff>,
     pub evidence: Vec<EvidenceRef>,
@@ -212,6 +273,7 @@ pub struct ApiSnapshot {
 pub struct TaskDetail {
     pub task: Task,
     pub events: Vec<TaskEvent>,
+    pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub handoffs: Vec<Handoff>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,

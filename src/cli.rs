@@ -1,6 +1,6 @@
 use crate::models::{
-    AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus, HandoffType,
-    VerificationState,
+    AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus, HandoffType, TaskSort,
+    TaskView, VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -70,6 +70,14 @@ pub enum AgentCommand {
         #[arg(long)]
         current_task_id: Option<String>,
     },
+    History {
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        task_id: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
     List,
 }
 
@@ -138,6 +146,14 @@ pub enum TaskCommand {
         closure_summary: Option<String>,
     },
     List,
+    ListView {
+        #[arg(long)]
+        project_root: Option<String>,
+        #[arg(long, default_value_t = TaskView::All)]
+        view: TaskView,
+        #[arg(long, default_value_t = TaskSort::Status)]
+        sort: TaskSort,
+    },
     Show {
         #[arg(long)]
         task_id: String,
@@ -177,6 +193,14 @@ pub enum EvidenceCommand {
         summary: Option<String>,
         #[arg(long)]
         related_handoff_id: Option<String>,
+        #[arg(long)]
+        related_session_id: Option<String>,
+        #[arg(long)]
+        related_memory_query: Option<String>,
+        #[arg(long)]
+        related_symbol: Option<String>,
+        #[arg(long)]
+        related_file: Option<String>,
     },
     List {
         #[arg(long)]
@@ -186,7 +210,14 @@ pub enum EvidenceCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ApiCommand {
-    Snapshot,
+    Snapshot {
+        #[arg(long)]
+        project_root: Option<String>,
+        #[arg(long, default_value_t = TaskView::All)]
+        view: TaskView,
+        #[arg(long, default_value_t = TaskSort::Status)]
+        sort: TaskSort,
+    },
     Task {
         #[arg(long)]
         task_id: String,

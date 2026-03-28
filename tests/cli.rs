@@ -50,6 +50,22 @@ fn cli_registers_agents_and_lists_them() {
     assert_eq!(first["host_type"], "codex");
     assert_eq!(first["status"], "idle");
     assert!(first["heartbeat_at"].is_string());
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "history",
+            "--agent-id",
+            "codex-1",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"source\": \"register\""));
 }
 
 #[test]
@@ -181,6 +197,23 @@ fn cli_creates_and_resolves_handoffs() {
             "\"verification_state\": \"passed\"",
         ))
         .stdout(predicate::str::contains("\"closed_by\": \"claude-1\""));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "list-view",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "review",
+            "--sort",
+            "updated_at",
+        ])
+        .assert()
+        .success();
 }
 
 #[test]

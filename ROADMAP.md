@@ -13,16 +13,21 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
   - local SQLite ledger
   - agent registry
   - latest heartbeat tracking
+  - heartbeat history
   - tasks
     - verification state
     - blocked reason
     - closure metadata
     - persisted task-event history
+    - created/updated timestamps
   - handoffs
+    - created/updated/resolved timestamps
   - council messages
   - evidence refs
+    - typed navigation fields for sessions, memories, and code
   - typed protocol enums and validation
   - explicit snapshot and task-detail read models
+  - snapshot filtering and sorting for saved-view support
   - CLI coverage and tests
 
 ## Next
@@ -32,14 +37,14 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
 Complete the first local orchestration store beyond the current foundation with:
 
 - stronger typed protocol/state validation
-- heartbeat history beyond the latest heartbeat
 - richer task timeline metadata beyond the current event rows
+- richer triage metadata beyond timestamps and event rows
 
 ### MVP CLI
 
 Finish the first CLI surface with:
 
-- stronger filtering or query options on read surfaces
+- richer task/detail queries on read surfaces
 
 ### Read API transport
 
