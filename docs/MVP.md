@@ -21,6 +21,11 @@ The current codebase only implements the foundation layer of this MVP:
 - evidence navigation fields so downstream operator tools do not have to infer every link from `source_kind`
 - explicit read models through `api snapshot` and `api task`
 - snapshot filters and sorting for server-side saved-view support
+- runtime attention summaries for:
+  - tasks
+  - handoffs
+  - agents
+- server-side `attention` view and aggregate attention counts for operator consumers
 
 ## Goal
 
@@ -139,6 +144,7 @@ Recommended first endpoints:
 - pending handoffs
 - review-required tasks
 - latest `Council` decisions
+- explicit runtime attention and freshness state instead of inferring everything from timestamps
 
 The first useful views are:
 

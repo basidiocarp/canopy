@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -139,6 +140,23 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             "--db",
             db_path.to_str().expect("db path"),
             "task",
+            "assign",
+            "--task-id",
+            &task_id,
+            "--assigned-to",
+            "codex-1",
+            "--assigned-by",
+            "operator",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
             "status",
             "--task-id",
             &task_id,
@@ -173,7 +191,34 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .clone();
 
     let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    assert_eq!(snapshot["attention"]["tasks_needing_attention"], 1);
+    assert_eq!(snapshot["attention"]["critical_tasks"], 0);
+    assert_eq!(
+        snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .len(),
+        1
+    );
+    assert_eq!(snapshot["task_attention"][0]["level"], "needs_attention");
+    assert_eq!(snapshot["task_attention"][0]["freshness"], "fresh");
+    assert_eq!(
+        snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("task attention reasons")
+            .iter()
+            .map(|value| value.as_str().expect("reason"))
+            .collect::<Vec<_>>(),
+        vec!["review_required"]
+    );
     assert_eq!(snapshot["agents"].as_array().expect("agents").len(), 2);
+    assert_eq!(
+        snapshot["agent_attention"]
+            .as_array()
+            .expect("agent attention")
+            .len(),
+        2
+    );
     assert_eq!(
         snapshot["heartbeats"].as_array().expect("heartbeats").len(),
         2
@@ -200,16 +245,24 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     let detail: Value = serde_json::from_slice(&task_detail_output).expect("parse task detail");
     assert_eq!(detail["task"]["status"], "review_required");
     assert_eq!(detail["task"]["verification_state"], "pending");
-    assert_eq!(detail["events"].as_array().expect("events").len(), 2);
+    assert_eq!(detail["attention"]["level"], "needs_attention");
+    assert_eq!(detail["attention"]["reasons"][0], "review_required");
+    assert_eq!(detail["events"].as_array().expect("events").len(), 3);
     assert_eq!(detail["events"][0]["event_type"], "created");
-    assert_eq!(detail["events"][1]["event_type"], "status_changed");
-    assert!(
-        detail["heartbeats"]
-            .as_array()
-            .expect("heartbeats")
-            .is_empty()
+    assert_eq!(detail["events"][1]["event_type"], "assigned");
+    assert_eq!(detail["events"][2]["event_type"], "status_changed");
+    assert_eq!(
+        detail["heartbeats"].as_array().expect("heartbeats").len(),
+        2
     );
     assert_eq!(detail["handoffs"].as_array().expect("handoffs").len(), 1);
+    assert_eq!(
+        detail["handoff_attention"]
+            .as_array()
+            .expect("handoff attention")
+            .len(),
+        1
+    );
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");
     assert!(detail["evidence"][0]["related_memory_query"].is_null());
@@ -318,4 +371,347 @@ fn api_snapshot_status_sort_uses_operator_priority_order() {
         .map(|task| task["title"].as_str().expect("title"))
         .collect();
     assert_eq!(titles, vec!["Active task", "Review task", "Blocked task"]);
+}
+
+#[test]
+fn api_snapshot_attention_view_returns_only_tasks_needing_attention() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "codex-1",
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let healthy_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Healthy task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let healthy_task: Value = serde_json::from_slice(&healthy_output).expect("parse task");
+
+    let blocked_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Blocked task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let blocked_task: Value = serde_json::from_slice(&blocked_output).expect("parse task");
+    let blocked_task_id = blocked_task["task_id"].as_str().expect("blocked task id");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            blocked_task_id,
+            "--status",
+            "blocked",
+            "--changed-by",
+            "operator",
+            "--blocked-reason",
+            "waiting on review",
+        ])
+        .assert()
+        .success();
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "attention",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let task_titles: Vec<_> = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(task_titles, vec!["Blocked task"]);
+    assert_eq!(snapshot["attention"]["tasks_needing_attention"], 1);
+    assert_eq!(snapshot["task_attention"][0]["level"], "critical");
+    assert_eq!(snapshot["task_attention"][0]["task_id"], blocked_task_id);
+    assert_ne!(
+        snapshot["task_attention"][0]["task_id"],
+        healthy_task["task_id"]
+    );
+}
+
+#[test]
+fn api_snapshot_uses_attention_thresholds_for_stale_task_handoff_and_owner_heartbeat() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "codex-1",
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Stale task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "assign",
+            "--task-id",
+            &task_id,
+            "--assigned-to",
+            "codex-1",
+            "--assigned-by",
+            "operator",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &task_id,
+            "--from-agent-id",
+            "codex-1",
+            "--to-agent-id",
+            "codex-1",
+            "--handoff-type",
+            "request_help",
+            "--summary",
+            "Needs another pass",
+        ])
+        .assert()
+        .success();
+
+    let conn = Connection::open(&db_path).expect("open db");
+    conn.execute(
+        "UPDATE tasks SET updated_at = ?1 WHERE task_id = ?2",
+        params!["2026-03-01 00:00:00", task_id],
+    )
+    .expect("age task");
+    conn.execute(
+        "UPDATE agents SET heartbeat_at = ?1 WHERE agent_id = 'codex-1'",
+        params!["2026-03-01 00:00:00"],
+    )
+    .expect("age heartbeat");
+    conn.execute(
+        "UPDATE handoffs SET created_at = ?1, updated_at = ?1 WHERE task_id = ?2",
+        params!["2026-03-01 00:00:00", task_id],
+    )
+    .expect("age handoff");
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "attention",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let reasons: Vec<_> = snapshot["task_attention"][0]["reasons"]
+        .as_array()
+        .expect("reasons")
+        .iter()
+        .map(|value| value.as_str().expect("reason"))
+        .collect();
+    assert_eq!(snapshot["task_attention"][0]["level"], "critical");
+    assert_eq!(snapshot["task_attention"][0]["freshness"], "stale");
+    assert_eq!(
+        snapshot["task_attention"][0]["owner_heartbeat_freshness"],
+        "stale"
+    );
+    assert_eq!(
+        snapshot["task_attention"][0]["open_handoff_freshness"],
+        "stale"
+    );
+    assert!(reasons.contains(&"stale_update"));
+    assert!(reasons.contains(&"stale_owner_heartbeat"));
+    assert!(reasons.contains(&"stale_open_handoff"));
+    assert_eq!(snapshot["handoff_attention"][0]["level"], "critical");
+    assert_eq!(snapshot["agent_attention"][0]["freshness"], "stale");
+    assert_eq!(snapshot["attention"]["critical_tasks"], 1);
+    assert_eq!(snapshot["attention"]["stale_handoffs"], 1);
+    assert_eq!(snapshot["attention"]["stale_agents"], 1);
+}
+
+#[test]
+fn api_snapshot_updated_at_sort_handles_mixed_timestamp_formats() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for title in ["Older task", "Newer task"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "task",
+                "create",
+                "--title",
+                title,
+                "--requested-by",
+                "operator",
+                "--project-root",
+                "/tmp/project",
+            ])
+            .assert()
+            .success();
+    }
+
+    let conn = Connection::open(&db_path).expect("open db");
+    conn.execute(
+        "UPDATE tasks SET updated_at = '2026-03-27 10:00:00' WHERE title = 'Older task'",
+        [],
+    )
+    .expect("update sqlite timestamp");
+    conn.execute(
+        "UPDATE tasks SET updated_at = '2026-03-28T10:00:00Z' WHERE title = 'Newer task'",
+        [],
+    )
+    .expect("update rfc3339 timestamp");
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--sort",
+            "updated_at",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let titles: Vec<_> = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(titles, vec!["Newer task", "Older task"]);
 }

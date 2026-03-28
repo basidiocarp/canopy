@@ -78,6 +78,11 @@ The first `Canopy` release should start small:
 - an explicit read surface for operator tools via `Canopy` commands instead of direct database access
 - explicit filter/sort-aware read models for snapshot consumers
 - task detail read models that include lifecycle timeline rows and related heartbeat history, not just latest task state
+- runtime attention semantics for operators:
+  - task, handoff, and agent attention levels
+  - heartbeat freshness summaries
+  - server-side `attention` task view
+  - explicit snapshot attention counts instead of dashboard-side heuristics
 
 ## Storage Boundary
 

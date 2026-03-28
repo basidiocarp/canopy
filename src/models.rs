@@ -57,6 +57,7 @@ pub enum TaskView {
     Blocked,
     Review,
     Handoffs,
+    Attention,
 }
 
 #[derive(
@@ -162,6 +163,60 @@ pub enum TaskEventType {
     StatusChanged,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AttentionLevel {
+    Normal,
+    NeedsAttention,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Freshness {
+    Fresh,
+    Aging,
+    Stale,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TaskAttentionReason {
+    Blocked,
+    VerificationFailed,
+    ReviewRequired,
+    AgingUpdate,
+    StaleUpdate,
+    AgingOwnerHeartbeat,
+    StaleOwnerHeartbeat,
+    MissingOwnerHeartbeat,
+    AgingOpenHandoff,
+    StaleOpenHandoff,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum HandoffAttentionReason {
+    AgingOpenHandoff,
+    StaleOpenHandoff,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AgentAttentionReason {
+    AgingHeartbeat,
+    StaleHeartbeat,
+    MissingHeartbeat,
+    BlockedStatus,
+    ReviewRequiredStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRegistration {
     pub agent_id: String,
@@ -261,20 +316,66 @@ pub struct TaskEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentAttention {
+    pub agent_id: String,
+    pub level: AttentionLevel,
+    pub freshness: Freshness,
+    pub last_heartbeat_at: Option<String>,
+    pub current_task_id: Option<String>,
+    pub reasons: Vec<AgentAttentionReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandoffAttention {
+    pub handoff_id: String,
+    pub task_id: String,
+    pub level: AttentionLevel,
+    pub freshness: Freshness,
+    pub reasons: Vec<HandoffAttentionReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskAttention {
+    pub task_id: String,
+    pub level: AttentionLevel,
+    pub freshness: Freshness,
+    pub owner_heartbeat_freshness: Option<Freshness>,
+    pub open_handoff_freshness: Option<Freshness>,
+    pub reasons: Vec<TaskAttentionReason>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotAttentionSummary {
+    pub tasks_needing_attention: usize,
+    pub critical_tasks: usize,
+    pub handoffs_needing_attention: usize,
+    pub stale_handoffs: usize,
+    pub agents_needing_attention: usize,
+    pub stale_agents: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
+    pub attention: SnapshotAttentionSummary,
     pub agents: Vec<AgentRegistration>,
+    pub agent_attention: Vec<AgentAttention>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub tasks: Vec<Task>,
+    pub task_attention: Vec<TaskAttention>,
     pub handoffs: Vec<Handoff>,
+    pub handoff_attention: Vec<HandoffAttention>,
     pub evidence: Vec<EvidenceRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskDetail {
+    pub attention: TaskAttention,
+    pub agent_attention: Vec<AgentAttention>,
     pub task: Task,
     pub events: Vec<TaskEvent>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub handoffs: Vec<Handoff>,
+    pub handoff_attention: Vec<HandoffAttention>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
 }

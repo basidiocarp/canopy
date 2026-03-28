@@ -74,6 +74,11 @@ Planned additions after the foundation slice:
 - `registered_at`
 - `last_error`
 
+Current read-model additions:
+
+- derived attention level
+- heartbeat freshness summary
+
 Notes:
 
 - `host_id` is the stable external reference for the host or adapter context the agent is running on.
@@ -102,8 +107,13 @@ Current foundation fields:
 Planned additions after the foundation slice:
 
 - `priority`
-- `created_at`
-- `updated_at`
+
+Current read-model additions:
+
+- derived task attention level
+- task freshness summary
+- owner heartbeat freshness summary
+- open-handoff freshness summary
 
 ### TaskEvent
 
@@ -157,7 +167,12 @@ Current foundation fields:
 
 Planned additions after the foundation slice:
 
-- `created_at`
+- none required for the first runtime attention slice
+
+Current read-model additions:
+
+- derived handoff attention level
+- handoff freshness summary
 - `resolved_at`
 
 ### CouncilMessage

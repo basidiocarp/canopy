@@ -28,6 +28,8 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.
   - typed protocol enums and validation
   - explicit snapshot and task-detail read models
   - snapshot filtering and sorting for saved-view support
+  - runtime attention/freshness summaries for tasks, handoffs, and agents
+  - server-side `attention` view and aggregate attention counts
   - CLI coverage and tests
 
 ## Next
@@ -38,7 +40,7 @@ Complete the first local orchestration store beyond the current foundation with:
 
 - stronger typed protocol/state validation
 - richer task timeline metadata beyond the current event rows
-- richer triage metadata beyond timestamps and event rows
+- richer triage metadata beyond the current attention and freshness summaries
 
 ### MVP CLI
 
