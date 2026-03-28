@@ -209,7 +209,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .iter()
             .map(|value| value.as_str().expect("reason"))
             .collect::<Vec<_>>(),
-        vec!["review_required"]
+        vec!["review_required", "unacknowledged"]
     );
     assert_eq!(snapshot["agents"].as_array().expect("agents").len(), 2);
     assert_eq!(
@@ -650,6 +650,145 @@ fn api_snapshot_uses_attention_thresholds_for_stale_task_handoff_and_owner_heart
     assert_eq!(snapshot["attention"]["critical_tasks"], 1);
     assert_eq!(snapshot["attention"]["stale_handoffs"], 1);
     assert_eq!(snapshot["attention"]["stale_agents"], 1);
+}
+
+#[test]
+fn api_snapshot_presets_and_triage_filters_use_runtime_metadata() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let urgent_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Urgent task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let urgent_task: Value = serde_json::from_slice(&urgent_output).expect("parse task");
+    let urgent_task_id = urgent_task["task_id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    let normal_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Normal task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let normal_task: Value = serde_json::from_slice(&normal_output).expect("parse normal task");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "triage",
+            "--task-id",
+            &urgent_task_id,
+            "--changed-by",
+            "operator",
+            "--priority",
+            "high",
+            "--severity",
+            "critical",
+            "--acknowledged",
+            "false",
+            "--owner-note",
+            "escalate now",
+        ])
+        .assert()
+        .success();
+
+    let critical_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "critical",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let critical_snapshot: Value =
+        serde_json::from_slice(&critical_snapshot_output).expect("parse critical snapshot");
+
+    let critical_task_ids: Vec<_> = critical_snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(critical_task_ids, vec![urgent_task_id.as_str()]);
+    assert_eq!(critical_snapshot["task_attention"][0]["level"], "critical");
+    assert_eq!(
+        critical_snapshot["task_attention"][0]["acknowledged"],
+        false
+    );
+
+    let severity_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--severity-at-least",
+            "critical",
+            "--sort",
+            "severity",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let severity_snapshot: Value =
+        serde_json::from_slice(&severity_snapshot_output).expect("parse severity snapshot");
+    assert_eq!(
+        severity_snapshot["tasks"].as_array().expect("tasks").len(),
+        1
+    );
+    assert_eq!(severity_snapshot["tasks"][0]["task_id"], urgent_task_id);
+    assert_ne!(
+        severity_snapshot["tasks"][0]["task_id"],
+        normal_task["task_id"]
+    );
 }
 
 #[test]

@@ -5,8 +5,7 @@ use canopy::cli::{
     TaskCommand,
 };
 use canopy::models::{AgentRegistration, AgentStatus};
-use canopy::store::EvidenceLinkRefs;
-use canopy::store::Store;
+use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store, TaskTriageUpdate};
 use clap::Parser;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -122,20 +121,52 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             )?;
             print_json(&task)?;
         }
+        TaskCommand::Triage {
+            task_id,
+            changed_by,
+            priority,
+            severity,
+            acknowledged,
+            owner_note,
+            clear_owner_note,
+        } => {
+            let task = store.update_task_triage(
+                &task_id,
+                &changed_by,
+                TaskTriageUpdate {
+                    priority,
+                    severity,
+                    acknowledged,
+                    owner_note: owner_note.as_deref(),
+                    clear_owner_note,
+                },
+            )?;
+            print_json(&task)?;
+        }
         TaskCommand::List => {
             print_json(&store.list_tasks()?)?;
         }
         TaskCommand::ListView {
             project_root,
+            preset,
             view,
             sort,
+            priority_at_least,
+            severity_at_least,
+            acknowledged,
+            attention_at_least,
         } => {
             let snapshot = api::snapshot(
                 store,
                 api::SnapshotOptions {
                     project_root: project_root.as_deref(),
+                    preset,
                     sort,
                     view,
+                    priority_at_least,
+                    severity_at_least,
+                    acknowledged,
+                    attention_at_least,
                 },
             )?;
             print_json(&snapshot.tasks)?;
@@ -157,6 +188,8 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
             handoff_type,
             summary,
             requested_action,
+            due_at,
+            expires_at,
         } => {
             let handoff = store.create_handoff(
                 &task_id,
@@ -165,11 +198,19 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
                 handoff_type,
                 &summary,
                 requested_action.as_deref(),
+                HandoffTiming {
+                    due_at: due_at.as_deref(),
+                    expires_at: expires_at.as_deref(),
+                },
             )?;
             print_json(&handoff)?;
         }
-        HandoffCommand::Resolve { handoff_id, status } => {
-            let handoff = store.resolve_handoff(&handoff_id, status)?;
+        HandoffCommand::Resolve {
+            handoff_id,
+            status,
+            resolved_by,
+        } => {
+            let handoff = store.resolve_handoff(&handoff_id, status, &resolved_by)?;
             print_json(&handoff)?;
         }
         HandoffCommand::List { task_id } => {
@@ -244,15 +285,25 @@ fn handle_api_command(store: &Store, command: ApiCommand) -> Result<()> {
     match command {
         ApiCommand::Snapshot {
             project_root,
+            preset,
             view,
             sort,
+            priority_at_least,
+            severity_at_least,
+            acknowledged,
+            attention_at_least,
         } => {
             print_json(&api::snapshot(
                 store,
                 api::SnapshotOptions {
                     project_root: project_root.as_deref(),
+                    preset,
                     sort,
                     view,
+                    priority_at_least,
+                    severity_at_least,
+                    acknowledged,
+                    attention_at_least,
                 },
             )?)?;
         }

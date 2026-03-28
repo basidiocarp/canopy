@@ -1,13 +1,15 @@
 use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
     CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType, Task,
-    TaskEvent, TaskEventType, TaskStatus, VerificationState,
+    TaskEvent, TaskEventType, TaskPriority, TaskSeverity, TaskStatus, VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use thiserror::Error;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use ulid::Ulid;
 
 #[derive(Debug, Error)]
@@ -57,6 +59,21 @@ pub struct EvidenceLinkRefs<'a> {
     pub file: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskTriageUpdate<'a> {
+    pub priority: Option<TaskPriority>,
+    pub severity: Option<TaskSeverity>,
+    pub acknowledged: Option<bool>,
+    pub owner_note: Option<&'a str>,
+    pub clear_owner_note: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HandoffTiming<'a> {
+    pub due_at: Option<&'a str>,
+    pub expires_at: Option<&'a str>,
+}
+
 const BASE_SCHEMA: &str = r"
     CREATE TABLE IF NOT EXISTS agents (
         agent_id TEXT PRIMARY KEY,
@@ -79,7 +96,12 @@ const BASE_SCHEMA: &str = r"
         project_root TEXT NOT NULL,
         status TEXT NOT NULL,
         verification_state TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        severity TEXT NOT NULL,
         owner_agent_id TEXT NULL REFERENCES agents(agent_id),
+        owner_note TEXT NULL,
+        acknowledged_by TEXT NULL,
+        acknowledged_at TEXT NULL,
         blocked_reason TEXT NULL,
         verified_by TEXT NULL,
         verified_at TEXT NULL,
@@ -107,6 +129,8 @@ const BASE_SCHEMA: &str = r"
         handoff_type TEXT NOT NULL,
         summary TEXT NOT NULL,
         requested_action TEXT NULL,
+        due_at TEXT NULL,
+        expires_at TEXT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -307,7 +331,12 @@ impl Store {
             project_root: project_root.to_string(),
             status: TaskStatus::Open,
             verification_state: VerificationState::Unknown,
+            priority: TaskPriority::Medium,
+            severity: TaskSeverity::None,
             owner_agent_id: None,
+            owner_note: None,
+            acknowledged_by: None,
+            acknowledged_at: None,
             blocked_reason: None,
             verified_by: None,
             verified_at: None,
@@ -321,9 +350,10 @@ impl Store {
             r"
             INSERT INTO tasks (
                 task_id, title, description, requested_by, project_root, status,
-                verification_state, owner_agent_id, blocked_reason, verified_by,
-                verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                verification_state, priority, severity, owner_agent_id, owner_note,
+                acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
+                closed_by, closure_summary, closed_at, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ",
             params![
                 task.task_id,
@@ -333,7 +363,12 @@ impl Store {
                 task.project_root,
                 task.status.to_string(),
                 task.verification_state.to_string(),
+                task.priority.to_string(),
+                task.severity.to_string(),
                 task.owner_agent_id,
+                task.owner_note,
+                task.acknowledged_by,
+                task.acknowledged_at,
                 task.blocked_reason,
                 task.verified_by,
                 task.verified_at,
@@ -385,7 +420,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT task_id, title, description, requested_by, project_root, status,
-                   verification_state, owner_agent_id, blocked_reason, verified_by,
+                   verification_state, priority, severity, owner_agent_id, owner_note,
+                   acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
             FROM tasks
             ORDER BY rowid
@@ -509,6 +545,115 @@ impl Store {
         })
     }
 
+    /// Updates operator triage metadata without changing the task lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist, no triage fields were
+    /// provided, or the update fails.
+    pub fn update_task_triage(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        update: TaskTriageUpdate<'_>,
+    ) -> StoreResult<Task> {
+        self.ensure_task_exists(task_id)?;
+        self.in_transaction(|conn| {
+            let current = get_task_in_connection(conn, task_id)?;
+            let next_priority = update.priority.unwrap_or(current.priority);
+            let next_severity = update.severity.unwrap_or(current.severity);
+            let next_owner_note = if update.clear_owner_note {
+                None
+            } else {
+                update
+                    .owner_note
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.owner_note.clone())
+            };
+            let next_acknowledged_by = match update.acknowledged {
+                Some(true) => Some(changed_by.to_string()),
+                Some(false) => None,
+                None => current.acknowledged_by.clone(),
+            };
+            let preserve_acknowledged_at = update.acknowledged.is_none();
+
+            if update.priority.is_none()
+                && update.severity.is_none()
+                && update.acknowledged.is_none()
+                && update.owner_note.is_none()
+                && !update.clear_owner_note
+            {
+                return Err(StoreError::Validation(
+                    "triage update requires at least one field".to_string(),
+                ));
+            }
+
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET priority = ?2,
+                    severity = ?3,
+                    owner_note = ?4,
+                    acknowledged_by = ?5,
+                    acknowledged_at = CASE
+                        WHEN ?6 THEN acknowledged_at
+                        WHEN ?7 THEN CURRENT_TIMESTAMP
+                        ELSE NULL
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                params![
+                    task_id,
+                    next_priority.to_string(),
+                    next_severity.to_string(),
+                    next_owner_note,
+                    next_acknowledged_by,
+                    preserve_acknowledged_at,
+                    update.acknowledged.unwrap_or(false),
+                ],
+            )?;
+
+            let updated = get_task_in_connection(conn, task_id)?;
+            let mut notes = Vec::new();
+            if update.priority.is_some() {
+                notes.push(format!("priority={}", updated.priority));
+            }
+            if update.severity.is_some() {
+                notes.push(format!("severity={}", updated.severity));
+            }
+            if let Some(acknowledged) = update.acknowledged {
+                notes.push(format!("acknowledged={acknowledged}"));
+            }
+            if update.owner_note.is_some() {
+                notes.push("owner_note_updated=true".to_string());
+            }
+            if update.clear_owner_note {
+                notes.push("owner_note_cleared=true".to_string());
+            }
+            let note = if notes.is_empty() {
+                None
+            } else {
+                Some(notes.join("; "))
+            };
+
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::TriageUpdated,
+                    actor: changed_by,
+                    from_status: Some(updated.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    note: note.as_deref(),
+                },
+            )?;
+            Ok(updated)
+        })
+    }
+
     /// Loads a single handoff by id.
     ///
     /// # Errors
@@ -524,6 +669,7 @@ impl Store {
     ///
     /// Returns an error if the task or source agent does not exist or if the
     /// database write fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_handoff(
         &self,
         task_id: &str,
@@ -532,10 +678,12 @@ impl Store {
         handoff_type: HandoffType,
         summary: &str,
         requested_action: Option<&str>,
+        timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff> {
         self.ensure_task_exists(task_id)?;
         self.ensure_agent_exists(from_agent_id)?;
         self.ensure_agent_exists(to_agent_id)?;
+        validate_handoff_timing(timing)?;
 
         let handoff = Handoff {
             handoff_id: Ulid::new().to_string(),
@@ -545,6 +693,8 @@ impl Store {
             handoff_type,
             summary: summary.to_string(),
             requested_action: requested_action.map(ToOwned::to_owned),
+            due_at: timing.due_at.map(ToOwned::to_owned),
+            expires_at: timing.expires_at.map(ToOwned::to_owned),
             status: HandoffStatus::Open,
             created_at: String::new(),
             updated_at: String::new(),
@@ -554,8 +704,8 @@ impl Store {
             r"
             INSERT INTO handoffs (
                 handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                summary, requested_action, status, created_at, updated_at, resolved_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+                summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
             ",
             params![
                 handoff.handoff_id,
@@ -565,6 +715,8 @@ impl Store {
                 handoff.handoff_type.to_string(),
                 handoff.summary,
                 handoff.requested_action,
+                handoff.due_at,
+                handoff.expires_at,
                 handoff.status.to_string(),
             ],
         )?;
@@ -578,9 +730,19 @@ impl Store {
     ///
     /// Returns an error if the handoff does not exist, the requested status is
     /// unsupported, or the update fails.
-    pub fn resolve_handoff(&self, handoff_id: &str, status: HandoffStatus) -> StoreResult<Handoff> {
+    pub fn resolve_handoff(
+        &self,
+        handoff_id: &str,
+        status: HandoffStatus,
+        resolved_by: &str,
+    ) -> StoreResult<Handoff> {
         self.in_transaction(|conn| {
             let handoff = get_handoff_in_connection(conn, handoff_id)?;
+            if status != HandoffStatus::Expired && handoff_is_expired(&handoff)? {
+                return Err(StoreError::Validation(
+                    "expired handoffs cannot be resolved to a non-expired status".to_string(),
+                ));
+            }
             let updated = conn.execute(
                 r"
                 UPDATE handoffs
@@ -598,13 +760,15 @@ impl Store {
                 return Err(StoreError::NotFound("handoff"));
             }
 
-            if status == HandoffStatus::Accepted {
+            if status == HandoffStatus::Accepted
+                && handoff.handoff_type == HandoffType::TransferOwnership
+            {
                 assign_task_in_connection(
                     conn,
                     &handoff.task_id,
                     &handoff.to_agent_id,
-                    &handoff.from_agent_id,
-                    Some("accepted handoff"),
+                    resolved_by,
+                    Some("accepted transfer ownership handoff"),
                 )?;
             } else {
                 touch_task_in_connection(conn, &handoff.task_id)?;
@@ -625,7 +789,7 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, status, created_at, updated_at, resolved_at
+                       summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 WHERE task_id = ?1
                 ORDER BY rowid
@@ -639,7 +803,7 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, status, created_at, updated_at, resolved_at
+                       summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 ORDER BY rowid
                 ",
@@ -729,8 +893,12 @@ impl Store {
     ) -> StoreResult<EvidenceRef> {
         self.ensure_task_exists(task_id)?;
         if let Some(handoff_id) = links.related_handoff_id {
-            let _ = self.list_handoffs(Some(task_id))?;
-            self.get_handoff(handoff_id)?;
+            let handoff = self.get_handoff(handoff_id)?;
+            if handoff.task_id != task_id {
+                return Err(StoreError::Validation(
+                    "related handoff must belong to the same task".to_string(),
+                ));
+            }
         }
 
         let navigation = normalize_evidence_navigation(
@@ -1049,12 +1217,19 @@ struct EvidenceNavigation<'a> {
 }
 
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
+    ensure_column(conn, "tasks", "priority", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "severity", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "owner_note", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "acknowledged_by", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
     conn.execute(
         r"
         UPDATE tasks
-        SET created_at = COALESCE(
+        SET priority = COALESCE(priority, 'medium'),
+            severity = COALESCE(severity, 'none'),
+            created_at = COALESCE(
                 created_at,
                 (SELECT MIN(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
                 CURRENT_TIMESTAMP
@@ -1071,6 +1246,8 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         [],
     )?;
 
+    ensure_column(conn, "handoffs", "due_at", "TEXT NULL")?;
+    ensure_column(conn, "handoffs", "expires_at", "TEXT NULL")?;
     ensure_column(conn, "handoffs", "created_at", "TEXT NULL")?;
     ensure_column(conn, "handoffs", "updated_at", "TEXT NULL")?;
     ensure_column(conn, "handoffs", "resolved_at", "TEXT NULL")?;
@@ -1128,6 +1305,33 @@ fn ensure_column(
     Ok(())
 }
 
+fn validate_handoff_timing(timing: HandoffTiming<'_>) -> StoreResult<()> {
+    let due_at = timing.due_at.map(parse_rfc3339_timestamp).transpose()?;
+    let expires_at = timing.expires_at.map(parse_rfc3339_timestamp).transpose()?;
+
+    if let (Some(due_at), Some(expires_at)) = (due_at, expires_at)
+        && due_at > expires_at
+    {
+        return Err(StoreError::Validation(
+            "handoff due_at must be before expires_at".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn parse_rfc3339_timestamp(raw: &str) -> StoreResult<OffsetDateTime> {
+    OffsetDateTime::parse(raw, &Rfc3339)
+        .map_err(|_| StoreError::Validation(format!("invalid RFC3339 timestamp: {raw}")))
+}
+
+fn handoff_is_expired(handoff: &Handoff) -> StoreResult<bool> {
+    let Some(expires_at) = handoff.expires_at.as_deref() else {
+        return Ok(false);
+    };
+    Ok(parse_rfc3339_timestamp(expires_at)? <= OffsetDateTime::now_utc())
+}
+
 fn normalize_evidence_navigation<'a>(
     source_kind: EvidenceSourceKind,
     source_ref: &'a str,
@@ -1159,6 +1363,7 @@ fn normalize_evidence_navigation<'a>(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn assign_task_in_connection(
     conn: &Connection,
     task_id: &str,
@@ -1187,7 +1392,9 @@ fn assign_task_in_connection(
     conn.execute(
         r"
         UPDATE tasks
-        SET owner_agent_id = ?2, status = 'assigned', updated_at = CURRENT_TIMESTAMP
+        SET owner_agent_id = ?2,
+            status = 'assigned',
+            updated_at = CURRENT_TIMESTAMP
         WHERE task_id = ?1
         ",
         params![task_id, assigned_to],
@@ -1327,7 +1534,8 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
     conn.query_row(
         r"
         SELECT task_id, title, description, requested_by, project_root, status,
-               verification_state, owner_agent_id, blocked_reason, verified_by,
+               verification_state, priority, severity, owner_agent_id, owner_note,
+               acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
@@ -1399,7 +1607,7 @@ fn get_handoff_in_connection(conn: &Connection, handoff_id: &str) -> StoreResult
     conn.query_row(
         r"
         SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-               summary, requested_action, status, created_at, updated_at, resolved_at
+               summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
         FROM handoffs
         WHERE handoff_id = ?1
         ",
@@ -1449,15 +1657,20 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         project_root: row.get(4)?,
         status: parse_enum_column(row, 5)?,
         verification_state: parse_enum_column(row, 6)?,
-        owner_agent_id: row.get(7)?,
-        blocked_reason: row.get(8)?,
-        verified_by: row.get(9)?,
-        verified_at: row.get(10)?,
-        closed_by: row.get(11)?,
-        closure_summary: row.get(12)?,
-        closed_at: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        priority: parse_enum_column(row, 7)?,
+        severity: parse_enum_column(row, 8)?,
+        owner_agent_id: row.get(9)?,
+        owner_note: row.get(10)?,
+        acknowledged_by: row.get(11)?,
+        acknowledged_at: row.get(12)?,
+        blocked_reason: row.get(13)?,
+        verified_by: row.get(14)?,
+        verified_at: row.get(15)?,
+        closed_by: row.get(16)?,
+        closure_summary: row.get(17)?,
+        closed_at: row.get(18)?,
+        created_at: row.get(19)?,
+        updated_at: row.get(20)?,
     })
 }
 
@@ -1470,10 +1683,12 @@ fn map_handoff(row: &rusqlite::Row<'_>) -> rusqlite::Result<Handoff> {
         handoff_type: parse_enum_column(row, 4)?,
         summary: row.get(5)?,
         requested_action: row.get(6)?,
-        status: parse_enum_column(row, 7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
-        resolved_at: row.get(10)?,
+        due_at: row.get(7)?,
+        expires_at: row.get(8)?,
+        status: parse_enum_column(row, 9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        resolved_at: row.get(12)?,
     })
 }
 

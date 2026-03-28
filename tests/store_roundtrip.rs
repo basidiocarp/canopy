@@ -2,7 +2,7 @@ use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
     HandoffType, TaskEventType, TaskStatus, VerificationState,
 };
-use canopy::store::{EvidenceLinkRefs, Store};
+use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store};
 use tempfile::tempdir;
 
 #[test]
@@ -109,19 +109,20 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             &task.task_id,
             &agent.agent_id,
             &reviewer.agent_id,
-            HandoffType::RequestReview,
+            HandoffType::TransferOwnership,
             "ask for an independent contract review",
             Some("confirm the evidence boundary"),
+            HandoffTiming::default(),
         )
         .expect("create handoff");
     assert_eq!(handoff.status, HandoffStatus::Open);
-    assert_eq!(handoff.handoff_type, HandoffType::RequestReview);
+    assert_eq!(handoff.handoff_type, HandoffType::TransferOwnership);
     assert!(!handoff.created_at.is_empty());
     assert!(!handoff.updated_at.is_empty());
     assert!(handoff.resolved_at.is_none());
 
     let resolved = store
-        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Accepted)
+        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Accepted, "claude-1")
         .expect("resolve handoff");
     assert_eq!(resolved.status, HandoffStatus::Accepted);
     assert!(resolved.resolved_at.is_some());

@@ -57,8 +57,17 @@ The first `Canopy` release should start small:
   - verification state
   - blocked reason
   - closure metadata
+  - triage metadata:
+    - priority
+    - severity
+    - acknowledgment state
+    - operator note
   - persisted task-event history for creation, assignment, transfer, and status changes
 - heartbeat history, not just latest heartbeat state
+- handoff timing metadata:
+  - `due_at`
+  - `expires_at`
+  - write-time timestamp validation
 - typed protocol values for:
   - agent status
   - task status
@@ -83,6 +92,7 @@ The first `Canopy` release should start small:
   - heartbeat freshness summaries
   - server-side `attention` task view
   - explicit snapshot attention counts instead of dashboard-side heuristics
+  - first-class snapshot presets and server-side triage filters
 
 ## Storage Boundary
 

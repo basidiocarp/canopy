@@ -168,6 +168,8 @@ fn cli_creates_and_resolves_handoffs() {
             &handoff_id,
             "--status",
             "accepted",
+            "--resolved-by",
+            "claude-1",
         ])
         .assert()
         .success()
@@ -287,5 +289,117 @@ fn cli_requires_blocked_reason_for_blocked_status() {
         .failure()
         .stderr(predicate::str::contains(
             "blocked tasks require a blocked reason",
+        ));
+}
+
+#[test]
+fn cli_updates_triage_metadata_and_supports_due_handoffs() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Triage task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "triage",
+            "--task-id",
+            &task_id,
+            "--changed-by",
+            "operator",
+            "--priority",
+            "high",
+            "--severity",
+            "critical",
+            "--acknowledged",
+            "false",
+            "--owner-note",
+            "handoff to strongest verifier",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"priority\": \"high\""))
+        .stdout(predicate::str::contains("\"severity\": \"critical\""))
+        .stdout(predicate::str::contains(
+            "\"owner_note\": \"handoff to strongest verifier\"",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &task_id,
+            "--from-agent-id",
+            "codex-1",
+            "--to-agent-id",
+            "claude-1",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "review this critical task",
+            "--due-at",
+            "2000-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"due_at\": \"2000-01-01T00:00:00Z\"",
         ));
 }

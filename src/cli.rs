@@ -1,6 +1,6 @@
 use crate::models::{
-    AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus, HandoffType, TaskSort,
-    TaskView, VerificationState,
+    AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
+    HandoffType, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort, TaskView, VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -96,12 +96,18 @@ pub enum HandoffCommand {
         summary: String,
         #[arg(long)]
         requested_action: Option<String>,
+        #[arg(long)]
+        due_at: Option<String>,
+        #[arg(long)]
+        expires_at: Option<String>,
     },
     Resolve {
         #[arg(long)]
         handoff_id: String,
         #[arg(long)]
         status: HandoffStatus,
+        #[arg(long)]
+        resolved_by: String,
     },
     List {
         #[arg(long)]
@@ -145,14 +151,40 @@ pub enum TaskCommand {
         #[arg(long)]
         closure_summary: Option<String>,
     },
+    Triage {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        changed_by: String,
+        #[arg(long)]
+        priority: Option<TaskPriority>,
+        #[arg(long)]
+        severity: Option<TaskSeverity>,
+        #[arg(long)]
+        acknowledged: Option<bool>,
+        #[arg(long)]
+        owner_note: Option<String>,
+        #[arg(long, default_value_t = false)]
+        clear_owner_note: bool,
+    },
     List,
     ListView {
         #[arg(long)]
         project_root: Option<String>,
-        #[arg(long, default_value_t = TaskView::All)]
-        view: TaskView,
-        #[arg(long, default_value_t = TaskSort::Status)]
-        sort: TaskSort,
+        #[arg(long)]
+        preset: Option<SnapshotPreset>,
+        #[arg(long)]
+        view: Option<TaskView>,
+        #[arg(long)]
+        sort: Option<TaskSort>,
+        #[arg(long)]
+        priority_at_least: Option<TaskPriority>,
+        #[arg(long)]
+        severity_at_least: Option<TaskSeverity>,
+        #[arg(long)]
+        acknowledged: Option<bool>,
+        #[arg(long)]
+        attention_at_least: Option<AttentionLevel>,
     },
     Show {
         #[arg(long)]
@@ -213,10 +245,20 @@ pub enum ApiCommand {
     Snapshot {
         #[arg(long)]
         project_root: Option<String>,
-        #[arg(long, default_value_t = TaskView::All)]
-        view: TaskView,
-        #[arg(long, default_value_t = TaskSort::Status)]
-        sort: TaskSort,
+        #[arg(long)]
+        preset: Option<SnapshotPreset>,
+        #[arg(long)]
+        view: Option<TaskView>,
+        #[arg(long)]
+        sort: Option<TaskSort>,
+        #[arg(long)]
+        priority_at_least: Option<TaskPriority>,
+        #[arg(long)]
+        severity_at_least: Option<TaskSeverity>,
+        #[arg(long)]
+        acknowledged: Option<bool>,
+        #[arg(long)]
+        attention_at_least: Option<AttentionLevel>,
     },
     Task {
         #[arg(long)]

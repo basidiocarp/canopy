@@ -66,12 +66,58 @@ pub enum TaskView {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum SnapshotPreset {
+    Default,
+    Attention,
+    ReviewQueue,
+    Blocked,
+    Handoffs,
+    Critical,
+    Unacknowledged,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum TaskSort {
     Status,
     Title,
     UpdatedAt,
     CreatedAt,
     Verification,
+    Priority,
+    Severity,
+    Attention,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskSeverity {
+    None,
+    Low,
+    Medium,
+    High,
+    Critical,
 }
 
 #[derive(
@@ -161,6 +207,7 @@ pub enum TaskEventType {
     Assigned,
     OwnershipTransferred,
     StatusChanged,
+    TriageUpdated,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -189,6 +236,11 @@ pub enum TaskAttentionReason {
     Blocked,
     VerificationFailed,
     ReviewRequired,
+    Unacknowledged,
+    HighPriority,
+    CriticalPriority,
+    HighSeverity,
+    CriticalSeverity,
     AgingUpdate,
     StaleUpdate,
     AgingOwnerHeartbeat,
@@ -251,7 +303,12 @@ pub struct Task {
     pub project_root: String,
     pub status: TaskStatus,
     pub verification_state: VerificationState,
+    pub priority: TaskPriority,
+    pub severity: TaskSeverity,
     pub owner_agent_id: Option<String>,
+    pub owner_note: Option<String>,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<String>,
     pub blocked_reason: Option<String>,
     pub verified_by: Option<String>,
     pub verified_at: Option<String>,
@@ -271,6 +328,8 @@ pub struct Handoff {
     pub handoff_type: HandoffType,
     pub summary: String,
     pub requested_action: Option<String>,
+    pub due_at: Option<String>,
+    pub expires_at: Option<String>,
     pub status: HandoffStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -339,6 +398,7 @@ pub struct TaskAttention {
     pub task_id: String,
     pub level: AttentionLevel,
     pub freshness: Freshness,
+    pub acknowledged: bool,
     pub owner_heartbeat_freshness: Option<Freshness>,
     pub open_handoff_freshness: Option<Freshness>,
     pub reasons: Vec<TaskAttentionReason>,

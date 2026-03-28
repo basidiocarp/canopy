@@ -97,16 +97,17 @@ Current foundation fields:
 - `project_root`
 - `status`
 - `verification_state`
+- `priority`
+- `severity`
+- `owner_note`
+- `acknowledged_by`
+- `acknowledged_at`
 - `blocked_reason`
 - `verified_by`
 - `verified_at`
 - `closed_by`
 - `closure_summary`
 - `closed_at`
-
-Planned additions after the foundation slice:
-
-- `priority`
 
 Current read-model additions:
 
@@ -163,11 +164,9 @@ Current foundation fields:
 - `handoff_type`
 - `summary`
 - `requested_action`
+- `due_at`
+- `expires_at`
 - `status`
-
-Planned additions after the foundation slice:
-
-- none required for the first runtime attention slice
 
 Current read-model additions:
 
@@ -262,6 +261,12 @@ Recommended handoff statuses:
 - `expired`
 - `cancelled`
 - `completed`
+
+Handoff timing rules in the current runtime:
+
+- `due_at` and `expires_at` must be valid RFC3339 timestamps when present
+- `due_at` must not be later than `expires_at`
+- expired handoffs cannot be accepted or otherwise resolved into a non-`expired` state
 
 ## Handoff Types
 

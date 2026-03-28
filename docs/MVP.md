@@ -12,15 +12,18 @@ The current codebase only implements the foundation layer of this MVP:
   - verification state
   - blocked reason
   - closure metadata
+  - priority / severity / acknowledgment / operator note
   - task-event history rows for creation, assignment, transfer, and status changes
   - created/updated timestamps for operator sorting and aging
 - handoffs
   - created/updated/resolved timestamps
+  - due / expiry metadata with write-time validation
 - council messages
 - evidence refs
 - evidence navigation fields so downstream operator tools do not have to infer every link from `source_kind`
 - explicit read models through `api snapshot` and `api task`
 - snapshot filters and sorting for server-side saved-view support
+- first-class snapshot presets for operator queues
 - runtime attention summaries for:
   - tasks
   - handoffs
@@ -103,6 +106,7 @@ canopy agent history
 canopy task create
 canopy task assign
 canopy task status
+canopy task triage
 canopy task list
 canopy task list-view
 canopy task show
@@ -185,3 +189,4 @@ Task detail should include:
 - a blocked task is visible without reading raw logs
 - a completed task records who closed it, its verification state, and what evidence justified closure
 - an operator can inspect the sequence of task lifecycle changes without inferring it from snapshots
+- an operator can ask `Canopy` directly for critical or unacknowledged queues without rebuilding those semantics in `cap`
