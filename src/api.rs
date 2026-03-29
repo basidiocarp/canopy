@@ -1,7 +1,7 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
     AgentRegistration, ApiSnapshot, AttentionLevel, ExecutionActionKind, Freshness, Handoff,
-    HandoffAttention, HandoffAttentionReason, OperatorAction, OperatorActionKind,
+    HandoffAttention, HandoffAttentionReason, HandoffType, OperatorAction, OperatorActionKind,
     OperatorActionTargetKind, SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment,
     TaskAttention, TaskAttentionReason, TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary,
     TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority, TaskRelationship,
@@ -103,6 +103,10 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &project_execution_summaries,
         &accepted_handoff_follow_through_task_ids,
     );
+    let review_with_graph_pressure_task_ids =
+        derive_review_with_graph_pressure_task_ids(&tasks, &relationship_summaries);
+    let review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids(&tasks, &handoffs, now);
     let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
         &tasks,
         &project_execution_summaries,
@@ -123,6 +127,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &agent_attention,
         &relationship_summaries,
         &assigned_awaiting_claim_task_ids,
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -150,6 +156,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &open_handoff_task_ids,
             &pending_handoff_acceptance_task_ids,
             &assigned_awaiting_claim_task_ids,
+            &review_with_graph_pressure_task_ids,
+            &review_handoff_follow_through_task_ids,
             &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
@@ -336,12 +344,20 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
             .ok_or(StoreError::Validation(
                 "task relationship summary could not be derived".to_string(),
             ))?;
+    let review_with_graph_pressure_task_ids = derive_review_with_graph_pressure_task_ids(
+        std::slice::from_ref(&task),
+        std::slice::from_ref(&relationship_summary),
+    );
+    let review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
     let attention = derive_task_attention(
         std::slice::from_ref(&task),
         &handoffs,
         &agent_attention,
         std::slice::from_ref(&relationship_summary),
         &assigned_awaiting_claim_task_ids,
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -466,6 +482,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.sort = TaskSort::Verification;
             options.acknowledged = Some(false);
         }
+        SnapshotPreset::ReviewWithGraphPressure => {
+            options.view = TaskView::ReviewWithGraphPressure;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::ReviewHandoffFollowThrough => {
+            options.view = TaskView::ReviewHandoffFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::Unclaimed => {
             options.view = TaskView::Unclaimed;
             options.sort = TaskSort::UpdatedAt;
@@ -533,6 +557,8 @@ fn matches_view(
     open_handoff_task_ids: &HashSet<String>,
     pending_handoff_acceptance_task_ids: &HashSet<String>,
     assigned_awaiting_claim_task_ids: &HashSet<String>,
+    review_with_graph_pressure_task_ids: &HashSet<String>,
+    review_handoff_follow_through_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -574,6 +600,12 @@ fn matches_view(
         TaskView::BlockedByDependencies => {
             task.status == TaskStatus::Blocked
                 && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
+        }
+        TaskView::ReviewWithGraphPressure => {
+            review_with_graph_pressure_task_ids.contains(&task.task_id)
+        }
+        TaskView::ReviewHandoffFollowThrough => {
+            review_handoff_follow_through_task_ids.contains(&task.task_id)
         }
         TaskView::Review => {
             task.status == TaskStatus::ReviewRequired
@@ -1998,6 +2030,64 @@ fn derive_assigned_awaiting_claim_task_ids(
         .collect()
 }
 
+fn derive_review_with_graph_pressure_task_ids(
+    tasks: &[Task],
+    relationship_summaries: &[TaskRelationshipSummary],
+) -> HashSet<String> {
+    let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+
+    tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::ReviewRequired)
+        .filter(|task| {
+            relationship_summary_by_task_id
+                .get(task.task_id.as_str())
+                .is_some_and(|summary| {
+                    summary.active_blocker_count > 0
+                        || summary.stale_blocker_count > 0
+                        || summary.open_follow_up_child_count > 0
+                })
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
+fn review_handoff_requires_follow_through(handoff: &Handoff, now: OffsetDateTime) -> bool {
+    matches!(
+        handoff.handoff_type,
+        HandoffType::RequestReview | HandoffType::RequestVerification
+    ) && match handoff.status {
+        crate::models::HandoffStatus::Open => !handoff_has_expired(handoff, now),
+        crate::models::HandoffStatus::Accepted => true,
+        crate::models::HandoffStatus::Rejected
+        | crate::models::HandoffStatus::Expired
+        | crate::models::HandoffStatus::Cancelled
+        | crate::models::HandoffStatus::Completed => false,
+    }
+}
+
+fn derive_review_handoff_follow_through_task_ids(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+) -> HashSet<String> {
+    let handoff_task_ids: HashSet<_> = handoffs
+        .iter()
+        .filter(|handoff| review_handoff_requires_follow_through(handoff, now))
+        .map(|handoff| handoff.task_id.as_str())
+        .collect();
+
+    tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::ReviewRequired)
+        .filter(|task| handoff_task_ids.contains(task.task_id.as_str()))
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -2099,6 +2189,8 @@ fn derive_task_attention(
     agent_attention: &[AgentAttention],
     relationship_summaries: &[TaskRelationshipSummary],
     assigned_awaiting_claim_task_ids: &HashSet<String>,
+    review_with_graph_pressure_task_ids: &HashSet<String>,
+    review_handoff_follow_through_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -2163,6 +2255,12 @@ fn derive_task_attention(
             }
             if task.status == TaskStatus::ReviewRequired {
                 reasons.push(TaskAttentionReason::ReviewRequired);
+            }
+            if review_with_graph_pressure_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ReviewWithGraphPressure);
+            }
+            if review_handoff_follow_through_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ReviewHandoffFollowThrough);
             }
             if task.verification_state == VerificationState::Failed {
                 reasons.push(TaskAttentionReason::VerificationFailed);

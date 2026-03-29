@@ -281,6 +281,8 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .collect::<Vec<_>>(),
         vec![
             "review_required",
+            "review_with_graph_pressure",
+            "review_handoff_follow_through",
             "has_open_follow_ups",
             "awaiting_handoff_acceptance",
             "unacknowledged",
@@ -1560,6 +1562,384 @@ fn api_snapshot_updated_at_sort_handles_mixed_timestamp_formats() {
         .map(|task| task["title"].as_str().expect("title"))
         .collect();
     assert_eq!(titles, vec!["Newer task", "Older task"]);
+}
+
+#[test]
+fn api_snapshot_review_with_graph_pressure_view_tracks_review_tasks_with_open_relationship_pressure()
+ {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "agent-a",
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let review_task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Review pressure task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_task: Value = serde_json::from_slice(&review_task_output).expect("parse task");
+    let review_task_id = review_task["task_id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "assign",
+            "--task-id",
+            &review_task_id,
+            "--assigned-to",
+            "agent-a",
+            "--assigned-by",
+            "operator",
+            "--reason",
+            "review owner",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &review_task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &review_task_id,
+            "--action",
+            "create_follow_up_task",
+            "--changed-by",
+            "operator",
+            "--follow-up-title",
+            "Follow-up pressure child",
+        ])
+        .assert()
+        .success();
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "review_with_graph_pressure",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let task_ids: Vec<_> = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(task_ids, vec![review_task_id.as_str()]);
+    assert!(
+        snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|reason| reason == "review_with_graph_pressure")
+    );
+    assert_eq!(
+        snapshot["relationship_summaries"][0]["open_follow_up_child_count"],
+        1
+    );
+
+    let default_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let default_snapshot: Value =
+        serde_json::from_slice(&default_snapshot_output).expect("parse default snapshot");
+    assert!(
+        default_snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .iter()
+            .any(|attention| {
+                attention["task_id"] == review_task_id
+                    && attention["reasons"]
+                        .as_array()
+                        .expect("reasons")
+                        .iter()
+                        .any(|reason| reason == "review_with_graph_pressure")
+            })
+    );
+}
+
+#[test]
+fn api_snapshot_review_handoff_follow_through_tracks_open_and_accepted_review_handoffs() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for agent_id in ["agent-a", "agent-b"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                "codex-local",
+                "--host-type",
+                "codex",
+                "--host-instance",
+                "local",
+                "--model",
+                "gpt-5.4",
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let review_task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Review handoff task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_task: Value = serde_json::from_slice(&review_task_output).expect("parse task");
+    let review_task_id = review_task["task_id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &review_task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
+    let handoff_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &review_task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            "agent-b",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "review this task before closeout",
+            "--expires-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let handoff: Value = serde_json::from_slice(&handoff_output).expect("parse handoff");
+    let handoff_id = handoff["handoff_id"]
+        .as_str()
+        .expect("handoff id")
+        .to_string();
+
+    let open_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "review_handoff_follow_through",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let open_snapshot: Value =
+        serde_json::from_slice(&open_snapshot_output).expect("parse open snapshot");
+    let open_task_ids: Vec<_> = open_snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(open_task_ids, vec![review_task_id.as_str()]);
+    assert!(
+        open_snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|reason| reason == "review_handoff_follow_through")
+    );
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "resolve",
+            "--handoff-id",
+            &handoff_id,
+            "--status",
+            "accepted",
+            "--resolved-by",
+            "agent-b",
+            "--acting-agent-id",
+            "agent-b",
+        ])
+        .assert()
+        .success();
+
+    let accepted_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "review_handoff_follow_through",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let accepted_snapshot: Value =
+        serde_json::from_slice(&accepted_snapshot_output).expect("parse accepted snapshot");
+    let accepted_task_ids: Vec<_> = accepted_snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(accepted_task_ids, vec![review_task_id.as_str()]);
+    assert!(
+        accepted_snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|reason| reason == "review_handoff_follow_through")
+    );
 }
 
 #[test]
