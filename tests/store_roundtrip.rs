@@ -1,8 +1,10 @@
 use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, TaskEventType, TaskStatus, VerificationState,
+    HandoffType, OperatorActionKind, TaskEventType, TaskStatus, VerificationState,
 };
-use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store, TaskStatusUpdate};
+use canopy::store::{
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskStatusUpdate,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -361,5 +363,233 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         task_heartbeats
             .iter()
             .any(|heartbeat| heartbeat.agent_id == agent.agent_id)
+    );
+}
+
+#[test]
+fn handoff_operator_actions_cover_resolution_paths() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+        ("codex-2", "codex-remote", "codex", "remote", "gpt-5.4-mini"),
+    ] {
+        store
+            .register_agent(&AgentRegistration {
+                agent_id: agent_id.to_string(),
+                host_id: host_id.to_string(),
+                host_type: host_type.to_string(),
+                host_instance: host_instance.to_string(),
+                model: model.to_string(),
+                project_root: "/tmp/project".to_string(),
+                worktree_id: format!("wt-{agent_id}"),
+                status: AgentStatus::Idle,
+                current_task_id: None,
+                heartbeat_at: None,
+            })
+            .expect("register agent");
+    }
+
+    let transfer_task = store
+        .create_task("Transfer owner", None, "operator", "/tmp/project")
+        .expect("create transfer task");
+    store
+        .assign_task(&transfer_task.task_id, "codex-1", "operator", None)
+        .expect("assign transfer task");
+    let transfer_handoff = store
+        .create_handoff(
+            &transfer_task.task_id,
+            "codex-1",
+            "claude-1",
+            HandoffType::TransferOwnership,
+            "pass task to reviewer",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create transfer handoff");
+
+    let accepted = store
+        .apply_handoff_operator_action(
+            &transfer_handoff.handoff_id,
+            OperatorActionKind::AcceptHandoff,
+            "operator",
+            HandoffOperatorActionInput::default(),
+        )
+        .expect("accept transfer handoff");
+    assert_eq!(accepted.status, HandoffStatus::Accepted);
+    assert_eq!(
+        store
+            .get_task(&transfer_task.task_id)
+            .expect("reload transfer task")
+            .owner_agent_id
+            .as_deref(),
+        Some("claude-1")
+    );
+
+    let rejected_task = store
+        .create_task("Reject help", None, "operator", "/tmp/project")
+        .expect("create rejected task");
+    let rejected_handoff = store
+        .create_handoff(
+            &rejected_task.task_id,
+            "codex-1",
+            "claude-1",
+            HandoffType::RequestHelp,
+            "cannot pick this up",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create rejected handoff");
+    assert_eq!(
+        store
+            .apply_handoff_operator_action(
+                &rejected_handoff.handoff_id,
+                OperatorActionKind::RejectHandoff,
+                "operator",
+                HandoffOperatorActionInput::default(),
+            )
+            .expect("reject handoff")
+            .status,
+        HandoffStatus::Rejected
+    );
+    let rejected_task_after = store
+        .get_task(&rejected_task.task_id)
+        .expect("reload rejected task");
+    assert_eq!(rejected_task_after.status, TaskStatus::Open);
+    assert!(rejected_task_after.owner_agent_id.is_none());
+
+    let cancelled_task = store
+        .create_task("Cancel request", None, "operator", "/tmp/project")
+        .expect("create cancelled task");
+    let cancelled_handoff = store
+        .create_handoff(
+            &cancelled_task.task_id,
+            "codex-1",
+            "claude-1",
+            HandoffType::RequestReview,
+            "review no longer needed",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create cancelled handoff");
+    assert_eq!(
+        store
+            .apply_handoff_operator_action(
+                &cancelled_handoff.handoff_id,
+                OperatorActionKind::CancelHandoff,
+                "operator",
+                HandoffOperatorActionInput::default(),
+            )
+            .expect("cancel handoff")
+            .status,
+        HandoffStatus::Cancelled
+    );
+    let cancelled_task_after = store
+        .get_task(&cancelled_task.task_id)
+        .expect("reload cancelled task");
+    assert_eq!(cancelled_task_after.status, TaskStatus::Open);
+    assert!(cancelled_task_after.owner_agent_id.is_none());
+
+    let completed_task = store
+        .create_task("Complete review", None, "operator", "/tmp/project")
+        .expect("create completed task");
+    let completed_handoff = store
+        .create_handoff(
+            &completed_task.task_id,
+            "codex-2",
+            "claude-1",
+            HandoffType::RequestReview,
+            "review finished externally",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create completed handoff");
+    assert_eq!(
+        store
+            .apply_handoff_operator_action(
+                &completed_handoff.handoff_id,
+                OperatorActionKind::CompleteHandoff,
+                "operator",
+                HandoffOperatorActionInput::default(),
+            )
+            .expect("complete handoff")
+            .status,
+        HandoffStatus::Completed
+    );
+    let completed_task_after = store
+        .get_task(&completed_task.task_id)
+        .expect("reload completed task");
+    assert_eq!(completed_task_after.status, TaskStatus::Open);
+    assert!(completed_task_after.owner_agent_id.is_none());
+
+    let expired_task = store
+        .create_task("Expire review", None, "operator", "/tmp/project")
+        .expect("create expired task");
+    let expired_handoff = store
+        .create_handoff(
+            &expired_task.task_id,
+            "codex-2",
+            "claude-1",
+            HandoffType::RequestReview,
+            "review window elapsed",
+            None,
+            HandoffTiming {
+                expires_at: Some("2020-01-01T00:00:00Z"),
+                ..HandoffTiming::default()
+            },
+        )
+        .expect("create expired handoff");
+    assert_eq!(
+        store
+            .apply_handoff_operator_action(
+                &expired_handoff.handoff_id,
+                OperatorActionKind::ExpireHandoff,
+                "operator",
+                HandoffOperatorActionInput::default(),
+            )
+            .expect("expire handoff")
+            .status,
+        HandoffStatus::Expired
+    );
+    let expired_handoff_for_follow_up = store
+        .create_handoff(
+            &expired_task.task_id,
+            "codex-2",
+            "claude-1",
+            HandoffType::RequestHelp,
+            "stale follow-up should fail",
+            None,
+            HandoffTiming {
+                expires_at: Some("2020-01-01T00:00:00Z"),
+                ..HandoffTiming::default()
+            },
+        )
+        .expect("create expired handoff for follow-up");
+    assert!(
+        store
+            .apply_handoff_operator_action(
+                &expired_handoff_for_follow_up.handoff_id,
+                OperatorActionKind::FollowUpHandoff,
+                "operator",
+                HandoffOperatorActionInput::default(),
+            )
+            .is_err()
+    );
+
+    let history = store
+        .list_task_events(&completed_task.task_id)
+        .expect("list task history");
+    assert!(
+        history.iter().any(|event| {
+            event.event_type == TaskEventType::HandoffUpdated
+                && event
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains("status:open->completed"))
+        }),
+        "expected handoff completion to be recorded in task history"
     );
 }

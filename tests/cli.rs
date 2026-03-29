@@ -496,7 +496,9 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"acknowledged_by\": \"operator\""));
+        .stdout(predicate::str::contains(
+            "\"acknowledged_by\": \"operator\"",
+        ));
 
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -608,7 +610,9 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"status\": \"completed\""))
-        .stdout(predicate::str::contains("\"verification_state\": \"passed\""));
+        .stdout(predicate::str::contains(
+            "\"verification_state\": \"passed\"",
+        ));
 
     let handoff_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")

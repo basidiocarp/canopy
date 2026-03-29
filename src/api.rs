@@ -233,12 +233,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         &handoff_attention,
     );
-    let allowed_actions = derive_allowed_actions(
-        &task,
-        &attention,
-        &handoffs,
-        &handoff_attention,
-    );
+    let allowed_actions =
+        derive_allowed_actions(&task, &attention, &handoffs, &handoff_attention, now);
 
     Ok(TaskDetail {
         attention,
@@ -736,12 +732,18 @@ fn derive_allowed_actions(
     attention: &TaskAttention,
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
+    now: OffsetDateTime,
 ) -> Vec<OperatorAction> {
     let mut actions = derive_allowed_task_actions(task, attention);
-    actions.extend(derive_allowed_handoff_actions(handoffs, handoff_attention));
+    actions.extend(derive_allowed_handoff_actions(
+        handoffs,
+        handoff_attention,
+        now,
+    ));
     actions
 }
 
+#[allow(clippy::too_many_lines)]
 fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<OperatorAction> {
     let task_level = if attention.level == AttentionLevel::Normal {
         AttentionLevel::NeedsAttention
@@ -765,7 +767,11 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
                 OperatorActionKind::AcknowledgeTask
             },
             task_level,
-            if attention.acknowledged { "unacknowledge" } else { "acknowledge" },
+            if attention.acknowledged {
+                "unacknowledge"
+            } else {
+                "acknowledge"
+            },
             if attention.acknowledged {
                 format!("Unacknowledge {}", task.title)
             } else {
@@ -813,7 +819,11 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
                 OperatorActionKind::BlockTask
             },
             task_level,
-            if task.status == TaskStatus::Blocked { "unblock" } else { "block" },
+            if task.status == TaskStatus::Blocked {
+                "unblock"
+            } else {
+                "block"
+            },
             if task.status == TaskStatus::Blocked {
                 format!("Unblock {}", task.title)
             } else {
@@ -842,9 +852,11 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
     actions
 }
 
+#[allow(clippy::too_many_lines)]
 fn derive_allowed_handoff_actions(
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
+    now: OffsetDateTime,
 ) -> Vec<OperatorAction> {
     let handoff_attention_by_id: HashMap<_, _> = handoff_attention
         .iter()
@@ -859,6 +871,75 @@ fn derive_allowed_handoff_actions(
         let level = handoff_attention_by_id
             .get(handoff.handoff_id.as_str())
             .map_or(AttentionLevel::NeedsAttention, |item| item.level);
+        if handoff_has_expired(handoff, now) {
+            actions.push(OperatorAction {
+                action_id: format!("handoff:{}:expire", handoff.handoff_id),
+                kind: OperatorActionKind::ExpireHandoff,
+                target_kind: OperatorActionTargetKind::Handoff,
+                level,
+                task_id: Some(handoff.task_id.clone()),
+                handoff_id: Some(handoff.handoff_id.clone()),
+                agent_id: Some(handoff.to_agent_id.clone()),
+                title: format!("Expire {}", handoff.handoff_id),
+                summary: "Resolve the open handoff as expired.".to_string(),
+                due_at: handoff.due_at.clone(),
+                expires_at: handoff.expires_at.clone(),
+            });
+            continue;
+        }
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:accept", handoff.handoff_id),
+            kind: OperatorActionKind::AcceptHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Accept {}", handoff.handoff_id),
+            summary: "Accept the open handoff and record ownership or review uptake.".to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:reject", handoff.handoff_id),
+            kind: OperatorActionKind::RejectHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Reject {}", handoff.handoff_id),
+            summary: "Reject the open handoff without completing the requested action.".to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:cancel", handoff.handoff_id),
+            kind: OperatorActionKind::CancelHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Cancel {}", handoff.handoff_id),
+            summary: "Cancel the open handoff when the request is no longer needed.".to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:complete", handoff.handoff_id),
+            kind: OperatorActionKind::CompleteHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Complete {}", handoff.handoff_id),
+            summary: "Mark the open handoff as completed once the requested work lands."
+                .to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
         actions.push(OperatorAction {
             action_id: format!("handoff:{}:follow_up", handoff.handoff_id),
             kind: OperatorActionKind::FollowUpHandoff,
@@ -911,6 +992,14 @@ fn make_task_allowed_action(
         due_at: None,
         expires_at: None,
     }
+}
+
+fn handoff_has_expired(handoff: &Handoff, now: OffsetDateTime) -> bool {
+    handoff
+        .expires_at
+        .as_deref()
+        .and_then(parse_timestamp)
+        .is_some_and(|expires_at| expires_at <= now)
 }
 
 fn derive_agent_attention(

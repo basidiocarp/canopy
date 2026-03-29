@@ -323,18 +323,273 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     let allowed_actions = detail["allowed_actions"]
         .as_array()
         .expect("allowed actions");
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "acknowledge_task"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "verify_task"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "reassign_task"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_priority"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_severity"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "update_task_note"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "block_task"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "follow_up_handoff"));
-    assert!(allowed_actions.iter().any(|action| action["kind"] == "expire_handoff"));
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "acknowledge_task")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "verify_task")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "reassign_task")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "set_task_priority")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "set_task_severity")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "update_task_note")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "block_task")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "follow_up_handoff")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "expire_handoff")
+    );
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");
     assert!(detail["evidence"][0]["related_memory_query"].is_null());
+}
+
+#[test]
+fn api_task_detail_exposes_handoff_resolution_actions_for_open_handoffs() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Resolve open handoff",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &task_id,
+            "--from-agent-id",
+            "codex-1",
+            "--to-agent-id",
+            "claude-1",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "review this before close",
+        ])
+        .assert()
+        .success();
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse detail");
+    let kinds = detail["allowed_actions"]
+        .as_array()
+        .expect("allowed actions")
+        .iter()
+        .filter_map(|action| {
+            (action["target_kind"] == "handoff").then(|| action["kind"].as_str().expect("kind"))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(kinds.contains(&"accept_handoff"));
+    assert!(kinds.contains(&"reject_handoff"));
+    assert!(kinds.contains(&"cancel_handoff"));
+    assert!(kinds.contains(&"complete_handoff"));
+    assert!(kinds.contains(&"follow_up_handoff"));
+    assert!(kinds.contains(&"expire_handoff"));
+}
+
+#[test]
+fn api_task_detail_limits_expired_open_handoffs_to_expire_action() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Expire open handoff",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &task_id,
+            "--from-agent-id",
+            "codex-1",
+            "--to-agent-id",
+            "claude-1",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "review this before close",
+            "--expires-at",
+            "2020-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse detail");
+    let kinds = detail["allowed_actions"]
+        .as_array()
+        .expect("allowed actions")
+        .iter()
+        .filter_map(|action| {
+            (action["target_kind"] == "handoff").then(|| action["kind"].as_str().expect("kind"))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(kinds, vec!["expire_handoff"]);
 }
 
 #[test]

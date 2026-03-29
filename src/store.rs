@@ -1,8 +1,8 @@
 use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
     CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType,
-    OperatorActionKind, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority,
-    TaskSeverity, TaskStatus, VerificationState,
+    OperatorActionKind, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskSeverity,
+    TaskStatus, VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -737,11 +737,14 @@ impl Store {
                 changed_by,
                 input.note,
             ),
-            OperatorActionKind::FollowUpHandoff | OperatorActionKind::ExpireHandoff => Err(
-                StoreError::Validation(
-                format!("operator action {action} is not valid for tasks"),
-                ),
-            ),
+            OperatorActionKind::AcceptHandoff
+            | OperatorActionKind::RejectHandoff
+            | OperatorActionKind::CancelHandoff
+            | OperatorActionKind::CompleteHandoff
+            | OperatorActionKind::FollowUpHandoff
+            | OperatorActionKind::ExpireHandoff => Err(StoreError::Validation(format!(
+                "operator action {action} is not valid for tasks"
+            ))),
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
@@ -920,6 +923,22 @@ impl Store {
         input: HandoffOperatorActionInput<'_>,
     ) -> StoreResult<Handoff> {
         match action {
+            OperatorActionKind::AcceptHandoff => {
+                let _ = input;
+                self.resolve_handoff(handoff_id, HandoffStatus::Accepted, changed_by)
+            }
+            OperatorActionKind::RejectHandoff => {
+                let _ = input;
+                self.resolve_handoff(handoff_id, HandoffStatus::Rejected, changed_by)
+            }
+            OperatorActionKind::CancelHandoff => {
+                let _ = input;
+                self.resolve_handoff(handoff_id, HandoffStatus::Cancelled, changed_by)
+            }
+            OperatorActionKind::CompleteHandoff => {
+                let _ = input;
+                self.resolve_handoff(handoff_id, HandoffStatus::Completed, changed_by)
+            }
             OperatorActionKind::ExpireHandoff => {
                 let _ = input;
                 self.resolve_handoff(handoff_id, HandoffStatus::Expired, changed_by)
@@ -929,6 +948,11 @@ impl Store {
                 if handoff.status != HandoffStatus::Open {
                     return Err(StoreError::Validation(
                         "only open handoffs can be followed up".to_string(),
+                    ));
+                }
+                if handoff_is_expired(&handoff)? {
+                    return Err(StoreError::Validation(
+                        "expired handoffs cannot be followed up".to_string(),
                     ));
                 }
                 conn.execute(
@@ -941,9 +965,8 @@ impl Store {
                 )?;
                 touch_task_in_connection(conn, &handoff.task_id)?;
                 let task = get_task_in_connection(conn, &handoff.task_id)?;
-                let base_note = format!(
-                    "handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true"
-                );
+                let base_note =
+                    format!("handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true");
                 let note = input.note.map_or(base_note.clone(), |extra| {
                     format!("{base_note}; note={extra}")
                 });
@@ -1828,6 +1851,10 @@ fn task_operator_triage_update(
         | OperatorActionKind::ReassignTask
         | OperatorActionKind::BlockTask
         | OperatorActionKind::UnblockTask
+        | OperatorActionKind::AcceptHandoff
+        | OperatorActionKind::RejectHandoff
+        | OperatorActionKind::CancelHandoff
+        | OperatorActionKind::CompleteHandoff
         | OperatorActionKind::FollowUpHandoff
         | OperatorActionKind::ExpireHandoff => return Ok(None),
     };
@@ -1849,8 +1876,7 @@ fn task_operator_status_update<'a>(
                 ))
             {
                 return Err(StoreError::Validation(
-                    "verify_task requires a task that is awaiting or repeating review"
-                        .to_string(),
+                    "verify_task requires a task that is awaiting or repeating review".to_string(),
                 ));
             }
             let verification_state = input.verification_state.ok_or_else(|| {
@@ -1930,6 +1956,10 @@ fn task_operator_status_update<'a>(
         | OperatorActionKind::SetTaskPriority
         | OperatorActionKind::SetTaskSeverity
         | OperatorActionKind::UpdateTaskNote
+        | OperatorActionKind::AcceptHandoff
+        | OperatorActionKind::RejectHandoff
+        | OperatorActionKind::CancelHandoff
+        | OperatorActionKind::CompleteHandoff
         | OperatorActionKind::FollowUpHandoff
         | OperatorActionKind::ExpireHandoff => return Ok(None),
     };

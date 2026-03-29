@@ -275,6 +275,10 @@ pub enum OperatorActionKind {
     BlockTask,
     UnblockTask,
     UpdateTaskNote,
+    AcceptHandoff,
+    RejectHandoff,
+    CancelHandoff,
+    CompleteHandoff,
     FollowUpHandoff,
     ExpireHandoff,
 }
