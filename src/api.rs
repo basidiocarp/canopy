@@ -91,9 +91,11 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     );
     let open_handoff_task_ids: HashSet<_> = handoffs
         .iter()
-        .filter(|handoff| handoff.status.to_string() == "open")
+        .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
         .map(|handoff| handoff.task_id.clone())
         .collect();
+    let pending_handoff_acceptance_task_ids =
+        derive_pending_handoff_acceptance_task_ids(&handoffs, now);
     let task_attention_by_id: HashMap<_, _> = task_attention
         .iter()
         .map(|attention| (attention.task_id.clone(), attention.clone()))
@@ -107,6 +109,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         matches_view(
             task,
             &open_handoff_task_ids,
+            &pending_handoff_acceptance_task_ids,
             task_attention_by_id.get(&task.task_id),
             relationship_summary_by_id.get(&task.task_id),
             options.view,
@@ -175,6 +178,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &tasks,
         &filtered_task_attention,
         &filtered_relationship_summaries,
+        &execution_summaries,
         &filtered_handoffs,
         &filtered_handoff_attention,
     );
@@ -311,6 +315,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         std::slice::from_ref(&task),
         std::slice::from_ref(&attention),
         std::slice::from_ref(&relationship_summary),
+        std::slice::from_ref(&execution_summary),
         &handoffs,
         &handoff_attention,
     );
@@ -318,6 +323,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &task,
         &attention,
         &relationship_summary,
+        &execution_summary,
         &handoffs,
         &handoff_attention,
         now,
@@ -443,6 +449,7 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
 fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
+    pending_handoff_acceptance_task_ids: &HashSet<String>,
     task_attention: Option<&TaskAttention>,
     relationship_summary: Option<&TaskRelationshipSummary>,
     view: TaskView,
@@ -464,9 +471,10 @@ fn matches_view(
                     )
                 })
         }
-        TaskView::AwaitingHandoffAcceptance | TaskView::Handoffs => {
-            open_handoff_task_ids.contains(&task.task_id)
+        TaskView::AwaitingHandoffAcceptance => {
+            pending_handoff_acceptance_task_ids.contains(&task.task_id)
         }
+        TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
         TaskView::Blocked => {
             task.status == TaskStatus::Blocked
                 || task.verification_state == VerificationState::Failed
@@ -853,7 +861,7 @@ fn derive_task_execution_summaries(
                         claim_count += 1;
                         claimed_at.get_or_insert_with(|| event.created_at.clone());
                     }
-                    ExecutionActionKind::StartTask => {
+                    ExecutionActionKind::StartTask | ExecutionActionKind::ResumeTask => {
                         run_count += 1;
                         started_at = Some(event.created_at.clone());
                         active_start_at = Some(event.created_at.clone());
@@ -940,6 +948,7 @@ fn derive_operator_actions(
     tasks: &[Task],
     task_attention: &[TaskAttention],
     relationship_summaries: &[TaskRelationshipSummary],
+    execution_summaries: &[TaskExecutionSummary],
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
 ) -> Vec<OperatorAction> {
@@ -948,6 +957,10 @@ fn derive_operator_actions(
         .map(|attention| (attention.task_id.as_str(), attention))
         .collect();
     let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+    let execution_summary_by_task_id: HashMap<_, _> = execution_summaries
         .iter()
         .map(|summary| (summary.task_id.as_str(), summary))
         .collect();
@@ -963,6 +976,9 @@ fn derive_operator_actions(
             continue;
         };
         let relationship_summary = relationship_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
+        let execution_summary = execution_summary_by_task_id
             .get(task.task_id.as_str())
             .copied();
 
@@ -1056,16 +1072,38 @@ fn derive_operator_actions(
         }
 
         if task.status == TaskStatus::Assigned && task.owner_agent_id.is_some() {
+            let has_prior_execution =
+                execution_summary.is_some_and(|summary| summary.run_count > 0);
             actions.push(OperatorAction {
-                action_id: format!("task:{}:start", task.task_id),
-                kind: OperatorActionKind::StartTask,
+                action_id: format!(
+                    "task:{}:{}",
+                    task.task_id,
+                    if has_prior_execution {
+                        "resume"
+                    } else {
+                        "start"
+                    }
+                ),
+                kind: if has_prior_execution {
+                    OperatorActionKind::ResumeTask
+                } else {
+                    OperatorActionKind::StartTask
+                },
                 target_kind: OperatorActionTargetKind::Task,
                 level: task_level(attention.level),
                 task_id: Some(task.task_id.clone()),
                 handoff_id: None,
                 agent_id: task.owner_agent_id.clone(),
-                title: format!("Start {}", task.title),
-                summary: "Move this claimed task into active execution.".to_string(),
+                title: if has_prior_execution {
+                    format!("Resume {}", task.title)
+                } else {
+                    format!("Start {}", task.title)
+                },
+                summary: if has_prior_execution {
+                    "Resume execution on this previously started task.".to_string()
+                } else {
+                    "Move this claimed task into active execution.".to_string()
+                },
                 due_at: None,
                 expires_at: None,
             });
@@ -1253,11 +1291,13 @@ fn derive_allowed_actions(
     task: &Task,
     attention: &TaskAttention,
     relationship_summary: &TaskRelationshipSummary,
+    execution_summary: &TaskExecutionSummary,
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
     now: OffsetDateTime,
 ) -> Vec<OperatorAction> {
-    let mut actions = derive_allowed_task_actions(task, attention, relationship_summary);
+    let mut actions =
+        derive_allowed_task_actions(task, attention, relationship_summary, execution_summary);
     actions.extend(derive_allowed_handoff_actions(
         handoffs,
         handoff_attention,
@@ -1271,6 +1311,7 @@ fn derive_allowed_task_actions(
     task: &Task,
     attention: &TaskAttention,
     relationship_summary: &TaskRelationshipSummary,
+    execution_summary: &TaskExecutionSummary,
 ) -> Vec<OperatorAction> {
     let task_level = if attention.level == AttentionLevel::Normal {
         AttentionLevel::NeedsAttention
@@ -1324,11 +1365,27 @@ fn derive_allowed_task_actions(
         ),
         make_task_allowed_action(
             task,
-            OperatorActionKind::StartTask,
+            if execution_summary.run_count > 0 {
+                OperatorActionKind::ResumeTask
+            } else {
+                OperatorActionKind::StartTask
+            },
             task_level,
-            "start",
-            format!("Start {}", task.title),
-            "Move this claimed task into active execution.",
+            if execution_summary.run_count > 0 {
+                "resume"
+            } else {
+                "start"
+            },
+            if execution_summary.run_count > 0 {
+                format!("Resume {}", task.title)
+            } else {
+                format!("Start {}", task.title)
+            },
+            if execution_summary.run_count > 0 {
+                "Resume execution on this previously started task."
+            } else {
+                "Move this claimed task into active execution."
+            },
         ),
         make_task_allowed_action(
             task,
@@ -1447,7 +1504,14 @@ fn derive_allowed_task_actions(
                 && relationship_summary.active_blocker_count == 0
         }
         OperatorActionKind::StartTask => {
-            task.status == TaskStatus::Assigned && task.owner_agent_id.is_some()
+            task.status == TaskStatus::Assigned
+                && task.owner_agent_id.is_some()
+                && execution_summary.run_count == 0
+        }
+        OperatorActionKind::ResumeTask => {
+            task.status == TaskStatus::Assigned
+                && task.owner_agent_id.is_some()
+                && execution_summary.run_count > 0
         }
         OperatorActionKind::PauseTask => {
             task.status == TaskStatus::InProgress && task.owner_agent_id.is_some()
@@ -1679,6 +1743,20 @@ fn handoff_has_expired(handoff: &Handoff, now: OffsetDateTime) -> bool {
         .is_some_and(|expires_at| expires_at <= now)
 }
 
+fn derive_pending_handoff_acceptance_task_ids(
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+) -> HashSet<String> {
+    handoffs
+        .iter()
+        .filter(|handoff| {
+            handoff.status == crate::models::HandoffStatus::Open
+                && !handoff_has_expired(handoff, now)
+        })
+        .map(|handoff| handoff.task_id.clone())
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -1788,6 +1866,8 @@ fn derive_task_attention(
         .iter()
         .map(|summary| (summary.task_id.as_str(), summary))
         .collect();
+    let pending_handoff_acceptance_task_ids =
+        derive_pending_handoff_acceptance_task_ids(handoffs, now);
     let mut handoff_freshness_by_task: HashMap<&str, Freshness> = HashMap::new();
 
     for handoff in handoffs
@@ -1843,6 +1923,9 @@ fn derive_task_attention(
             }
             if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
                 reasons.push(TaskAttentionReason::HasOpenFollowUps);
+            }
+            if pending_handoff_acceptance_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::AwaitingHandoffAcceptance);
             }
             match task.priority {
                 TaskPriority::High => reasons.push(TaskAttentionReason::HighPriority),

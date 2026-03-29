@@ -279,7 +279,12 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .iter()
             .map(|value| value.as_str().expect("reason"))
             .collect::<Vec<_>>(),
-        vec!["review_required", "has_open_follow_ups", "unacknowledged"]
+        vec![
+            "review_required",
+            "has_open_follow_ups",
+            "awaiting_handoff_acceptance",
+            "unacknowledged",
+        ]
     );
     assert_eq!(snapshot["agents"].as_array().expect("agents").len(), 2);
     assert_eq!(
@@ -1555,4 +1560,204 @@ fn api_snapshot_updated_at_sort_handles_mixed_timestamp_formats() {
         .map(|task| task["title"].as_str().expect("title"))
         .collect();
     assert_eq!(titles, vec!["Newer task", "Older task"]);
+}
+
+#[test]
+fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for agent_id in ["agent-a", "agent-b"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                agent_id,
+                "--host-type",
+                "codex",
+                "--host-instance",
+                "local",
+                "--model",
+                "gpt-5.4",
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    for title in ["Pending acceptance", "Expired handoff"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "task",
+                "create",
+                "--title",
+                title,
+                "--requested-by",
+                "operator",
+                "--project-root",
+                "/tmp/project",
+            ])
+            .assert()
+            .success();
+    }
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let pending_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Pending acceptance")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("pending task id")
+        .to_string();
+    let expired_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Expired handoff")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("expired task id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &pending_task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            "agent-b",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "awaiting target agent acceptance",
+            "--expires-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &expired_task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            "agent-b",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "expired before acceptance",
+            "--expires-at",
+            "2020-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+
+    let awaiting_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "awaiting_handoff_acceptance",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let awaiting_snapshot: Value =
+        serde_json::from_slice(&awaiting_output).expect("parse awaiting snapshot");
+    let awaiting_task_ids: Vec<_> = awaiting_snapshot["tasks"]
+        .as_array()
+        .expect("awaiting tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(awaiting_task_ids, vec![pending_task_id.as_str()]);
+    assert!(
+        awaiting_snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .iter()
+            .any(|attention| {
+                attention["task_id"] == pending_task_id
+                    && attention["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason == "awaiting_handoff_acceptance")
+                    })
+            })
+    );
+
+    let handoffs_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "handoffs",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let handoffs_snapshot: Value =
+        serde_json::from_slice(&handoffs_output).expect("parse handoff snapshot");
+    let handoff_task_ids: Vec<_> = handoffs_snapshot["tasks"]
+        .as_array()
+        .expect("handoff tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert!(handoff_task_ids.contains(&pending_task_id.as_str()));
+    assert!(handoff_task_ids.contains(&expired_task_id.as_str()));
 }

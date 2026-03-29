@@ -238,6 +238,7 @@ pub enum TaskEventType {
 pub enum ExecutionActionKind {
     ClaimTask,
     StartTask,
+    ResumeTask,
     PauseTask,
     YieldTask,
     CompleteTask,
@@ -272,6 +273,7 @@ pub enum TaskAttentionReason {
     VerificationFailed,
     ReviewRequired,
     HasOpenFollowUps,
+    AwaitingHandoffAcceptance,
     Unacknowledged,
     HighPriority,
     CriticalPriority,
@@ -307,6 +309,7 @@ pub enum OperatorActionKind {
     ReassignTask,
     ClaimTask,
     StartTask,
+    ResumeTask,
     PauseTask,
     YieldTask,
     CompleteTask,

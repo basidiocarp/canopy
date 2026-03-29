@@ -374,6 +374,98 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
 }
 
 #[test]
+fn store_requires_prior_execution_before_resume_task() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "codex-1".to_string(),
+        host_id: "codex-local".to_string(),
+        host_type: "codex".to_string(),
+        host_instance: "local".to_string(),
+        model: "gpt-5.4".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: "wt-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        heartbeat_at: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    let task = store
+        .create_task("Resume execution", None, "operator", "/tmp/project")
+        .expect("create task");
+    let assigned = store
+        .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+        .expect("assign task");
+    assert_eq!(assigned.status, TaskStatus::Assigned);
+
+    assert!(
+        store
+            .apply_task_operator_action(
+                &task.task_id,
+                OperatorActionKind::ResumeTask,
+                "operator",
+                TaskOperatorActionInput {
+                    acting_agent_id: Some(agent.agent_id.as_str()),
+                    ..TaskOperatorActionInput::default()
+                },
+            )
+            .is_err()
+    );
+
+    let in_progress = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::StartTask,
+            "operator",
+            TaskOperatorActionInput {
+                acting_agent_id: Some(agent.agent_id.as_str()),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("start task");
+    assert_eq!(in_progress.status, TaskStatus::InProgress);
+
+    let paused = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::PauseTask,
+            "operator",
+            TaskOperatorActionInput {
+                acting_agent_id: Some(agent.agent_id.as_str()),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("pause task");
+    assert_eq!(paused.status, TaskStatus::Assigned);
+
+    let resumed = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::ResumeTask,
+            "operator",
+            TaskOperatorActionInput {
+                acting_agent_id: Some(agent.agent_id.as_str()),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("resume task");
+    assert_eq!(resumed.status, TaskStatus::InProgress);
+
+    let actions: Vec<_> = store
+        .list_task_events(&task.task_id)
+        .expect("list task events")
+        .into_iter()
+        .filter_map(|event| event.execution_action)
+        .collect();
+    assert!(actions.contains(&canopy::models::ExecutionActionKind::StartTask));
+    assert!(actions.contains(&canopy::models::ExecutionActionKind::PauseTask));
+    assert!(actions.contains(&canopy::models::ExecutionActionKind::ResumeTask));
+}
+
+#[test]
 fn task_creation_actions_create_artifacts_and_record_history() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");

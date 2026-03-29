@@ -757,6 +757,7 @@ impl Store {
             | OperatorActionKind::VerifyTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
+            | OperatorActionKind::ResumeTask
             | OperatorActionKind::PauseTask
             | OperatorActionKind::YieldTask
             | OperatorActionKind::CompleteTask
@@ -1028,6 +1029,7 @@ impl Store {
             | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
+            | OperatorActionKind::ResumeTask
             | OperatorActionKind::PauseTask
             | OperatorActionKind::YieldTask
             | OperatorActionKind::CompleteTask
@@ -1402,6 +1404,7 @@ impl Store {
             | OperatorActionKind::VerifyTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
+            | OperatorActionKind::ResumeTask
             | OperatorActionKind::PauseTask
             | OperatorActionKind::YieldTask
             | OperatorActionKind::CompleteTask
@@ -1478,66 +1481,94 @@ impl Store {
                 )?;
                 get_task_in_connection(conn, task_id)
             })?,
-            OperatorActionKind::StartTask => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                if current_task.status != TaskStatus::Assigned {
-                    return Err(StoreError::Validation(
-                        "start_task requires an assigned task".to_string(),
-                    ));
-                }
-                if has_active_blockers_in_connection(conn, task_id)? {
-                    return Err(StoreError::Validation(
-                        "start_task requires the task to have no unresolved hard blockers"
-                            .to_string(),
-                    ));
-                }
-                let acting_agent_id =
-                    validate_execution_actor(&current_task, input.acting_agent_id, "start_task")?;
-                conn.execute(
-                    r"
+            OperatorActionKind::StartTask | OperatorActionKind::ResumeTask => {
+                self.in_transaction(|conn| {
+                    let action_name = match action {
+                        OperatorActionKind::StartTask => "start_task",
+                        OperatorActionKind::ResumeTask => "resume_task",
+                        _ => unreachable!("execution branch only handles start/resume"),
+                    };
+                    let execution_action = match action {
+                        OperatorActionKind::StartTask => ExecutionActionKind::StartTask,
+                        OperatorActionKind::ResumeTask => ExecutionActionKind::ResumeTask,
+                        _ => unreachable!("execution branch only handles start/resume"),
+                    };
+                    let requires_prior_execution = action == OperatorActionKind::ResumeTask;
+                    let current_task = get_task_in_connection(conn, task_id)?;
+                    if current_task.status != TaskStatus::Assigned {
+                        return Err(StoreError::Validation(format!(
+                            "{action_name} requires an assigned task"
+                        )));
+                    }
+                    if has_active_blockers_in_connection(conn, task_id)? {
+                        return Err(StoreError::Validation(format!(
+                            "{action_name} requires the task to have no unresolved hard blockers"
+                        )));
+                    }
+                    let has_prior_execution =
+                        task_has_prior_execution_in_connection(conn, task_id)?;
+                    if requires_prior_execution && !has_prior_execution {
+                        return Err(StoreError::Validation(
+                            "resume_task requires a previously started task".to_string(),
+                        ));
+                    }
+                    if !requires_prior_execution && has_prior_execution {
+                        return Err(StoreError::Validation(
+                            "start_task requires a task that has not started execution yet"
+                                .to_string(),
+                        ));
+                    }
+                    let acting_agent_id = validate_execution_actor(
+                        &current_task,
+                        input.acting_agent_id,
+                        action_name,
+                    )?;
+                    conn.execute(
+                        r"
                     UPDATE tasks
                     SET status = 'in_progress',
                         blocked_reason = NULL,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE task_id = ?1
                     ",
-                    [task_id],
-                )?;
-                sync_owner_for_task_status(conn, task_id, TaskStatus::InProgress)?;
-                let updated = get_task_in_connection(conn, task_id)?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::StatusChanged,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: TaskStatus::InProgress,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: None,
-                    },
-                )?;
-                let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ExecutionUpdated,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: updated.status,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: Some(ExecutionActionKind::StartTask),
-                        execution_duration_seconds: None,
-                        note: event_note.as_deref(),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
+                        [task_id],
+                    )?;
+                    sync_owner_for_task_status(conn, task_id, TaskStatus::InProgress)?;
+                    let updated = get_task_in_connection(conn, task_id)?;
+                    record_task_event_in_connection(
+                        conn,
+                        &TaskEventWrite {
+                            task_id,
+                            event_type: TaskEventType::StatusChanged,
+                            actor: acting_agent_id,
+                            from_status: Some(current_task.status),
+                            to_status: TaskStatus::InProgress,
+                            verification_state: Some(updated.verification_state),
+                            owner_agent_id: updated.owner_agent_id.as_deref(),
+                            execution_action: None,
+                            execution_duration_seconds: None,
+                            note: None,
+                        },
+                    )?;
+                    let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+                    record_task_event_in_connection(
+                        conn,
+                        &TaskEventWrite {
+                            task_id,
+                            event_type: TaskEventType::ExecutionUpdated,
+                            actor: acting_agent_id,
+                            from_status: Some(current_task.status),
+                            to_status: updated.status,
+                            verification_state: Some(updated.verification_state),
+                            owner_agent_id: updated.owner_agent_id.as_deref(),
+                            execution_action: Some(execution_action),
+                            execution_duration_seconds: None,
+                            note: event_note.as_deref(),
+                        },
+                    )?;
+                    get_task_in_connection(conn, task_id)
+                })?
+            }
             OperatorActionKind::PauseTask => self.in_transaction(|conn| {
                 let current_task = get_task_in_connection(conn, task_id)?;
                 if current_task.status != TaskStatus::InProgress {
@@ -2018,6 +2049,7 @@ impl Store {
             | OperatorActionKind::ReassignTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
+            | OperatorActionKind::ResumeTask
             | OperatorActionKind::PauseTask
             | OperatorActionKind::YieldTask
             | OperatorActionKind::CompleteTask
@@ -3145,7 +3177,7 @@ fn compute_open_execution_duration_seconds(
             continue;
         }
         match event.execution_action {
-            Some(ExecutionActionKind::StartTask) => {
+            Some(ExecutionActionKind::StartTask | ExecutionActionKind::ResumeTask) => {
                 last_start = Some(event);
             }
             Some(
@@ -3165,6 +3197,17 @@ fn compute_open_execution_duration_seconds(
     let started_at = parse_database_timestamp(&start_event.created_at)?;
     let elapsed = (now - started_at).whole_seconds();
     Ok(Some(elapsed.max(0)))
+}
+
+fn task_has_prior_execution_in_connection(conn: &Connection, task_id: &str) -> StoreResult<bool> {
+    let events = list_task_events_in_connection(conn, task_id)?;
+    Ok(events.into_iter().any(|event| {
+        event.event_type == TaskEventType::ExecutionUpdated
+            && matches!(
+                event.execution_action,
+                Some(ExecutionActionKind::StartTask | ExecutionActionKind::ResumeTask)
+            )
+    }))
 }
 
 fn release_agent_current_task_in_connection(
@@ -3426,6 +3469,7 @@ fn task_operator_triage_update<'a>(
         OperatorActionKind::VerifyTask
         | OperatorActionKind::ClaimTask
         | OperatorActionKind::StartTask
+        | OperatorActionKind::ResumeTask
         | OperatorActionKind::PauseTask
         | OperatorActionKind::YieldTask
         | OperatorActionKind::CompleteTask
@@ -3564,6 +3608,7 @@ fn task_operator_status_update<'a>(
         | OperatorActionKind::ReassignTask
         | OperatorActionKind::ClaimTask
         | OperatorActionKind::StartTask
+        | OperatorActionKind::ResumeTask
         | OperatorActionKind::PauseTask
         | OperatorActionKind::YieldTask
         | OperatorActionKind::CompleteTask
