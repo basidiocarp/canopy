@@ -110,6 +110,8 @@ pub enum HandoffCommand {
         status: HandoffStatus,
         #[arg(long)]
         resolved_by: String,
+        #[arg(long)]
+        acting_agent_id: Option<String>,
     },
     Action {
         #[arg(long)]
@@ -118,6 +120,8 @@ pub enum HandoffCommand {
         action: OperatorActionKind,
         #[arg(long)]
         changed_by: String,
+        #[arg(long)]
+        acting_agent_id: Option<String>,
         #[arg(long)]
         note: Option<String>,
     },
@@ -187,6 +191,8 @@ pub enum TaskCommand {
         action: OperatorActionKind,
         #[arg(long)]
         changed_by: String,
+        #[arg(long)]
+        acting_agent_id: Option<String>,
         #[arg(long)]
         assigned_to: Option<String>,
         #[arg(long)]

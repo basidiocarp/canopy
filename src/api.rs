@@ -1,11 +1,12 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
-    AgentRegistration, ApiSnapshot, AttentionLevel, Freshness, Handoff, HandoffAttention,
-    HandoffAttentionReason, OperatorAction, OperatorActionKind, OperatorActionTargetKind,
-    SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment, TaskAttention,
-    TaskAttentionReason, TaskDetail, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
-    TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSort,
-    TaskStatus, TaskView, VerificationState,
+    AgentRegistration, ApiSnapshot, AttentionLevel, ExecutionActionKind, Freshness, Handoff,
+    HandoffAttention, HandoffAttentionReason, OperatorAction, OperatorActionKind,
+    OperatorActionTargetKind, SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment,
+    TaskAttention, TaskAttentionReason, TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary,
+    TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority, TaskRelationship,
+    TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSort, TaskStatus, TaskView,
+    VerificationState,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
@@ -144,9 +145,15 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|assignment| task_ids.contains(&assignment.task_id))
         .collect::<Vec<_>>();
+    let filtered_task_events = store
+        .list_all_task_events()?
+        .into_iter()
+        .filter(|event| task_ids.contains(&event.task_id))
+        .collect::<Vec<_>>();
     let ownership = derive_task_ownership_summaries(&tasks, &filtered_assignments);
     let task_heartbeat_summaries =
         derive_task_heartbeat_summaries(&tasks, &heartbeats, &filtered_agent_attention);
+    let execution_summaries = derive_task_execution_summaries(&tasks, &filtered_task_events, now);
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&agents, &heartbeats, &filtered_agent_attention);
     let filtered_handoffs = handoffs
@@ -187,6 +194,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         tasks,
         task_attention: filtered_task_attention,
         task_heartbeat_summaries,
+        execution_summaries,
         ownership,
         handoffs: filtered_handoffs,
         handoff_attention: filtered_handoff_attention,
@@ -212,6 +220,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let task = store.get_task(task_id)?;
     let handoffs = store.list_handoffs(Some(task_id))?;
     let assignments = store.list_task_assignments(Some(task_id))?;
+    let events = store.list_task_events(task_id)?;
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
     let now = OffsetDateTime::now_utc();
@@ -280,6 +289,13 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
             .ok_or(StoreError::Validation(
                 "task heartbeat summary could not be derived".to_string(),
             ))?;
+    let execution_summary =
+        derive_task_execution_summaries(std::slice::from_ref(&task), &events, now)
+            .into_iter()
+            .next()
+            .ok_or(StoreError::Validation(
+                "task execution summary could not be derived".to_string(),
+            ))?;
     let related_agents = agents
         .into_iter()
         .filter(|agent| {
@@ -314,8 +330,9 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         task,
         ownership,
         heartbeat_summary,
+        execution_summary,
         assignments,
-        events: store.list_task_events(task_id)?,
+        events,
         heartbeats,
         handoffs,
         handoff_attention,
@@ -378,6 +395,22 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.sort = TaskSort::Verification;
             options.acknowledged = Some(false);
         }
+        SnapshotPreset::Unclaimed => {
+            options.view = TaskView::Unclaimed;
+            options.sort = TaskSort::UpdatedAt;
+        }
+        SnapshotPreset::InProgress => {
+            options.view = TaskView::InProgress;
+            options.sort = TaskSort::UpdatedAt;
+        }
+        SnapshotPreset::Stalled => {
+            options.view = TaskView::Stalled;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::AwaitingHandoffAcceptance => {
+            options.view = TaskView::AwaitingHandoffAcceptance;
+            options.sort = TaskSort::UpdatedAt;
+        }
         SnapshotPreset::Blocked => {
             options.view = TaskView::Blocked;
             options.sort = TaskSort::Attention;
@@ -420,6 +453,20 @@ fn matches_view(
             task.status,
             TaskStatus::Open | TaskStatus::Assigned | TaskStatus::InProgress
         ),
+        TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
+        TaskView::InProgress => task.status == TaskStatus::InProgress,
+        TaskView::Stalled => {
+            matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+                && task_attention.is_some_and(|attention| {
+                    matches!(
+                        attention.owner_heartbeat_freshness,
+                        Some(Freshness::Stale | Freshness::Missing)
+                    )
+                })
+        }
+        TaskView::AwaitingHandoffAcceptance | TaskView::Handoffs => {
+            open_handoff_task_ids.contains(&task.task_id)
+        }
         TaskView::Blocked => {
             task.status == TaskStatus::Blocked
                 || task.verification_state == VerificationState::Failed
@@ -432,7 +479,6 @@ fn matches_view(
             task.status == TaskStatus::ReviewRequired
                 || task.verification_state == VerificationState::Pending
         }
-        TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
         TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
             summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
         }),
@@ -642,6 +688,14 @@ fn attention_level_rank(level: AttentionLevel) -> u8 {
     }
 }
 
+fn task_level(level: AttentionLevel) -> AttentionLevel {
+    if level == AttentionLevel::Normal {
+        AttentionLevel::NeedsAttention
+    } else {
+        level
+    }
+}
+
 fn attention_sort_key(attention: Option<&TaskAttention>) -> (u8, u8, u8, u8) {
     let Some(attention) = attention else {
         return (2, 4, 1, 1);
@@ -747,6 +801,103 @@ fn derive_task_heartbeat_summaries(
                 stale_agents,
                 missing_agents,
                 last_heartbeat_at: latest_heartbeat_timestamp(&related_heartbeats),
+            }
+        })
+        .collect()
+}
+
+fn derive_task_execution_summaries(
+    tasks: &[Task],
+    events: &[TaskEvent],
+    now: OffsetDateTime,
+) -> Vec<TaskExecutionSummary> {
+    let mut events_by_task: HashMap<&str, Vec<&TaskEvent>> = HashMap::new();
+    for event in events {
+        events_by_task
+            .entry(event.task_id.as_str())
+            .or_default()
+            .push(event);
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            let history = events_by_task
+                .get(task.task_id.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            let mut claim_count = 0;
+            let mut run_count = 0;
+            let mut pause_count = 0;
+            let mut yield_count = 0;
+            let mut completion_count = 0;
+            let mut claimed_at = None;
+            let mut started_at = None;
+            let mut last_execution_at = None;
+            let mut last_execution_action = None;
+            let mut last_execution_agent_id = None;
+            let mut total_execution_seconds = 0_i64;
+            let mut active_start_at = None;
+
+            for event in history
+                .iter()
+                .filter(|event| event.event_type == TaskEventType::ExecutionUpdated)
+            {
+                let Some(action) = event.execution_action else {
+                    continue;
+                };
+                last_execution_at = Some(event.created_at.clone());
+                last_execution_action = Some(action);
+                last_execution_agent_id = Some(event.actor.clone());
+                match action {
+                    ExecutionActionKind::ClaimTask => {
+                        claim_count += 1;
+                        claimed_at.get_or_insert_with(|| event.created_at.clone());
+                    }
+                    ExecutionActionKind::StartTask => {
+                        run_count += 1;
+                        started_at = Some(event.created_at.clone());
+                        active_start_at = Some(event.created_at.clone());
+                    }
+                    ExecutionActionKind::PauseTask => {
+                        pause_count += 1;
+                        total_execution_seconds += event.execution_duration_seconds.unwrap_or(0);
+                        active_start_at = None;
+                    }
+                    ExecutionActionKind::YieldTask => {
+                        yield_count += 1;
+                        total_execution_seconds += event.execution_duration_seconds.unwrap_or(0);
+                        active_start_at = None;
+                    }
+                    ExecutionActionKind::CompleteTask => {
+                        completion_count += 1;
+                        total_execution_seconds += event.execution_duration_seconds.unwrap_or(0);
+                        active_start_at = None;
+                    }
+                }
+            }
+
+            let active_execution_seconds = if task.status == TaskStatus::InProgress {
+                active_start_at.as_deref().and_then(|raw| {
+                    parse_timestamp(raw).map(|started_at| (now - started_at).whole_seconds().max(0))
+                })
+            } else {
+                None
+            };
+
+            TaskExecutionSummary {
+                task_id: task.task_id.clone(),
+                claim_count,
+                run_count,
+                pause_count,
+                yield_count,
+                completion_count,
+                claimed_at,
+                started_at,
+                last_execution_at,
+                last_execution_action,
+                last_execution_agent_id,
+                total_execution_seconds,
+                active_execution_seconds,
             }
         })
         .collect()
@@ -880,6 +1031,94 @@ fn derive_operator_actions(
                 title: format!("Reassign {}", task.title),
                 summary: "Owner state suggests the task may need reassignment or escalation."
                     .to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::Open
+            && task.owner_agent_id.is_none()
+            && relationship_summary.is_none_or(|summary| summary.active_blocker_count == 0)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:claim", task.task_id),
+                kind: OperatorActionKind::ClaimTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: None,
+                title: format!("Claim {}", task.title),
+                summary: "Claim this unowned task for agent execution.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::Assigned && task.owner_agent_id.is_some() {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:start", task.task_id),
+                kind: OperatorActionKind::StartTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Start {}", task.title),
+                summary: "Move this claimed task into active execution.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+            && task.owner_agent_id.is_some()
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:yield", task.task_id),
+                kind: OperatorActionKind::YieldTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Yield {}", task.title),
+                summary: "Release this task back to the unclaimed queue.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::InProgress && task.owner_agent_id.is_some() {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:pause", task.task_id),
+                kind: OperatorActionKind::PauseTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Pause {}", task.title),
+                summary: "Pause active execution without yielding ownership.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+            && task.owner_agent_id.is_some()
+            && task.status != TaskStatus::Blocked
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:complete", task.task_id),
+                kind: OperatorActionKind::CompleteTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Complete {}", task.title),
+                summary: "Mark execution complete and move the task to review.".to_string(),
                 due_at: None,
                 expires_at: None,
             });
@@ -1077,6 +1316,46 @@ fn derive_allowed_task_actions(
         ),
         make_task_allowed_action(
             task,
+            OperatorActionKind::ClaimTask,
+            task_level,
+            "claim",
+            format!("Claim {}", task.title),
+            "Claim this unowned task for agent execution.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::StartTask,
+            task_level,
+            "start",
+            format!("Start {}", task.title),
+            "Move this claimed task into active execution.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::PauseTask,
+            task_level,
+            "pause",
+            format!("Pause {}", task.title),
+            "Pause active execution while retaining ownership.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::YieldTask,
+            task_level,
+            "yield",
+            format!("Yield {}", task.title),
+            "Release this task back to the unclaimed queue.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::CompleteTask,
+            task_level,
+            "complete",
+            format!("Complete {}", task.title),
+            "Mark execution complete and move this task to review.",
+        ),
+        make_task_allowed_action(
+            task,
             OperatorActionKind::SetTaskPriority,
             task_level,
             "set_priority",
@@ -1160,6 +1439,30 @@ fn derive_allowed_task_actions(
             "Update task lifecycle state for operator triage.",
         ),
     ];
+
+    actions.retain(|action| match action.kind {
+        OperatorActionKind::ClaimTask => {
+            task.status == TaskStatus::Open
+                && task.owner_agent_id.is_none()
+                && relationship_summary.active_blocker_count == 0
+        }
+        OperatorActionKind::StartTask => {
+            task.status == TaskStatus::Assigned && task.owner_agent_id.is_some()
+        }
+        OperatorActionKind::PauseTask => {
+            task.status == TaskStatus::InProgress && task.owner_agent_id.is_some()
+        }
+        OperatorActionKind::YieldTask => {
+            matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+                && task.owner_agent_id.is_some()
+        }
+        OperatorActionKind::CompleteTask => {
+            matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+                && task.owner_agent_id.is_some()
+                && task.status != TaskStatus::Blocked
+        }
+        _ => true,
+    });
 
     if task.status == TaskStatus::ReviewRequired
         || matches!(

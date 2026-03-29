@@ -167,7 +167,12 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     assert!(handoff.resolved_at.is_none());
 
     let resolved = store
-        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Accepted, "claude-1")
+        .resolve_handoff_with_actor(
+            &handoff.handoff_id,
+            HandoffStatus::Accepted,
+            "claude-1",
+            Some("claude-1"),
+        )
         .expect("resolve handoff");
     assert_eq!(resolved.status, HandoffStatus::Accepted);
     assert!(resolved.resolved_at.is_some());
@@ -869,7 +874,10 @@ fn handoff_operator_actions_cover_resolution_paths() {
             &transfer_handoff.handoff_id,
             OperatorActionKind::AcceptHandoff,
             "operator",
-            HandoffOperatorActionInput::default(),
+            HandoffOperatorActionInput {
+                acting_agent_id: Some("claude-1"),
+                ..HandoffOperatorActionInput::default()
+            },
         )
         .expect("accept transfer handoff");
     assert_eq!(accepted.status, HandoffStatus::Accepted);
@@ -902,7 +910,10 @@ fn handoff_operator_actions_cover_resolution_paths() {
                 &rejected_handoff.handoff_id,
                 OperatorActionKind::RejectHandoff,
                 "operator",
-                HandoffOperatorActionInput::default(),
+                HandoffOperatorActionInput {
+                    acting_agent_id: Some("claude-1"),
+                    ..HandoffOperatorActionInput::default()
+                },
             )
             .expect("reject handoff")
             .status,

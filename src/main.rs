@@ -155,6 +155,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             task_id,
             action,
             changed_by,
+            acting_agent_id,
             assigned_to,
             priority,
             severity,
@@ -193,6 +194,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 action,
                 &changed_by,
                 TaskOperatorActionInput {
+                    acting_agent_id: acting_agent_id.as_deref(),
                     assigned_to: assigned_to.as_deref(),
                     priority,
                     severity,
@@ -295,14 +297,21 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
             handoff_id,
             status,
             resolved_by,
+            acting_agent_id,
         } => {
-            let handoff = store.resolve_handoff(&handoff_id, status, &resolved_by)?;
+            let handoff = store.resolve_handoff_with_actor(
+                &handoff_id,
+                status,
+                &resolved_by,
+                acting_agent_id.as_deref(),
+            )?;
             print_json(&handoff)?;
         }
         HandoffCommand::Action {
             handoff_id,
             action,
             changed_by,
+            acting_agent_id,
             note,
         } => {
             let handoff = store.apply_handoff_operator_action(
@@ -310,6 +319,7 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
                 action,
                 &changed_by,
                 HandoffOperatorActionInput {
+                    acting_agent_id: acting_agent_id.as_deref(),
                     note: note.as_deref(),
                 },
             )?;

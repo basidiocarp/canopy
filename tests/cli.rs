@@ -170,6 +170,8 @@ fn cli_creates_and_resolves_handoffs() {
             "accepted",
             "--resolved-by",
             "claude-1",
+            "--acting-agent-id",
+            "claude-1",
         ])
         .assert()
         .success()

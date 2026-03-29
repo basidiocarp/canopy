@@ -54,6 +54,10 @@ pub enum TaskStatus {
 pub enum TaskView {
     All,
     Active,
+    Unclaimed,
+    InProgress,
+    Stalled,
+    AwaitingHandoffAcceptance,
     Blocked,
     BlockedByDependencies,
     Review,
@@ -72,6 +76,10 @@ pub enum SnapshotPreset {
     Default,
     Attention,
     ReviewQueue,
+    Unclaimed,
+    InProgress,
+    Stalled,
+    AwaitingHandoffAcceptance,
     Blocked,
     BlockedByDependencies,
     Handoffs,
@@ -211,6 +219,7 @@ pub enum TaskEventType {
     Assigned,
     OwnershipTransferred,
     StatusChanged,
+    ExecutionUpdated,
     TriageUpdated,
     RelationshipUpdated,
     HandoffCreated,
@@ -218,6 +227,20 @@ pub enum TaskEventType {
     CouncilMessagePosted,
     EvidenceAttached,
     FollowUpTaskCreated,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum ExecutionActionKind {
+    ClaimTask,
+    StartTask,
+    PauseTask,
+    YieldTask,
+    CompleteTask,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -282,6 +305,11 @@ pub enum OperatorActionKind {
     UnacknowledgeTask,
     VerifyTask,
     ReassignTask,
+    ClaimTask,
+    StartTask,
+    PauseTask,
+    YieldTask,
+    CompleteTask,
     ResolveDependency,
     ReopenBlockedTaskWhenUnblocked,
     PromoteFollowUp,
@@ -458,6 +486,8 @@ pub struct TaskEvent {
     pub to_status: TaskStatus,
     pub verification_state: Option<VerificationState>,
     pub owner_agent_id: Option<String>,
+    pub execution_action: Option<ExecutionActionKind>,
+    pub execution_duration_seconds: Option<i64>,
     pub note: Option<String>,
     pub created_at: String,
 }
@@ -569,6 +599,23 @@ pub struct TaskHeartbeatSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskExecutionSummary {
+    pub task_id: String,
+    pub claim_count: usize,
+    pub run_count: usize,
+    pub pause_count: usize,
+    pub yield_count: usize,
+    pub completion_count: usize,
+    pub claimed_at: Option<String>,
+    pub started_at: Option<String>,
+    pub last_execution_at: Option<String>,
+    pub last_execution_action: Option<ExecutionActionKind>,
+    pub last_execution_agent_id: Option<String>,
+    pub total_execution_seconds: i64,
+    pub active_execution_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentHeartbeatSummary {
     pub agent_id: String,
     pub current_task_id: Option<String>,
@@ -603,6 +650,7 @@ pub struct ApiSnapshot {
     pub tasks: Vec<Task>,
     pub task_attention: Vec<TaskAttention>,
     pub task_heartbeat_summaries: Vec<TaskHeartbeatSummary>,
+    pub execution_summaries: Vec<TaskExecutionSummary>,
     pub ownership: Vec<TaskOwnershipSummary>,
     pub handoffs: Vec<Handoff>,
     pub handoff_attention: Vec<HandoffAttention>,
@@ -620,6 +668,7 @@ pub struct TaskDetail {
     pub task: Task,
     pub ownership: TaskOwnershipSummary,
     pub heartbeat_summary: TaskHeartbeatSummary,
+    pub execution_summary: TaskExecutionSummary,
     pub assignments: Vec<TaskAssignment>,
     pub events: Vec<TaskEvent>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
