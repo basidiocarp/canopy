@@ -2297,10 +2297,7 @@ fn api_snapshot_review_decision_follow_through_tracks_open_decision_and_closeout
     mixed_task_ids.sort_unstable();
     let mut expected_task_ids = vec![closeout_task_id.as_str(), review_task_id.as_str()];
     expected_task_ids.sort_unstable();
-    assert_eq!(
-        mixed_task_ids,
-        expected_task_ids
-    );
+    assert_eq!(mixed_task_ids, expected_task_ids);
 
     let mixed_attention = mixed_snapshot["task_attention"]
         .as_array()
@@ -2473,7 +2470,7 @@ fn api_snapshot_review_awaiting_support_tracks_review_tasks_missing_decision_con
 }
 
 #[test]
-fn api_snapshot_review_ready_for_closeout_tracks_review_tasks_with_support_context() {
+fn api_snapshot_review_ready_for_decision_tracks_review_tasks_with_support_context() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
@@ -2485,7 +2482,7 @@ fn api_snapshot_review_ready_for_closeout_tracks_review_tasks_with_support_conte
             "task",
             "create",
             "--title",
-            "Ready for closeout task",
+            "Ready for decision task",
             "--requested-by",
             "operator",
             "--project-root",
@@ -2554,6 +2551,160 @@ fn api_snapshot_review_ready_for_closeout_tracks_review_tasks_with_support_conte
             "--project-root",
             "/tmp/project",
             "--preset",
+            "review_ready_for_decision",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let task_ids: Vec<_> = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(task_ids, vec![review_task_id.as_str()]);
+    assert!(
+        snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|reason| reason == "review_ready_for_decision")
+    );
+}
+
+#[test]
+fn api_snapshot_review_ready_for_closeout_requires_current_cycle_decision_context() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "agent-a",
+            "--host-id",
+            "agent-a",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let review_task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Ready for closeout task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let review_task: Value = serde_json::from_slice(&review_task_output).expect("parse task");
+    let review_task_id = review_task["task_id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &review_task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &review_task_id,
+            "--action",
+            "attach_evidence",
+            "--changed-by",
+            "operator",
+            "--evidence-source-kind",
+            "manual_note",
+            "--evidence-source-ref",
+            "operator-note-1",
+            "--evidence-label",
+            "Operator note",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &review_task_id,
+            "--action",
+            "post_council_message",
+            "--changed-by",
+            "operator",
+            "--author-agent-id",
+            "agent-a",
+            "--message-type",
+            "decision",
+            "--message-body",
+            "Close the review and ship it.",
+        ])
+        .assert()
+        .success();
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
             "review_ready_for_closeout",
         ])
         .assert()
@@ -2575,6 +2726,32 @@ fn api_snapshot_review_ready_for_closeout_tracks_review_tasks_with_support_conte
             .expect("reasons")
             .iter()
             .any(|reason| reason == "review_ready_for_closeout")
+    );
+
+    let decision_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "review_ready_for_decision",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let decision_snapshot: Value =
+        serde_json::from_slice(&decision_snapshot_output).expect("parse decision snapshot");
+    assert!(
+        decision_snapshot["tasks"]
+            .as_array()
+            .expect("tasks")
+            .is_empty()
     );
 }
 
