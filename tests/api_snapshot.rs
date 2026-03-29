@@ -1,8 +1,8 @@
 use assert_cmd::Command;
 use canopy::api::{self, SnapshotOptions};
 use canopy::models::{
-    DeadlineState, OperatorActionKind, SnapshotPreset, TaskAttentionReason, TaskDeadlineKind,
-    TaskStatus, VerificationState,
+    AgentRegistration, AgentStatus, DeadlineState, OperatorActionKind, SnapshotPreset,
+    TaskAttentionReason, TaskDeadlineKind, TaskStatus, VerificationState,
 };
 use canopy::store::{Store, TaskDeadlineUpdate, TaskStatusUpdate};
 use rusqlite::{Connection, params};
@@ -2988,6 +2988,16 @@ fn api_snapshot_review_ready_for_closeout_excludes_stale_support_from_previous_r
 fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
+    let now = OffsetDateTime::now_utc();
+    let due_soon_acceptance_due_at = (now + Duration::hours(1))
+        .format(&Rfc3339)
+        .expect("format due soon acceptance deadline");
+    let overdue_acceptance_due_at = (now - Duration::hours(1))
+        .format(&Rfc3339)
+        .expect("format overdue acceptance deadline");
+    let acceptance_expires_at = (now + Duration::hours(2))
+        .format(&Rfc3339)
+        .expect("format acceptance expiry");
 
     for agent_id in ["agent-a", "agent-b"] {
         Command::cargo_bin("canopy")
@@ -3016,7 +3026,12 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
             .success();
     }
 
-    for title in ["Pending acceptance", "Expired handoff"] {
+    for title in [
+        "Pending acceptance",
+        "Due soon acceptance",
+        "Overdue acceptance",
+        "Expired handoff",
+    ] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -3067,6 +3082,22 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
         .and_then(|task| task["task_id"].as_str())
         .expect("expired task id")
         .to_string();
+    let due_soon_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Due soon acceptance")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("due soon task id")
+        .to_string();
+    let overdue_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Overdue acceptance")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("overdue task id")
+        .to_string();
 
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -3087,6 +3118,56 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
             "awaiting target agent acceptance",
             "--expires-at",
             "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &due_soon_task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            "agent-b",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "due soon acceptance window",
+            "--due-at",
+            due_soon_acceptance_due_at.as_str(),
+            "--expires-at",
+            acceptance_expires_at.as_str(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &overdue_task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            "agent-b",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "overdue acceptance window",
+            "--due-at",
+            overdue_acceptance_due_at.as_str(),
+            "--expires-at",
+            acceptance_expires_at.as_str(),
         ])
         .assert()
         .success();
@@ -3139,7 +3220,10 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
         .iter()
         .map(|task| task["task_id"].as_str().expect("task id"))
         .collect();
-    assert_eq!(awaiting_task_ids, vec![pending_task_id.as_str()]);
+    assert_eq!(awaiting_task_ids.len(), 3);
+    assert!(awaiting_task_ids.contains(&pending_task_id.as_str()));
+    assert!(awaiting_task_ids.contains(&due_soon_task_id.as_str()));
+    assert!(awaiting_task_ids.contains(&overdue_task_id.as_str()));
     assert!(
         awaiting_snapshot["task_attention"]
             .as_array()
@@ -3154,6 +3238,60 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
                     })
             })
     );
+
+    let due_soon_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "due_soon_handoff_acceptance",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let due_soon_snapshot: Value =
+        serde_json::from_slice(&due_soon_output).expect("parse due soon snapshot");
+    let due_soon_task_ids: Vec<_> = due_soon_snapshot["tasks"]
+        .as_array()
+        .expect("due soon tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(due_soon_task_ids, vec![due_soon_task_id.as_str()]);
+
+    let overdue_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "overdue_handoff_acceptance",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let overdue_snapshot: Value =
+        serde_json::from_slice(&overdue_output).expect("parse overdue snapshot");
+    let overdue_task_ids: Vec<_> = overdue_snapshot["tasks"]
+        .as_array()
+        .expect("overdue tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(overdue_task_ids, vec![overdue_task_id.as_str()]);
 
     let handoffs_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -3534,6 +3672,21 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         .format(&Rfc3339)
         .expect("format overdue deadline");
 
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register execution owner");
+
     let due_soon_task = store
         .create_task("Execution due soon", None, "operator", "/tmp/project")
         .expect("create due soon task");
@@ -3567,6 +3720,31 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             },
         )
         .expect("set overdue execution deadline");
+    store
+        .assign_task(&overdue_execution_task.task_id, "codex-1", "operator", None)
+        .expect("assign overdue execution owner");
+
+    let overdue_execution_unclaimed_task = store
+        .create_task(
+            "Execution overdue unclaimed",
+            None,
+            "operator",
+            "/tmp/project",
+        )
+        .expect("create overdue execution unclaimed task");
+    store
+        .update_task_deadlines(
+            &overdue_execution_unclaimed_task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: Some(overdue_at.as_str()),
+                clear_due_at: false,
+                review_due_at: None,
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set overdue execution unclaimed deadline");
 
     let overdue_review_task = store
         .create_task("Review overdue", None, "operator", "/tmp/project")
@@ -3670,13 +3848,64 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         },
     )
     .expect("load overdue execution snapshot");
-    assert_eq!(overdue_execution_snapshot.tasks.len(), 1);
+    assert_eq!(overdue_execution_snapshot.tasks.len(), 2);
+    assert!(
+        overdue_execution_snapshot
+            .tasks
+            .iter()
+            .any(|task| task.task_id == overdue_execution_task.task_id)
+    );
+    assert!(
+        overdue_execution_snapshot
+            .tasks
+            .iter()
+            .any(|task| task.task_id == overdue_execution_unclaimed_task.task_id)
+    );
+    assert!(
+        overdue_execution_snapshot
+            .task_attention
+            .iter()
+            .flat_map(|attention| attention.reasons.iter())
+            .any(|reason| *reason == TaskAttentionReason::OverdueExecution)
+    );
+
+    let overdue_execution_owned_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::OverdueExecutionOwned),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load overdue execution owned snapshot");
+    assert_eq!(overdue_execution_owned_snapshot.tasks.len(), 1);
     assert_eq!(
-        overdue_execution_snapshot.tasks[0].task_id,
+        overdue_execution_owned_snapshot.tasks[0].task_id,
         overdue_execution_task.task_id
     );
     assert!(
-        overdue_execution_snapshot.task_attention[0]
+        overdue_execution_owned_snapshot.task_attention[0]
+            .reasons
+            .iter()
+            .any(|reason| *reason == TaskAttentionReason::OverdueExecution)
+    );
+
+    let overdue_execution_unclaimed_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::OverdueExecutionUnclaimed),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load overdue execution unclaimed snapshot");
+    assert_eq!(overdue_execution_unclaimed_snapshot.tasks.len(), 1);
+    assert_eq!(
+        overdue_execution_unclaimed_snapshot.tasks[0].task_id,
+        overdue_execution_unclaimed_task.task_id
+    );
+    assert!(
+        overdue_execution_unclaimed_snapshot.task_attention[0]
             .reasons
             .iter()
             .any(|reason| *reason == TaskAttentionReason::OverdueExecution)
