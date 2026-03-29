@@ -112,12 +112,15 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         derive_review_with_graph_pressure_task_ids(&tasks, &relationship_summaries);
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(&tasks, &handoffs, now);
+    let review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids(&tasks, &handoffs, now);
     let review_awaiting_support_task_ids =
         derive_review_awaiting_support_task_ids(&tasks, &project_task_events);
     let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
         &tasks,
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
         &review_awaiting_support_task_ids,
     );
     let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
@@ -142,6 +145,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &assigned_awaiting_claim_task_ids,
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
         &review_awaiting_support_task_ids,
         &review_ready_for_closeout_task_ids,
         &claimed_not_started_task_ids,
@@ -173,6 +177,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &assigned_awaiting_claim_task_ids,
             &review_with_graph_pressure_task_ids,
             &review_handoff_follow_through_task_ids,
+            &review_decision_follow_through_task_ids,
             &review_awaiting_support_task_ids,
             &review_ready_for_closeout_task_ids,
             &claimed_not_started_task_ids,
@@ -368,12 +373,15 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     );
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
+    let review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
     let review_awaiting_support_task_ids =
         derive_review_awaiting_support_task_ids(std::slice::from_ref(&task), &events);
     let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
         std::slice::from_ref(&task),
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
         &review_awaiting_support_task_ids,
     );
     let attention = derive_task_attention(
@@ -384,6 +392,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &assigned_awaiting_claim_task_ids,
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
         &review_awaiting_support_task_ids,
         &review_ready_for_closeout_task_ids,
         &claimed_not_started_task_ids,
@@ -518,6 +527,10 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::ReviewHandoffFollowThrough;
             options.sort = TaskSort::Attention;
         }
+        SnapshotPreset::ReviewDecisionFollowThrough => {
+            options.view = TaskView::ReviewDecisionFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::ReviewAwaitingSupport => {
             options.view = TaskView::ReviewAwaitingSupport;
             options.sort = TaskSort::Attention;
@@ -595,6 +608,7 @@ fn matches_view(
     assigned_awaiting_claim_task_ids: &HashSet<String>,
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
     review_ready_for_closeout_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
@@ -644,6 +658,9 @@ fn matches_view(
         }
         TaskView::ReviewHandoffFollowThrough => {
             review_handoff_follow_through_task_ids.contains(&task.task_id)
+        }
+        TaskView::ReviewDecisionFollowThrough => {
+            review_decision_follow_through_task_ids.contains(&task.task_id)
         }
         TaskView::ReviewAwaitingSupport => review_awaiting_support_task_ids.contains(&task.task_id),
         TaskView::ReviewReadyForCloseout => {
@@ -2130,6 +2147,39 @@ fn derive_review_handoff_follow_through_task_ids(
         .collect()
 }
 
+fn review_decision_requires_follow_through(handoff: &Handoff, now: OffsetDateTime) -> bool {
+    matches!(
+        handoff.handoff_type,
+        HandoffType::RecordDecision | HandoffType::CloseTask
+    ) && match handoff.status {
+        crate::models::HandoffStatus::Open => !handoff_has_expired(handoff, now),
+        crate::models::HandoffStatus::Accepted => true,
+        crate::models::HandoffStatus::Rejected
+        | crate::models::HandoffStatus::Expired
+        | crate::models::HandoffStatus::Cancelled
+        | crate::models::HandoffStatus::Completed => false,
+    }
+}
+
+fn derive_review_decision_follow_through_task_ids(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+) -> HashSet<String> {
+    let handoff_task_ids: HashSet<_> = handoffs
+        .iter()
+        .filter(|handoff| review_decision_requires_follow_through(handoff, now))
+        .map(|handoff| handoff.task_id.as_str())
+        .collect();
+
+    tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::ReviewRequired)
+        .filter(|task| handoff_task_ids.contains(task.task_id.as_str()))
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
 fn derive_review_awaiting_support_task_ids(
     tasks: &[Task],
     task_events: &[TaskEvent],
@@ -2203,6 +2253,7 @@ fn derive_review_ready_for_closeout_task_ids(
     tasks: &[Task],
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
 ) -> HashSet<String> {
     tasks
@@ -2212,6 +2263,7 @@ fn derive_review_ready_for_closeout_task_ids(
                 && task.verification_state == VerificationState::Pending
                 && !review_with_graph_pressure_task_ids.contains(&task.task_id)
                 && !review_handoff_follow_through_task_ids.contains(&task.task_id)
+                && !review_decision_follow_through_task_ids.contains(&task.task_id)
                 && !review_awaiting_support_task_ids.contains(&task.task_id)
         })
         .map(|task| task.task_id.clone())
@@ -2321,6 +2373,7 @@ fn derive_task_attention(
     assigned_awaiting_claim_task_ids: &HashSet<String>,
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
     review_ready_for_closeout_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
@@ -2393,6 +2446,9 @@ fn derive_task_attention(
             }
             if review_handoff_follow_through_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::ReviewHandoffFollowThrough);
+            }
+            if review_decision_follow_through_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ReviewDecisionFollowThrough);
             }
             if review_awaiting_support_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::ReviewAwaitingSupport);
