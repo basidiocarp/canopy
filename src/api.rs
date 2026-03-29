@@ -69,6 +69,12 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     }
 
     let project_task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
+    let all_task_events = store.list_all_task_events()?;
+    let project_task_events = all_task_events
+        .iter()
+        .filter(|event| project_task_ids.contains(&event.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
     let relationships = store
         .list_task_relationships(None)?
         .into_iter()
@@ -78,6 +84,13 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         })
         .collect::<Vec<_>>();
     let relationship_summaries = derive_task_relationship_summaries(&tasks, &relationships, now);
+    let project_execution_summaries =
+        derive_task_execution_summaries(&tasks, &project_task_events, now);
+    let accepted_handoff_follow_through_task_ids = derive_accepted_handoff_follow_through_task_ids(
+        &tasks,
+        &handoffs,
+        &project_execution_summaries,
+    );
 
     let all_heartbeats = store.list_all_agent_heartbeats()?;
     let agent_attention = derive_agent_attention(&agents, now);
@@ -87,6 +100,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &handoffs,
         &agent_attention,
         &relationship_summaries,
+        &accepted_handoff_follow_through_task_ids,
         now,
     );
     let open_handoff_task_ids: HashSet<_> = handoffs
@@ -110,6 +124,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             task,
             &open_handoff_task_ids,
             &pending_handoff_acceptance_task_ids,
+            &accepted_handoff_follow_through_task_ids,
             task_attention_by_id.get(&task.task_id),
             relationship_summary_by_id.get(&task.task_id),
             options.view,
@@ -148,15 +163,13 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|assignment| task_ids.contains(&assignment.task_id))
         .collect::<Vec<_>>();
-    let filtered_task_events = store
-        .list_all_task_events()?
-        .into_iter()
-        .filter(|event| task_ids.contains(&event.task_id))
-        .collect::<Vec<_>>();
     let ownership = derive_task_ownership_summaries(&tasks, &filtered_assignments);
     let task_heartbeat_summaries =
         derive_task_heartbeat_summaries(&tasks, &heartbeats, &filtered_agent_attention);
-    let execution_summaries = derive_task_execution_summaries(&tasks, &filtered_task_events, now);
+    let execution_summaries = project_execution_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&agents, &heartbeats, &filtered_agent_attention);
     let filtered_handoffs = handoffs
@@ -228,6 +241,18 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
     let now = OffsetDateTime::now_utc();
+    let execution_summary =
+        derive_task_execution_summaries(std::slice::from_ref(&task), &events, now)
+            .into_iter()
+            .next()
+            .ok_or(StoreError::Validation(
+                "task execution summary could not be derived".to_string(),
+            ))?;
+    let accepted_handoff_follow_through_task_ids = derive_accepted_handoff_follow_through_task_ids(
+        std::slice::from_ref(&task),
+        &handoffs,
+        std::slice::from_ref(&execution_summary),
+    );
     let related_handoff_agents: HashSet<_> = handoffs
         .iter()
         .flat_map(|handoff| [handoff.from_agent_id.as_str(), handoff.to_agent_id.as_str()])
@@ -273,6 +298,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         &agent_attention,
         std::slice::from_ref(&relationship_summary),
+        &accepted_handoff_follow_through_task_ids,
         now,
     )
     .into_iter()
@@ -292,13 +318,6 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
             .next()
             .ok_or(StoreError::Validation(
                 "task heartbeat summary could not be derived".to_string(),
-            ))?;
-    let execution_summary =
-        derive_task_execution_summaries(std::slice::from_ref(&task), &events, now)
-            .into_iter()
-            .next()
-            .ok_or(StoreError::Validation(
-                "task execution summary could not be derived".to_string(),
             ))?;
     let related_agents = agents
         .into_iter()
@@ -417,6 +436,10 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::AwaitingHandoffAcceptance;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::AcceptedHandoffFollowThrough => {
+            options.view = TaskView::AcceptedHandoffFollowThrough;
+            options.sort = TaskSort::UpdatedAt;
+        }
         SnapshotPreset::Blocked => {
             options.view = TaskView::Blocked;
             options.sort = TaskSort::Attention;
@@ -450,6 +473,7 @@ fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
     pending_handoff_acceptance_task_ids: &HashSet<String>,
+    accepted_handoff_follow_through_task_ids: &HashSet<String>,
     task_attention: Option<&TaskAttention>,
     relationship_summary: Option<&TaskRelationshipSummary>,
     view: TaskView,
@@ -473,6 +497,9 @@ fn matches_view(
         }
         TaskView::AwaitingHandoffAcceptance => {
             pending_handoff_acceptance_task_ids.contains(&task.task_id)
+        }
+        TaskView::AcceptedHandoffFollowThrough => {
+            accepted_handoff_follow_through_task_ids.contains(&task.task_id)
         }
         TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
         TaskView::Blocked => {
@@ -1757,6 +1784,47 @@ fn derive_pending_handoff_acceptance_task_ids(
         .collect()
 }
 
+fn derive_accepted_handoff_follow_through_task_ids(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    execution_summaries: &[TaskExecutionSummary],
+) -> HashSet<String> {
+    let tasks_by_id: HashMap<_, _> = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect();
+    let execution_by_task_id: HashMap<_, _> = execution_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+
+    handoffs
+        .iter()
+        .filter(|handoff| handoff.status == crate::models::HandoffStatus::Accepted)
+        .filter_map(|handoff| {
+            let task = tasks_by_id.get(handoff.task_id.as_str())?;
+            if task.status != TaskStatus::Assigned {
+                return None;
+            }
+            if task.owner_agent_id.as_deref() != Some(handoff.to_agent_id.as_str()) {
+                return None;
+            }
+            let resolved_at = handoff.resolved_at.as_deref().and_then(parse_timestamp)?;
+            let last_execution_after_acceptance = execution_by_task_id
+                .get(handoff.task_id.as_str())
+                .and_then(|summary| summary.last_execution_at.as_deref())
+                .and_then(parse_timestamp)
+                .is_some_and(|last_execution_at| last_execution_at >= resolved_at);
+
+            if last_execution_after_acceptance {
+                None
+            } else {
+                Some(handoff.task_id.clone())
+            }
+        })
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -1856,6 +1924,7 @@ fn derive_task_attention(
     handoffs: &[Handoff],
     agent_attention: &[AgentAttention],
     relationship_summaries: &[TaskRelationshipSummary],
+    accepted_handoff_follow_through_task_ids: &HashSet<String>,
     now: OffsetDateTime,
 ) -> Vec<TaskAttention> {
     let agent_attention_by_id: HashMap<_, _> = agent_attention
@@ -1926,6 +1995,9 @@ fn derive_task_attention(
             }
             if pending_handoff_acceptance_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::AwaitingHandoffAcceptance);
+            }
+            if accepted_handoff_follow_through_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::AcceptedHandoffPendingExecution);
             }
             match task.priority {
                 TaskPriority::High => reasons.push(TaskAttentionReason::HighPriority),
