@@ -70,9 +70,15 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
 
     let project_task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
     let all_task_events = store.list_all_task_events()?;
+    let all_assignments = store.list_task_assignments(None)?;
     let project_task_events = all_task_events
         .iter()
         .filter(|event| project_task_ids.contains(&event.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let project_assignments = all_assignments
+        .iter()
+        .filter(|assignment| project_task_ids.contains(&assignment.task_id))
         .cloned()
         .collect::<Vec<_>>();
     let relationships = store
@@ -90,6 +96,12 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &tasks,
         &handoffs,
         &project_execution_summaries,
+    );
+    let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
+        &tasks,
+        &project_assignments,
+        &project_execution_summaries,
+        &accepted_handoff_follow_through_task_ids,
     );
     let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
         &tasks,
@@ -110,6 +122,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &handoffs,
         &agent_attention,
         &relationship_summaries,
+        &assigned_awaiting_claim_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -136,6 +149,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             task,
             &open_handoff_task_ids,
             &pending_handoff_acceptance_task_ids,
+            &assigned_awaiting_claim_task_ids,
             &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
@@ -172,8 +186,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|attention| agent_ids.contains(&attention.agent_id))
         .collect::<Vec<_>>();
-    let filtered_assignments = store
-        .list_task_assignments(None)?
+    let filtered_assignments = project_assignments
         .into_iter()
         .filter(|assignment| task_ids.contains(&assignment.task_id))
         .collect::<Vec<_>>();
@@ -267,6 +280,12 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         std::slice::from_ref(&execution_summary),
     );
+    let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
+        std::slice::from_ref(&task),
+        &assignments,
+        std::slice::from_ref(&execution_summary),
+        &accepted_handoff_follow_through_task_ids,
+    );
     let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
         std::slice::from_ref(&task),
         std::slice::from_ref(&execution_summary),
@@ -322,6 +341,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         &agent_attention,
         std::slice::from_ref(&relationship_summary),
+        &assigned_awaiting_claim_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -450,6 +470,10 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::Unclaimed;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::AssignedAwaitingClaim => {
+            options.view = TaskView::AssignedAwaitingClaim;
+            options.sort = TaskSort::UpdatedAt;
+        }
         SnapshotPreset::ClaimedNotStarted => {
             options.view = TaskView::ClaimedNotStarted;
             options.sort = TaskSort::UpdatedAt;
@@ -508,6 +532,7 @@ fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
     pending_handoff_acceptance_task_ids: &HashSet<String>,
+    assigned_awaiting_claim_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -522,6 +547,7 @@ fn matches_view(
             TaskStatus::Open | TaskStatus::Assigned | TaskStatus::InProgress
         ),
         TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
+        TaskView::AssignedAwaitingClaim => assigned_awaiting_claim_task_ids.contains(&task.task_id),
         TaskView::ClaimedNotStarted => claimed_not_started_task_ids.contains(&task.task_id),
         TaskView::InProgress => task.status == TaskStatus::InProgress,
         TaskView::Stalled => {
@@ -1919,6 +1945,59 @@ fn derive_claimed_not_started_task_ids(
         .collect()
 }
 
+fn derive_assigned_awaiting_claim_task_ids(
+    tasks: &[Task],
+    assignments: &[TaskAssignment],
+    execution_summaries: &[TaskExecutionSummary],
+    accepted_handoff_follow_through_task_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let mut assignments_by_task: HashMap<&str, Vec<&TaskAssignment>> = HashMap::new();
+    for assignment in assignments {
+        assignments_by_task
+            .entry(assignment.task_id.as_str())
+            .or_default()
+            .push(assignment);
+    }
+    let execution_by_task_id: HashMap<_, _> = execution_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+
+    tasks
+        .iter()
+        .filter(|task| {
+            task.status == TaskStatus::Assigned
+                && task.owner_agent_id.is_some()
+                && !accepted_handoff_follow_through_task_ids.contains(&task.task_id)
+                && assignments_by_task
+                    .get(task.task_id.as_str())
+                    .and_then(|history| history.last().copied())
+                    .is_some_and(|last_assignment| {
+                        if Some(last_assignment.assigned_to.as_str())
+                            != task.owner_agent_id.as_deref()
+                        {
+                            return false;
+                        }
+                        if last_assignment.assigned_by == last_assignment.assigned_to {
+                            return false;
+                        }
+                        let last_execution_at = execution_by_task_id
+                            .get(task.task_id.as_str())
+                            .and_then(|summary| summary.last_execution_at.as_deref())
+                            .and_then(parse_timestamp);
+                        let last_assigned_at = parse_timestamp(&last_assignment.assigned_at);
+
+                        match (last_assigned_at, last_execution_at) {
+                            (Some(assigned_at), Some(executed_at)) => assigned_at >= executed_at,
+                            (Some(_) | None, None) => true,
+                            (None, Some(_)) => false,
+                        }
+                    })
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -2019,6 +2098,7 @@ fn derive_task_attention(
     handoffs: &[Handoff],
     agent_attention: &[AgentAttention],
     relationship_summaries: &[TaskRelationshipSummary],
+    assigned_awaiting_claim_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -2089,6 +2169,9 @@ fn derive_task_attention(
             }
             if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
                 reasons.push(TaskAttentionReason::HasOpenFollowUps);
+            }
+            if assigned_awaiting_claim_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::AssignedAwaitingClaim);
             }
             if claimed_not_started_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::ClaimedNotStarted);

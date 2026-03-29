@@ -1985,3 +1985,116 @@ fn api_snapshot_claimed_not_started_view_tracks_claimed_execution() {
             })
     );
 }
+
+#[test]
+fn api_snapshot_assigned_awaiting_claim_view_tracks_manual_assignment() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "agent-a",
+            "--host-id",
+            "agent-a",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let create_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Assigned task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&create_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "assign",
+            "--task-id",
+            &task_id,
+            "--assigned-to",
+            "agent-a",
+            "--assigned-by",
+            "operator",
+            "--reason",
+            "manual assignment before claim",
+        ])
+        .assert()
+        .success();
+
+    let assigned_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "assigned_awaiting_claim",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let assigned_snapshot: Value =
+        serde_json::from_slice(&assigned_output).expect("parse assigned snapshot");
+    let assigned_task_ids: Vec<_> = assigned_snapshot["tasks"]
+        .as_array()
+        .expect("assigned tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(assigned_task_ids, vec![task_id.as_str()]);
+    assert!(
+        assigned_snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .iter()
+            .any(|attention| {
+                attention["task_id"] == task_id
+                    && attention["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason == "assigned_awaiting_claim")
+                    })
+            })
+    );
+}
