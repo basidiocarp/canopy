@@ -144,6 +144,20 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             now,
             Freshness::Stale,
         );
+    let due_soon_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            now,
+            Freshness::Stale,
+        );
     let review_decision_follow_through_task_ids =
         derive_review_decision_follow_through_task_ids(&tasks, &handoffs, now);
     let review_awaiting_support_task_ids =
@@ -233,6 +247,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &review_handoff_follow_through_task_ids,
             &due_soon_review_handoff_follow_through_task_ids,
             &overdue_review_handoff_follow_through_task_ids,
+            &due_soon_review_decision_follow_through_task_ids,
+            &overdue_review_decision_follow_through_task_ids,
             &review_decision_follow_through_task_ids,
             &review_awaiting_support_task_ids,
             &review_ready_for_decision_task_ids,
@@ -618,6 +634,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::OverdueReviewHandoffFollowThrough;
             options.sort = TaskSort::Attention;
         }
+        SnapshotPreset::DueSoonReviewDecisionFollowThrough => {
+            options.view = TaskView::DueSoonReviewDecisionFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::OverdueReviewDecisionFollowThrough => {
+            options.view = TaskView::OverdueReviewDecisionFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::ReviewHandoffFollowThrough => {
             options.view = TaskView::ReviewHandoffFollowThrough;
             options.sort = TaskSort::Attention;
@@ -755,6 +779,8 @@ fn matches_view(
     review_handoff_follow_through_task_ids: &HashSet<String>,
     due_soon_review_handoff_follow_through_task_ids: &HashSet<String>,
     overdue_review_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_review_decision_follow_through_task_ids: &HashSet<String>,
+    overdue_review_decision_follow_through_task_ids: &HashSet<String>,
     review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
     review_ready_for_decision_task_ids: &HashSet<String>,
@@ -776,6 +802,8 @@ fn matches_view(
         review_handoff_follow_through_task_ids,
         due_soon_review_handoff_follow_through_task_ids,
         overdue_review_handoff_follow_through_task_ids,
+        due_soon_review_decision_follow_through_task_ids,
+        overdue_review_decision_follow_through_task_ids,
         review_decision_follow_through_task_ids,
         review_awaiting_support_task_ids,
         review_ready_for_decision_task_ids,
@@ -847,6 +875,8 @@ fn matches_view(
         TaskView::ReviewWithGraphPressure
         | TaskView::DueSoonReviewHandoffFollowThrough
         | TaskView::OverdueReviewHandoffFollowThrough
+        | TaskView::DueSoonReviewDecisionFollowThrough
+        | TaskView::OverdueReviewDecisionFollowThrough
         | TaskView::ReviewHandoffFollowThrough
         | TaskView::ReviewDecisionFollowThrough
         | TaskView::ReviewAwaitingSupport
@@ -905,6 +935,8 @@ fn matches_review_view(
     review_handoff_follow_through_task_ids: &HashSet<String>,
     due_soon_review_handoff_follow_through_task_ids: &HashSet<String>,
     overdue_review_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_review_decision_follow_through_task_ids: &HashSet<String>,
+    overdue_review_decision_follow_through_task_ids: &HashSet<String>,
     review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
     review_ready_for_decision_task_ids: &HashSet<String>,
@@ -917,6 +949,12 @@ fn matches_review_view(
         }
         TaskView::OverdueReviewHandoffFollowThrough => {
             overdue_review_handoff_follow_through_task_ids.contains(task_id)
+        }
+        TaskView::DueSoonReviewDecisionFollowThrough => {
+            due_soon_review_decision_follow_through_task_ids.contains(task_id)
+        }
+        TaskView::OverdueReviewDecisionFollowThrough => {
+            overdue_review_decision_follow_through_task_ids.contains(task_id)
         }
         TaskView::ReviewHandoffFollowThrough => {
             review_handoff_follow_through_task_ids.contains(task_id)
@@ -2701,9 +2739,30 @@ fn derive_review_decision_follow_through_task_ids(
     handoffs: &[Handoff],
     now: OffsetDateTime,
 ) -> HashSet<String> {
+    derive_review_decision_follow_through_task_ids_inner(tasks, handoffs, now, None)
+}
+
+fn derive_review_decision_follow_through_task_ids_with_freshness(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+    freshness: Freshness,
+) -> HashSet<String> {
+    derive_review_decision_follow_through_task_ids_inner(tasks, handoffs, now, Some(freshness))
+}
+
+fn derive_review_decision_follow_through_task_ids_inner(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+    freshness: Option<Freshness>,
+) -> HashSet<String> {
     let handoff_task_ids: HashSet<_> = handoffs
         .iter()
         .filter(|handoff| review_decision_requires_follow_through(handoff, now))
+        .filter(|handoff| {
+            freshness.is_none_or(|freshness| handoff_freshness(handoff, now) == freshness)
+        })
         .map(|handoff| handoff.task_id.as_str())
         .collect();
 
