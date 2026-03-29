@@ -618,6 +618,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::DueSoon;
             options.sort = TaskSort::Attention;
         }
+        SnapshotPreset::DueSoonExecution => {
+            options.view = TaskView::DueSoonExecution;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::DueSoonReview => {
+            options.view = TaskView::DueSoonReview;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::OverdueExecution => {
             options.view = TaskView::OverdueExecution;
             options.sort = TaskSort::Attention;
@@ -705,6 +713,11 @@ fn matches_view(
         TaskView::PausedResumable => paused_resumable_task_ids.contains(&task.task_id),
         TaskView::DueSoon => deadline_summary
             .is_some_and(|summary| summary.active_deadline_state == DeadlineState::DueSoon),
+        TaskView::DueSoonExecution => deadline_summary
+            .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon),
+        TaskView::DueSoonReview => {
+            deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::DueSoon)
+        }
         TaskView::OverdueExecution => deadline_summary
             .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue),
         TaskView::OverdueReview => {

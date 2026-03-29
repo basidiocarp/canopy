@@ -3596,6 +3596,34 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         )
         .expect("set overdue review deadline");
 
+    let due_soon_review_task = store
+        .create_task("Review due soon", None, "operator", "/tmp/project")
+        .expect("create due soon review task");
+    store
+        .update_task_status(
+            &due_soon_review_task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Pending),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move due soon review task into review");
+    store
+        .update_task_deadlines(
+            &due_soon_review_task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: None,
+                clear_due_at: false,
+                review_due_at: Some(due_soon_at.as_str()),
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set due soon review deadline");
+
     let due_soon_snapshot = api::snapshot(
         &store,
         SnapshotOptions {
@@ -3605,12 +3633,32 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         },
     )
     .expect("load due soon snapshot");
-    assert_eq!(due_soon_snapshot.tasks.len(), 1);
-    assert_eq!(due_soon_snapshot.tasks[0].task_id, due_soon_task.task_id);
-    assert_eq!(due_soon_snapshot.deadline_summaries.len(), 1);
+    assert_eq!(due_soon_snapshot.tasks.len(), 2);
+    assert_eq!(due_soon_snapshot.deadline_summaries.len(), 2);
     assert_eq!(
         due_soon_snapshot.deadline_summaries[0].active_deadline_state,
         DeadlineState::DueSoon
+    );
+
+    let due_soon_execution_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::DueSoonExecution),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load due soon execution snapshot");
+    assert_eq!(due_soon_execution_snapshot.tasks.len(), 1);
+    assert_eq!(
+        due_soon_execution_snapshot.tasks[0].task_id,
+        due_soon_task.task_id
+    );
+    assert!(
+        due_soon_execution_snapshot.task_attention[0]
+            .reasons
+            .iter()
+            .any(|reason| *reason == TaskAttentionReason::DueSoonExecution)
     );
 
     let overdue_execution_snapshot = api::snapshot(
@@ -3659,6 +3707,27 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             .reasons
             .iter()
             .any(|reason| *reason == TaskAttentionReason::OverdueReview)
+    );
+
+    let due_soon_review_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::DueSoonReview),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load due soon review snapshot");
+    assert_eq!(due_soon_review_snapshot.tasks.len(), 1);
+    assert_eq!(
+        due_soon_review_snapshot.tasks[0].task_id,
+        due_soon_review_task.task_id
+    );
+    assert!(
+        due_soon_review_snapshot.task_attention[0]
+            .reasons
+            .iter()
+            .any(|reason| *reason == TaskAttentionReason::DueSoonReview)
     );
 
     let detail = api::task_detail(&store, &overdue_review_task.task_id)
