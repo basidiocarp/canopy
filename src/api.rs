@@ -92,6 +92,11 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     let relationship_summaries = derive_task_relationship_summaries(&tasks, &relationships, now);
     let project_execution_summaries =
         derive_task_execution_summaries(&tasks, &project_task_events, now);
+    let project_evidence = store
+        .list_all_evidence()?
+        .into_iter()
+        .filter(|evidence| project_task_ids.contains(&evidence.task_id))
+        .collect::<Vec<_>>();
     let accepted_handoff_follow_through_task_ids = derive_accepted_handoff_follow_through_task_ids(
         &tasks,
         &handoffs,
@@ -107,6 +112,14 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         derive_review_with_graph_pressure_task_ids(&tasks, &relationship_summaries);
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(&tasks, &handoffs, now);
+    let review_awaiting_support_task_ids =
+        derive_review_awaiting_support_task_ids(&tasks, &project_task_events);
+    let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
+        &tasks,
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+    );
     let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
         &tasks,
         &project_execution_summaries,
@@ -129,6 +142,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &assigned_awaiting_claim_task_ids,
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+        &review_ready_for_closeout_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -158,6 +173,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &assigned_awaiting_claim_task_ids,
             &review_with_graph_pressure_task_ids,
             &review_handoff_follow_through_task_ids,
+            &review_awaiting_support_task_ids,
+            &review_ready_for_closeout_task_ids,
             &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
@@ -251,8 +268,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         handoffs: filtered_handoffs,
         handoff_attention: filtered_handoff_attention,
         operator_actions,
-        evidence: store
-            .list_all_evidence()?
+        evidence: project_evidence
             .into_iter()
             .filter(|evidence| task_ids.contains(&evidence.task_id))
             .collect(),
@@ -273,6 +289,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let handoffs = store.list_handoffs(Some(task_id))?;
     let assignments = store.list_task_assignments(Some(task_id))?;
     let events = store.list_task_events(task_id)?;
+    let messages = store.list_council_messages(task_id)?;
+    let evidence = store.list_evidence(task_id)?;
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
     let now = OffsetDateTime::now_utc();
@@ -350,6 +368,14 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     );
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
+    let review_awaiting_support_task_ids =
+        derive_review_awaiting_support_task_ids(std::slice::from_ref(&task), &events);
+    let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
+        std::slice::from_ref(&task),
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+    );
     let attention = derive_task_attention(
         std::slice::from_ref(&task),
         &handoffs,
@@ -358,6 +384,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &assigned_awaiting_claim_task_ids,
         &review_with_graph_pressure_task_ids,
         &review_handoff_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+        &review_ready_for_closeout_task_ids,
         &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
@@ -425,8 +453,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         handoff_attention,
         operator_actions,
         allowed_actions,
-        messages: store.list_council_messages(task_id)?,
-        evidence: store.list_evidence(task_id)?,
+        messages,
+        evidence,
         relationships,
         relationship_summary,
         related_tasks: store.list_related_tasks(task_id)?,
@@ -488,6 +516,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
         }
         SnapshotPreset::ReviewHandoffFollowThrough => {
             options.view = TaskView::ReviewHandoffFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::ReviewAwaitingSupport => {
+            options.view = TaskView::ReviewAwaitingSupport;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::ReviewReadyForCloseout => {
+            options.view = TaskView::ReviewReadyForCloseout;
             options.sort = TaskSort::Attention;
         }
         SnapshotPreset::Unclaimed => {
@@ -559,6 +595,8 @@ fn matches_view(
     assigned_awaiting_claim_task_ids: &HashSet<String>,
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_awaiting_support_task_ids: &HashSet<String>,
+    review_ready_for_closeout_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -606,6 +644,10 @@ fn matches_view(
         }
         TaskView::ReviewHandoffFollowThrough => {
             review_handoff_follow_through_task_ids.contains(&task.task_id)
+        }
+        TaskView::ReviewAwaitingSupport => review_awaiting_support_task_ids.contains(&task.task_id),
+        TaskView::ReviewReadyForCloseout => {
+            review_ready_for_closeout_task_ids.contains(&task.task_id)
         }
         TaskView::Review => {
             task.status == TaskStatus::ReviewRequired
@@ -2088,6 +2130,94 @@ fn derive_review_handoff_follow_through_task_ids(
         .collect()
 }
 
+fn derive_review_awaiting_support_task_ids(
+    tasks: &[Task],
+    task_events: &[TaskEvent],
+) -> HashSet<String> {
+    let mut events_by_task_id: HashMap<&str, Vec<&TaskEvent>> = HashMap::new();
+    for event in task_events {
+        events_by_task_id
+            .entry(event.task_id.as_str())
+            .or_default()
+            .push(event);
+    }
+
+    tasks
+        .iter()
+        .filter(|task| {
+            task.status == TaskStatus::ReviewRequired
+                && task.verification_state == VerificationState::Pending
+        })
+        .filter(|task| {
+            let task_events = events_by_task_id
+                .get(task.task_id.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            let review_cycle_start_index = task_events
+                .iter()
+                .rposition(|event| {
+                    event.event_type == TaskEventType::StatusChanged
+                        && event.to_status == TaskStatus::ReviewRequired
+                })
+                .unwrap_or(0);
+            let review_cycle_events = task_events.iter().skip(review_cycle_start_index).copied();
+
+            let mut has_evidence = false;
+            let mut has_council_message = false;
+            let mut has_council_decision = false;
+
+            for event in review_cycle_events {
+                match event.event_type {
+                    TaskEventType::EvidenceAttached => {
+                        has_evidence = true;
+                    }
+                    TaskEventType::CouncilMessagePosted => {
+                        has_council_message = true;
+                        if council_message_type_from_event_note(event.note.as_deref())
+                            == Some("decision")
+                        {
+                            has_council_decision = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let pending_council = has_council_message && !has_council_decision;
+
+            !has_evidence || pending_council
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
+fn council_message_type_from_event_note(note: Option<&str>) -> Option<&str> {
+    note.and_then(|note| {
+        note.split("; ").take(3).find_map(|segment| {
+            let (key, value) = segment.split_once('=')?;
+            (key.trim() == "message_type").then_some(value.trim())
+        })
+    })
+}
+
+fn derive_review_ready_for_closeout_task_ids(
+    tasks: &[Task],
+    review_with_graph_pressure_task_ids: &HashSet<String>,
+    review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_awaiting_support_task_ids: &HashSet<String>,
+) -> HashSet<String> {
+    tasks
+        .iter()
+        .filter(|task| {
+            task.status == TaskStatus::ReviewRequired
+                && task.verification_state == VerificationState::Pending
+                && !review_with_graph_pressure_task_ids.contains(&task.task_id)
+                && !review_handoff_follow_through_task_ids.contains(&task.task_id)
+                && !review_awaiting_support_task_ids.contains(&task.task_id)
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -2191,6 +2321,8 @@ fn derive_task_attention(
     assigned_awaiting_claim_task_ids: &HashSet<String>,
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_awaiting_support_task_ids: &HashSet<String>,
+    review_ready_for_closeout_task_ids: &HashSet<String>,
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
@@ -2261,6 +2393,12 @@ fn derive_task_attention(
             }
             if review_handoff_follow_through_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::ReviewHandoffFollowThrough);
+            }
+            if review_awaiting_support_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ReviewAwaitingSupport);
+            }
+            if review_ready_for_closeout_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ReviewReadyForCloseout);
             }
             if task.verification_state == VerificationState::Failed {
                 reasons.push(TaskAttentionReason::VerificationFailed);
