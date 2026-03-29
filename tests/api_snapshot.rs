@@ -134,6 +134,70 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .assert()
         .success();
 
+    let blocker_task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Repair lifecycle blocker",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let blocker_task: Value = serde_json::from_slice(&blocker_task_output).expect("parse blocker task");
+    let blocker_task_id = blocker_task["task_id"].as_str().expect("blocker task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "create_follow_up_task",
+            "--changed-by",
+            "operator",
+            "--follow-up-title",
+            "Track rollout cleanups",
+            "--follow-up-description",
+            "Capture the remaining operator work",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "link_task_dependency",
+            "--changed-by",
+            "operator",
+            "--related-task-id",
+            &blocker_task_id,
+            "--relationship-role",
+            "blocked_by",
+        ])
+        .assert()
+        .success();
+
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
         .args([
@@ -263,6 +327,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(snapshot["operator_actions"][1]["kind"], "verify_task");
     assert_eq!(snapshot["operator_actions"][1]["target_kind"], "task");
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
+    assert_eq!(snapshot["relationships"].as_array().expect("relationships").len(), 2);
 
     let task_detail_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -284,10 +349,24 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(detail["task"]["verification_state"], "pending");
     assert_eq!(detail["attention"]["level"], "needs_attention");
     assert_eq!(detail["attention"]["reasons"][0], "review_required");
-    assert_eq!(detail["events"].as_array().expect("events").len(), 3);
-    assert_eq!(detail["events"][0]["event_type"], "created");
-    assert_eq!(detail["events"][1]["event_type"], "assigned");
-    assert_eq!(detail["events"][2]["event_type"], "status_changed");
+    let event_types = detail["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .map(|event| event["event_type"].as_str().expect("event type"))
+        .collect::<Vec<_>>();
+    assert_eq!(event_types.len(), 6);
+    assert!(event_types.contains(&"created"));
+    assert!(event_types.contains(&"assigned"));
+    assert!(event_types.contains(&"status_changed"));
+    assert!(event_types.contains(&"follow_up_task_created"));
+    assert_eq!(
+        event_types
+            .iter()
+            .filter(|event_type| **event_type == "relationship_updated")
+            .count(),
+        2
+    );
     assert_eq!(
         detail["heartbeats"].as_array().expect("heartbeats").len(),
         2
@@ -376,6 +455,11 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert!(
         allowed_actions
             .iter()
+            .any(|action| action["kind"] == "link_task_dependency")
+    );
+    assert!(
+        allowed_actions
+            .iter()
             .any(|action| action["kind"] == "block_task")
     );
     assert!(
@@ -391,6 +475,22 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");
     assert!(detail["evidence"][0]["related_memory_query"].is_null());
+    assert_eq!(detail["relationships"].as_array().expect("relationships").len(), 2);
+    assert_eq!(detail["related_tasks"].as_array().expect("related tasks").len(), 2);
+    assert!(
+        detail["related_tasks"]
+            .as_array()
+            .expect("related tasks")
+            .iter()
+            .any(|related| related["relationship_role"] == "follow_up_child")
+    );
+    assert!(
+        detail["related_tasks"]
+            .as_array()
+            .expect("related tasks")
+            .iter()
+            .any(|related| related["relationship_role"] == "blocked_by")
+    );
 }
 
 #[test]

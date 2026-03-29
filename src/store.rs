@@ -1,8 +1,9 @@
 use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
     CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType,
-    OperatorActionKind, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskSeverity,
-    TaskStatus, VerificationState,
+    OperatorActionKind, RelatedTask, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority,
+    TaskRelationship, TaskRelationshipKind, TaskRelationshipRole, TaskSeverity, TaskStatus,
+    VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -116,6 +117,8 @@ pub struct TaskOperatorActionInput<'a> {
     pub related_file: Option<&'a str>,
     pub follow_up_title: Option<&'a str>,
     pub follow_up_description: Option<&'a str>,
+    pub related_task_id: Option<&'a str>,
+    pub relationship_role: Option<TaskRelationshipRole>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -219,6 +222,17 @@ const BASE_SCHEMA: &str = r"
         owner_agent_id TEXT NULL,
         note TEXT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS task_relationships (
+        relationship_id TEXT PRIMARY KEY,
+        source_task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        target_task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(source_task_id, target_task_id, kind)
     );
 
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
@@ -719,7 +733,8 @@ impl Store {
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
-            | OperatorActionKind::CreateFollowUpTask => unreachable!("handled above"),
+            | OperatorActionKind::CreateFollowUpTask
+            | OperatorActionKind::LinkTaskDependency => unreachable!("handled above"),
         }
     }
 
@@ -925,6 +940,131 @@ impl Store {
                         note: Some(note.as_str()),
                     },
                 )?;
+                let relationship = create_task_relationship_in_connection(
+                    conn,
+                    task_id,
+                    &follow_up.task_id,
+                    TaskRelationshipKind::FollowUp,
+                    changed_by,
+                )?;
+                let relation_note = format!(
+                    "relationship_id={}; kind={}; related_task_id={}",
+                    relationship.relationship_id, relationship.kind, follow_up.task_id
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(parent_task.status),
+                        to_status: parent_task.status,
+                        verification_state: Some(parent_task.verification_state),
+                        owner_agent_id: parent_task.owner_agent_id.as_deref(),
+                        note: Some(relation_note.as_str()),
+                    },
+                )?;
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id: &follow_up.task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(follow_up.status),
+                        to_status: follow_up.status,
+                        verification_state: Some(follow_up.verification_state),
+                        owner_agent_id: follow_up.owner_agent_id.as_deref(),
+                        note: Some(relation_note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, &follow_up.task_id)?;
+                touch_task_in_connection(conn, task_id)?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::LinkTaskDependency => self.in_transaction(|conn| {
+                let current_task = get_task_in_connection(conn, task_id)?;
+                let related_task_id = input.related_task_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "link_task_dependency requires a related_task_id".to_string(),
+                    )
+                })?;
+                let relationship_role = input.relationship_role.ok_or_else(|| {
+                    StoreError::Validation(
+                        "link_task_dependency requires a relationship_role".to_string(),
+                    )
+                })?;
+                let (source_task_id, target_task_id, note_role) = match relationship_role {
+                    TaskRelationshipRole::Blocks => {
+                        (task_id, related_task_id, TaskRelationshipRole::Blocks)
+                    }
+                    TaskRelationshipRole::BlockedBy => {
+                        (related_task_id, task_id, TaskRelationshipRole::BlockedBy)
+                    }
+                    TaskRelationshipRole::FollowUpParent
+                    | TaskRelationshipRole::FollowUpChild => {
+                        return Err(StoreError::Validation(
+                            "link_task_dependency only supports blocks or blocked_by roles"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let relationship = create_task_relationship_in_connection(
+                    conn,
+                    source_task_id,
+                    target_task_id,
+                    TaskRelationshipKind::Blocks,
+                    changed_by,
+                )?;
+                let related_task = get_task_in_connection(conn, related_task_id)?;
+                let note = format!(
+                    "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    note_role,
+                    related_task.task_id,
+                    related_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(current_task.status),
+                        to_status: current_task.status,
+                        verification_state: Some(current_task.verification_state),
+                        owner_agent_id: current_task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                let inverse_role = match relationship_role {
+                    TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
+                    TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
+                    TaskRelationshipRole::FollowUpParent
+                    | TaskRelationshipRole::FollowUpChild => unreachable!("validated above"),
+                };
+                let inverse_note = format!(
+                    "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    inverse_role,
+                    current_task.task_id,
+                    current_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id: &related_task.task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(related_task.status),
+                        to_status: related_task.status,
+                        verification_state: Some(related_task.verification_state),
+                        owner_agent_id: related_task.owner_agent_id.as_deref(),
+                        note: Some(inverse_note.as_str()),
+                    },
+                )?;
+                touch_task_in_connection(conn, related_task_id)?;
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::AcknowledgeTask
@@ -1158,7 +1298,8 @@ impl Store {
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
-            | OperatorActionKind::CreateFollowUpTask => Err(StoreError::Validation(format!(
+            | OperatorActionKind::CreateFollowUpTask
+            | OperatorActionKind::LinkTaskDependency => Err(StoreError::Validation(format!(
                 "operator action {action} is not valid for handoffs"
             ))),
         }
@@ -1517,6 +1658,90 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Lists task relationships globally or for one task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the query fails.
+    pub fn list_task_relationships(
+        &self,
+        task_id: Option<&str>,
+    ) -> StoreResult<Vec<TaskRelationship>> {
+        let mut relationships = Vec::new();
+        if let Some(task_id) = task_id {
+            self.ensure_task_exists(task_id)?;
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+                FROM task_relationships
+                WHERE source_task_id = ?1 OR target_task_id = ?1
+                ORDER BY rowid
+                ",
+            )?;
+            let rows = stmt.query_map([task_id], map_task_relationship)?;
+            for row in rows {
+                relationships.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+                FROM task_relationships
+                ORDER BY rowid
+                ",
+            )?;
+            let rows = stmt.query_map([], map_task_relationship)?;
+            for row in rows {
+                relationships.push(row?);
+            }
+        }
+        Ok(relationships)
+    }
+
+    /// Loads directional related-task summaries for one task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the query fails.
+    pub fn list_related_tasks(&self, task_id: &str) -> StoreResult<Vec<RelatedTask>> {
+        self.ensure_task_exists(task_id)?;
+        let relationships = self.list_task_relationships(Some(task_id))?;
+        relationships
+            .into_iter()
+            .map(|relationship| {
+                let (related_task_id, relationship_role) = if relationship.source_task_id == task_id {
+                    let role = match relationship.kind {
+                        TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpChild,
+                        TaskRelationshipKind::Blocks => TaskRelationshipRole::Blocks,
+                    };
+                    (relationship.target_task_id.clone(), role)
+                } else {
+                    let role = match relationship.kind {
+                        TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpParent,
+                        TaskRelationshipKind::Blocks => TaskRelationshipRole::BlockedBy,
+                    };
+                    (relationship.source_task_id.clone(), role)
+                };
+                let related_task = self.get_task(&related_task_id)?;
+                Ok(RelatedTask {
+                    relationship_id: relationship.relationship_id,
+                    relationship_kind: relationship.kind,
+                    relationship_role,
+                    related_task_id: related_task.task_id,
+                    title: related_task.title,
+                    status: related_task.status,
+                    verification_state: related_task.verification_state,
+                    priority: related_task.priority,
+                    severity: related_task.severity,
+                    owner_agent_id: related_task.owner_agent_id,
+                    blocked_reason: related_task.blocked_reason,
+                    created_at: related_task.created_at,
+                    updated_at: related_task.updated_at,
+                })
+            })
+            .collect()
+    }
+
     fn ensure_task_exists(&self, task_id: &str) -> StoreResult<()> {
         let exists = self
             .conn
@@ -1812,6 +2037,70 @@ fn add_evidence_in_connection(
     )?;
     touch_task_in_connection(conn, task_id)?;
     Ok(evidence)
+}
+
+fn create_task_relationship_in_connection(
+    conn: &Connection,
+    source_task_id: &str,
+    target_task_id: &str,
+    kind: TaskRelationshipKind,
+    created_by: &str,
+) -> StoreResult<TaskRelationship> {
+    let source_task = get_task_in_connection(conn, source_task_id)?;
+    let target_task = get_task_in_connection(conn, target_task_id)?;
+    if source_task_id == target_task_id {
+        return Err(StoreError::Validation(
+            "task relationships must link two different tasks".to_string(),
+        ));
+    }
+    if source_task.project_root != target_task.project_root {
+        return Err(StoreError::Validation(
+            "task relationships must stay within the same project".to_string(),
+        ));
+    }
+    let duplicate = conn
+        .query_row(
+            r"
+            SELECT relationship_id
+            FROM task_relationships
+            WHERE source_task_id = ?1 AND target_task_id = ?2 AND kind = ?3
+            ",
+            params![source_task_id, target_task_id, kind.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if duplicate.is_some() {
+        return Err(StoreError::Validation(
+            "task relationship already exists".to_string(),
+        ));
+    }
+
+    let relationship = TaskRelationship {
+        relationship_id: Ulid::new().to_string(),
+        source_task_id: source_task_id.to_string(),
+        target_task_id: target_task_id.to_string(),
+        kind,
+        created_by: created_by.to_string(),
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    conn.execute(
+        r"
+        INSERT INTO task_relationships (
+            relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ",
+        params![
+            relationship.relationship_id,
+            relationship.source_task_id,
+            relationship.target_task_id,
+            relationship.kind.to_string(),
+            relationship.created_by,
+        ],
+    )?;
+    touch_task_in_connection(conn, source_task_id)?;
+    touch_task_in_connection(conn, target_task_id)?;
+    get_task_relationship_in_connection(conn, &relationship.relationship_id)
 }
 
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
@@ -2194,10 +2483,11 @@ fn task_operator_triage_update<'a>(
         | OperatorActionKind::BlockTask
         | OperatorActionKind::UnblockTask
         | OperatorActionKind::CreateHandoff
-        | OperatorActionKind::PostCouncilMessage
-        | OperatorActionKind::AttachEvidence
-        | OperatorActionKind::CreateFollowUpTask
-        | OperatorActionKind::AcceptHandoff
+            | OperatorActionKind::PostCouncilMessage
+            | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::CreateFollowUpTask
+            | OperatorActionKind::LinkTaskDependency
+            | OperatorActionKind::AcceptHandoff
         | OperatorActionKind::RejectHandoff
         | OperatorActionKind::CancelHandoff
         | OperatorActionKind::CompleteHandoff
@@ -2306,6 +2596,7 @@ fn task_operator_status_update<'a>(
         | OperatorActionKind::PostCouncilMessage
         | OperatorActionKind::AttachEvidence
         | OperatorActionKind::CreateFollowUpTask
+        | OperatorActionKind::LinkTaskDependency
         | OperatorActionKind::AcceptHandoff
         | OperatorActionKind::RejectHandoff
         | OperatorActionKind::CancelHandoff
@@ -2332,6 +2623,23 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
     )
     .optional()?
     .ok_or(StoreError::NotFound("task"))
+}
+
+fn get_task_relationship_in_connection(
+    conn: &Connection,
+    relationship_id: &str,
+) -> StoreResult<TaskRelationship> {
+    conn.query_row(
+        r"
+        SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+        FROM task_relationships
+        WHERE relationship_id = ?1
+        ",
+        [relationship_id],
+        map_task_relationship,
+    )
+    .optional()?
+    .ok_or(StoreError::NotFound("task relationship"))
 }
 
 fn validate_agent_task_link(
@@ -2608,6 +2916,18 @@ fn map_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRef> {
         related_memory_query: row.get(8)?,
         related_symbol: row.get(9)?,
         related_file: row.get(10)?,
+    })
+}
+
+fn map_task_relationship(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRelationship> {
+    Ok(TaskRelationship {
+        relationship_id: row.get(0)?,
+        source_task_id: row.get(1)?,
+        target_task_id: row.get(2)?,
+        kind: parse_enum_column(row, 3)?,
+        created_by: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 

@@ -1,6 +1,7 @@
 use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, OperatorActionKind, TaskEventType, TaskStatus, VerificationState,
+    HandoffType, OperatorActionKind, TaskEventType, TaskRelationshipRole, TaskStatus,
+    VerificationState,
 };
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
@@ -483,6 +484,53 @@ fn task_creation_actions_create_artifacts_and_record_history() {
             .iter()
             .any(|item| item.title == "Close the follow-up queue")
     );
+    let follow_up_task = tasks
+        .iter()
+        .find(|item| item.title == "Close the follow-up queue")
+        .expect("follow-up task");
+    let blocker_task = store
+        .create_task("Lifecycle blocker", None, "operator", "/tmp/project")
+        .expect("create blocker task");
+
+    let _ = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::LinkTaskDependency,
+            "operator",
+            TaskOperatorActionInput {
+                related_task_id: Some(&blocker_task.task_id),
+                relationship_role: Some(TaskRelationshipRole::BlockedBy),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("link dependency");
+
+    let relationships = store
+        .list_task_relationships(Some(&task.task_id))
+        .expect("list task relationships");
+    assert_eq!(relationships.len(), 2);
+    assert!(relationships.iter().any(|relationship| {
+        relationship.kind.to_string() == "follow_up"
+            && relationship.source_task_id == task.task_id
+            && relationship.target_task_id == follow_up_task.task_id
+    }));
+    assert!(relationships.iter().any(|relationship| {
+        relationship.kind.to_string() == "blocks"
+            && relationship.source_task_id == blocker_task.task_id
+            && relationship.target_task_id == task.task_id
+    }));
+
+    let related_tasks = store
+        .list_related_tasks(&task.task_id)
+        .expect("list related tasks");
+    assert!(related_tasks.iter().any(|related| {
+        related.related_task_id == follow_up_task.task_id
+            && related.relationship_role == TaskRelationshipRole::FollowUpChild
+    }));
+    assert!(related_tasks.iter().any(|related| {
+        related.related_task_id == blocker_task.task_id
+            && related.relationship_role == TaskRelationshipRole::BlockedBy
+    }));
 
     let messages = store
         .list_council_messages(&task.task_id)
@@ -527,6 +575,20 @@ fn task_creation_actions_create_artifacts_and_record_history() {
                 .note
                 .as_deref()
                 .is_some_and(|note| note.contains("follow_up_task_id="))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("kind=follow_up"))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("kind=blocks"))
     }));
 }
 

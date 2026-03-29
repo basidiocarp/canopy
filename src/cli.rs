@@ -1,7 +1,7 @@
 use crate::models::{
     AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, OperatorActionKind, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort,
-    TaskView, VerificationState,
+    HandoffType, OperatorActionKind, SnapshotPreset, TaskPriority, TaskRelationshipRole,
+    TaskSeverity, TaskSort, TaskView, VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -247,6 +247,10 @@ pub enum TaskCommand {
         follow_up_title: Option<String>,
         #[arg(long)]
         follow_up_description: Option<String>,
+        #[arg(long)]
+        related_task_id: Option<String>,
+        #[arg(long)]
+        relationship_role: Option<TaskRelationshipRole>,
     },
     List,
     ListView {

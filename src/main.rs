@@ -185,6 +185,8 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             related_file,
             follow_up_title,
             follow_up_description,
+            related_task_id,
+            relationship_role,
         } => {
             let task = store.apply_task_operator_action(
                 &task_id,
@@ -221,6 +223,8 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                     related_file: related_file.as_deref(),
                     follow_up_title: follow_up_title.as_deref(),
                     follow_up_description: follow_up_description.as_deref(),
+                    related_task_id: related_task_id.as_deref(),
+                    relationship_role,
                 },
             )?;
             print_json(&task)?;

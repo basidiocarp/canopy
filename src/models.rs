@@ -208,6 +208,7 @@ pub enum TaskEventType {
     OwnershipTransferred,
     StatusChanged,
     TriageUpdated,
+    RelationshipUpdated,
     HandoffCreated,
     HandoffUpdated,
     CouncilMessagePosted,
@@ -283,12 +284,37 @@ pub enum OperatorActionKind {
     PostCouncilMessage,
     AttachEvidence,
     CreateFollowUpTask,
+    LinkTaskDependency,
     AcceptHandoff,
     RejectHandoff,
     CancelHandoff,
     CompleteHandoff,
     FollowUpHandoff,
     ExpireHandoff,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskRelationshipKind {
+    FollowUp,
+    Blocks,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskRelationshipRole {
+    FollowUpParent,
+    FollowUpChild,
+    Blocks,
+    BlockedBy,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -426,6 +452,34 @@ pub struct TaskEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskRelationship {
+    pub relationship_id: String,
+    pub source_task_id: String,
+    pub target_task_id: String,
+    pub kind: TaskRelationshipKind,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelatedTask {
+    pub relationship_id: String,
+    pub relationship_kind: TaskRelationshipKind,
+    pub relationship_role: TaskRelationshipRole,
+    pub related_task_id: String,
+    pub title: String,
+    pub status: TaskStatus,
+    pub verification_state: VerificationState,
+    pub priority: TaskPriority,
+    pub severity: TaskSeverity,
+    pub owner_agent_id: Option<String>,
+    pub blocked_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentAttention {
     pub agent_id: String,
     pub level: AttentionLevel,
@@ -531,6 +585,7 @@ pub struct ApiSnapshot {
     pub handoff_attention: Vec<HandoffAttention>,
     pub operator_actions: Vec<OperatorAction>,
     pub evidence: Vec<EvidenceRef>,
+    pub relationships: Vec<TaskRelationship>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -550,4 +605,6 @@ pub struct TaskDetail {
     pub allowed_actions: Vec<OperatorAction>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
+    pub relationships: Vec<TaskRelationship>,
+    pub related_tasks: Vec<RelatedTask>,
 }

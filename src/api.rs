@@ -130,6 +130,14 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|handoff| task_ids.contains(&handoff.task_id))
         .collect::<Vec<_>>();
+    let relationships = store
+        .list_task_relationships(None)?
+        .into_iter()
+        .filter(|relationship| {
+            task_ids.contains(&relationship.source_task_id)
+                || task_ids.contains(&relationship.target_task_id)
+        })
+        .collect::<Vec<_>>();
     let operator_actions = derive_operator_actions(
         &tasks,
         &filtered_task_attention,
@@ -161,6 +169,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             .into_iter()
             .filter(|evidence| task_ids.contains(&evidence.task_id))
             .collect(),
+        relationships,
     })
 }
 
@@ -227,6 +236,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         .collect::<Vec<_>>();
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&related_agents, &heartbeats, &agent_attention);
+    let relationships = store.list_task_relationships(Some(task_id))?;
     let operator_actions = derive_operator_actions(
         std::slice::from_ref(&task),
         std::slice::from_ref(&attention),
@@ -252,6 +262,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         allowed_actions,
         messages: store.list_council_messages(task_id)?,
         evidence: store.list_evidence(task_id)?,
+        relationships,
+        related_tasks: store.list_related_tasks(task_id)?,
     })
 }
 
@@ -842,6 +854,14 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
             "create_follow_up_task",
             format!("Create follow-up task for {}", task.title),
             "Create a follow-up task in the same project from this task detail.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::LinkTaskDependency,
+            task_level,
+            "link_task_dependency",
+            format!("Link dependency for {}", task.title),
+            "Link this task to another task as blocking or blocked-by.",
         ),
         make_task_allowed_action(
             task,
