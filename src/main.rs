@@ -5,7 +5,10 @@ use canopy::cli::{
     TaskCommand,
 };
 use canopy::models::{AgentRegistration, AgentStatus};
-use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store, TaskTriageUpdate};
+use canopy::store::{
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
+    TaskStatusUpdate, TaskTriageUpdate,
+};
 use clap::Parser;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -81,6 +84,7 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
     match command {
         TaskCommand::Create {
@@ -115,9 +119,12 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 &task_id,
                 status,
                 &changed_by,
-                verification_state,
-                blocked_reason.as_deref(),
-                closure_summary.as_deref(),
+                TaskStatusUpdate {
+                    verification_state,
+                    blocked_reason: blocked_reason.as_deref(),
+                    closure_summary: closure_summary.as_deref(),
+                    event_note: None,
+                },
             )?;
             print_json(&task)?;
         }
@@ -139,6 +146,35 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                     acknowledged,
                     owner_note: owner_note.as_deref(),
                     clear_owner_note,
+                    event_note: None,
+                },
+            )?;
+            print_json(&task)?;
+        }
+        TaskCommand::Action {
+            task_id,
+            action,
+            changed_by,
+            assigned_to,
+            priority,
+            severity,
+            blocked_reason,
+            owner_note,
+            clear_owner_note,
+            note,
+        } => {
+            let task = store.apply_task_operator_action(
+                &task_id,
+                action,
+                &changed_by,
+                TaskOperatorActionInput {
+                    assigned_to: assigned_to.as_deref(),
+                    priority,
+                    severity,
+                    blocked_reason: blocked_reason.as_deref(),
+                    owner_note: owner_note.as_deref(),
+                    clear_owner_note,
+                    note: note.as_deref(),
                 },
             )?;
             print_json(&task)?;
@@ -211,6 +247,22 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
             resolved_by,
         } => {
             let handoff = store.resolve_handoff(&handoff_id, status, &resolved_by)?;
+            print_json(&handoff)?;
+        }
+        HandoffCommand::Action {
+            handoff_id,
+            action,
+            changed_by,
+            note,
+        } => {
+            let handoff = store.apply_handoff_operator_action(
+                &handoff_id,
+                action,
+                &changed_by,
+                HandoffOperatorActionInput {
+                    note: note.as_deref(),
+                },
+            )?;
             print_json(&handoff)?;
         }
         HandoffCommand::List { task_id } => {

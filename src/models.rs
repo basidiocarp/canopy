@@ -208,6 +208,7 @@ pub enum TaskEventType {
     OwnershipTransferred,
     StatusChanged,
     TriageUpdated,
+    HandoffUpdated,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -258,13 +259,22 @@ pub enum HandoffAttentionReason {
     StaleOpenHandoff,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum OperatorActionKind {
     AcknowledgeTask,
+    UnacknowledgeTask,
     VerifyTask,
     ReassignTask,
+    SetTaskPriority,
+    SetTaskSeverity,
+    BlockTask,
+    UnblockTask,
+    UpdateTaskNote,
     FollowUpHandoff,
     ExpireHandoff,
 }
@@ -441,6 +451,8 @@ pub struct SnapshotAttentionSummary {
     pub stale_handoffs: usize,
     pub agents_needing_attention: usize,
     pub stale_agents: usize,
+    pub actionable_tasks: usize,
+    pub actionable_handoffs: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -523,6 +535,7 @@ pub struct TaskDetail {
     pub handoffs: Vec<Handoff>,
     pub handoff_attention: Vec<HandoffAttention>,
     pub operator_actions: Vec<OperatorAction>,
+    pub allowed_actions: Vec<OperatorAction>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
 }

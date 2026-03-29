@@ -1,6 +1,7 @@
 use crate::models::{
     AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort, TaskView, VerificationState,
+    HandoffType, OperatorActionKind, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort,
+    TaskView, VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -109,6 +110,16 @@ pub enum HandoffCommand {
         #[arg(long)]
         resolved_by: String,
     },
+    Action {
+        #[arg(long)]
+        handoff_id: String,
+        #[arg(long)]
+        action: OperatorActionKind,
+        #[arg(long)]
+        changed_by: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
     List {
         #[arg(long)]
         task_id: Option<String>,
@@ -166,6 +177,28 @@ pub enum TaskCommand {
         owner_note: Option<String>,
         #[arg(long, default_value_t = false)]
         clear_owner_note: bool,
+    },
+    Action {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        action: OperatorActionKind,
+        #[arg(long)]
+        changed_by: String,
+        #[arg(long)]
+        assigned_to: Option<String>,
+        #[arg(long)]
+        priority: Option<TaskPriority>,
+        #[arg(long)]
+        severity: Option<TaskSeverity>,
+        #[arg(long)]
+        blocked_reason: Option<String>,
+        #[arg(long)]
+        owner_note: Option<String>,
+        #[arg(long, default_value_t = false)]
+        clear_owner_note: bool,
+        #[arg(long)]
+        note: Option<String>,
     },
     List,
     ListView {

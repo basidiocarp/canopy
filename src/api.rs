@@ -140,6 +140,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &filtered_task_attention,
         &filtered_handoff_attention,
         &filtered_agent_attention,
+        &operator_actions,
     );
 
     Ok(ApiSnapshot {
@@ -232,6 +233,12 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         &handoff_attention,
     );
+    let allowed_actions = derive_allowed_actions(
+        &task,
+        &attention,
+        &handoffs,
+        &handoff_attention,
+    );
 
     Ok(TaskDetail {
         attention,
@@ -246,6 +253,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         handoffs,
         handoff_attention,
         operator_actions,
+        allowed_actions,
         messages: store.list_council_messages(task_id)?,
         evidence: store.list_evidence(task_id)?,
     })
@@ -720,6 +728,170 @@ fn derive_operator_actions(
     actions
 }
 
+fn derive_allowed_actions(
+    task: &Task,
+    attention: &TaskAttention,
+    handoffs: &[Handoff],
+    handoff_attention: &[HandoffAttention],
+) -> Vec<OperatorAction> {
+    let mut actions = derive_allowed_task_actions(task, attention);
+    actions.extend(derive_allowed_handoff_actions(handoffs, handoff_attention));
+    actions
+}
+
+fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<OperatorAction> {
+    let task_level = if attention.level == AttentionLevel::Normal {
+        AttentionLevel::NeedsAttention
+    } else {
+        attention.level
+    };
+
+    if matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+    ) {
+        return Vec::new();
+    }
+
+    vec![
+        make_task_allowed_action(
+            task,
+            if attention.acknowledged {
+                OperatorActionKind::UnacknowledgeTask
+            } else {
+                OperatorActionKind::AcknowledgeTask
+            },
+            task_level,
+            if attention.acknowledged { "unacknowledge" } else { "acknowledge" },
+            if attention.acknowledged {
+                format!("Unacknowledge {}", task.title)
+            } else {
+                format!("Acknowledge {}", task.title)
+            },
+            "Update operator acknowledgment for this task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::ReassignTask,
+            task_level,
+            "reassign",
+            format!("Reassign {}", task.title),
+            "Transfer task ownership to another agent.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::SetTaskPriority,
+            task_level,
+            "set_priority",
+            format!("Set priority for {}", task.title),
+            "Adjust task priority for the operator queue.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::SetTaskSeverity,
+            task_level,
+            "set_severity",
+            format!("Set severity for {}", task.title),
+            "Adjust task severity for triage and reporting.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::UpdateTaskNote,
+            task_level,
+            "note",
+            format!("Update note for {}", task.title),
+            "Add or clear operator context on the task.",
+        ),
+        make_task_allowed_action(
+            task,
+            if task.status == TaskStatus::Blocked {
+                OperatorActionKind::UnblockTask
+            } else {
+                OperatorActionKind::BlockTask
+            },
+            task_level,
+            if task.status == TaskStatus::Blocked { "unblock" } else { "block" },
+            if task.status == TaskStatus::Blocked {
+                format!("Unblock {}", task.title)
+            } else {
+                format!("Block {}", task.title)
+            },
+            "Update task lifecycle state for operator triage.",
+        ),
+    ]
+}
+
+fn derive_allowed_handoff_actions(
+    handoffs: &[Handoff],
+    handoff_attention: &[HandoffAttention],
+) -> Vec<OperatorAction> {
+    let handoff_attention_by_id: HashMap<_, _> = handoff_attention
+        .iter()
+        .map(|item| (item.handoff_id.as_str(), item))
+        .collect();
+
+    let mut actions = Vec::new();
+    for handoff in handoffs
+        .iter()
+        .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
+    {
+        let level = handoff_attention_by_id
+            .get(handoff.handoff_id.as_str())
+            .map_or(AttentionLevel::NeedsAttention, |item| item.level);
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:follow_up", handoff.handoff_id),
+            kind: OperatorActionKind::FollowUpHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Follow up {}", handoff.handoff_id),
+            summary: handoff.summary.clone(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:expire", handoff.handoff_id),
+            kind: OperatorActionKind::ExpireHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Expire {}", handoff.handoff_id),
+            summary: "Resolve the open handoff as expired.".to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+    }
+
+    actions
+}
+
+fn make_task_allowed_action(
+    task: &Task,
+    kind: OperatorActionKind,
+    level: AttentionLevel,
+    action_suffix: &str,
+    title: String,
+    summary: &str,
+) -> OperatorAction {
+    OperatorAction {
+        action_id: format!("task:{}:{action_suffix}", task.task_id),
+        kind,
+        target_kind: OperatorActionTargetKind::Task,
+        level,
+        task_id: Some(task.task_id.clone()),
+        handoff_id: None,
+        agent_id: task.owner_agent_id.clone(),
+        title,
+        summary: summary.to_string(),
+        due_at: None,
+        expires_at: None,
+    }
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -951,7 +1123,19 @@ fn summarize_attention(
     task_attention: &[TaskAttention],
     handoff_attention: &[HandoffAttention],
     agent_attention: &[AgentAttention],
+    operator_actions: &[OperatorAction],
 ) -> SnapshotAttentionSummary {
+    let actionable_task_count = operator_actions
+        .iter()
+        .filter_map(|action| action.task_id.as_deref())
+        .collect::<HashSet<_>>()
+        .len();
+    let actionable_handoff_count = operator_actions
+        .iter()
+        .filter_map(|action| action.handoff_id.as_deref())
+        .collect::<HashSet<_>>()
+        .len();
+
     SnapshotAttentionSummary {
         tasks_needing_attention: task_attention
             .iter()
@@ -977,6 +1161,8 @@ fn summarize_attention(
             .iter()
             .filter(|attention| attention.freshness == Freshness::Stale)
             .count(),
+        actionable_tasks: actionable_task_count,
+        actionable_handoffs: actionable_handoff_count,
     }
 }
 

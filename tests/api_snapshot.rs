@@ -193,6 +193,8 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
     assert_eq!(snapshot["attention"]["tasks_needing_attention"], 1);
     assert_eq!(snapshot["attention"]["critical_tasks"], 0);
+    assert_eq!(snapshot["attention"]["actionable_tasks"], 1);
+    assert_eq!(snapshot["attention"]["actionable_handoffs"], 0);
     assert_eq!(
         snapshot["task_attention"]
             .as_array()
@@ -318,6 +320,17 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .len(),
         2
     );
+    let allowed_actions = detail["allowed_actions"]
+        .as_array()
+        .expect("allowed actions");
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "acknowledge_task"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "reassign_task"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_priority"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_severity"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "update_task_note"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "block_task"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "follow_up_handoff"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "expire_handoff"));
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");
     assert!(detail["evidence"][0]["related_memory_query"].is_null());

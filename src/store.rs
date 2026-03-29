@@ -1,8 +1,8 @@
 use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
-    CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType, Task,
-    TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskSeverity, TaskStatus,
-    VerificationState,
+    CouncilMessageType, EvidenceRef, EvidenceSourceKind, Handoff, HandoffStatus, HandoffType,
+    OperatorActionKind, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority,
+    TaskSeverity, TaskStatus, VerificationState,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -67,12 +67,37 @@ pub struct TaskTriageUpdate<'a> {
     pub acknowledged: Option<bool>,
     pub owner_note: Option<&'a str>,
     pub clear_owner_note: bool,
+    pub event_note: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HandoffTiming<'a> {
     pub due_at: Option<&'a str>,
     pub expires_at: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskStatusUpdate<'a> {
+    pub verification_state: Option<VerificationState>,
+    pub blocked_reason: Option<&'a str>,
+    pub closure_summary: Option<&'a str>,
+    pub event_note: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskOperatorActionInput<'a> {
+    pub assigned_to: Option<&'a str>,
+    pub priority: Option<TaskPriority>,
+    pub severity: Option<TaskSeverity>,
+    pub blocked_reason: Option<&'a str>,
+    pub owner_note: Option<&'a str>,
+    pub clear_owner_note: bool,
+    pub note: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HandoffOperatorActionInput<'a> {
+    pub note: Option<&'a str>,
 }
 
 const BASE_SCHEMA: &str = r"
@@ -464,23 +489,23 @@ impl Store {
         task_id: &str,
         status: TaskStatus,
         changed_by: &str,
-        verification_state: Option<VerificationState>,
-        blocked_reason: Option<&str>,
-        closure_summary: Option<&str>,
+        update: TaskStatusUpdate<'_>,
     ) -> StoreResult<Task> {
         self.ensure_task_exists(task_id)?;
         self.in_transaction(|conn| {
             let current = get_task_in_connection(conn, task_id)?;
             let from_status = current.status;
-            let next_verification = verification_state.unwrap_or(current.verification_state);
+            let next_verification = update
+                .verification_state
+                .unwrap_or(current.verification_state);
 
-            if status == TaskStatus::Blocked && blocked_reason.is_none() {
+            if status == TaskStatus::Blocked && update.blocked_reason.is_none() {
                 return Err(StoreError::Validation(
                     "blocked tasks require a blocked reason".to_string(),
                 ));
             }
 
-            let (verified_by, verified_at) = if verification_state.is_some() {
+            let (verified_by, verified_at) = if update.verification_state.is_some() {
                 (Some(changed_by), Some("CURRENT_TIMESTAMP"))
             } else {
                 (current.verified_by.as_deref(), None)
@@ -510,27 +535,38 @@ impl Store {
                     status.to_string(),
                     next_verification.to_string(),
                     if status == TaskStatus::Blocked {
-                        blocked_reason
+                        update.blocked_reason
                     } else {
                         None
                     },
                     verified_by,
                     verified_at,
                     if is_terminal { Some(changed_by) } else { None },
-                    if is_terminal { closure_summary } else { None },
+                    if is_terminal {
+                        update.closure_summary
+                    } else {
+                        None
+                    },
                     is_terminal,
                 ],
             )?;
 
             sync_owner_for_task_status(conn, task_id, status)?;
             let updated = get_task_in_connection(conn, task_id)?;
-            let note = match status {
-                TaskStatus::Blocked => blocked_reason,
+            let mut notes = Vec::new();
+            if let Some(note) = match status {
+                TaskStatus::Blocked => update.blocked_reason,
                 TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled => {
-                    closure_summary
+                    update.closure_summary
                 }
                 _ => None,
-            };
+            } {
+                notes.push(note.to_string());
+            }
+            if let Some(event_note) = update.event_note {
+                notes.push(format!("note={event_note}"));
+            }
+            let note = (!notes.is_empty()).then(|| notes.join("; "));
             record_task_event_in_connection(
                 conn,
                 &TaskEventWrite {
@@ -541,7 +577,7 @@ impl Store {
                     to_status: status,
                     verification_state: Some(updated.verification_state),
                     owner_agent_id: updated.owner_agent_id.as_deref(),
-                    note,
+                    note: note.as_deref(),
                 },
             )?;
             Ok(updated)
@@ -619,20 +655,28 @@ impl Store {
 
             let updated = get_task_in_connection(conn, task_id)?;
             let mut notes = Vec::new();
-            if update.priority.is_some() {
-                notes.push(format!("priority={}", updated.priority));
+            if let Some(priority) = update.priority {
+                notes.push(format!("priority:{}->{}", current.priority, priority));
             }
-            if update.severity.is_some() {
-                notes.push(format!("severity={}", updated.severity));
+            if let Some(severity) = update.severity {
+                notes.push(format!("severity:{}->{}", current.severity, severity));
             }
             if let Some(acknowledged) = update.acknowledged {
-                notes.push(format!("acknowledged={acknowledged}"));
+                notes.push(format!(
+                    "acknowledged:{}->{}",
+                    current.acknowledged_at.is_some(),
+                    acknowledged
+                ));
             }
-            if update.owner_note.is_some() {
-                notes.push("owner_note_updated=true".to_string());
+            if update.owner_note.is_some() || update.clear_owner_note {
+                let next_owner_note = updated.owner_note.as_deref().unwrap_or("");
+                let previous_owner_note = current.owner_note.as_deref().unwrap_or("");
+                notes.push(format!(
+                    "owner_note:{previous_owner_note:?}->{next_owner_note:?}"
+                ));
             }
-            if update.clear_owner_note {
-                notes.push("owner_note_cleared=true".to_string());
+            if let Some(event_note) = update.event_note {
+                notes.push(format!("note={event_note}"));
             }
             let note = if notes.is_empty() {
                 None
@@ -655,6 +699,55 @@ impl Store {
             )?;
             Ok(updated)
         })
+    }
+
+    /// Applies a task-scoped operator action using runtime-owned semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the action is invalid for tasks, required fields are
+    /// missing, or the underlying write fails.
+    pub fn apply_task_operator_action(
+        &self,
+        task_id: &str,
+        action: OperatorActionKind,
+        changed_by: &str,
+        input: TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        if let Some(update) = task_operator_triage_update(action, input)? {
+            return self.update_task_triage(task_id, changed_by, update);
+        }
+
+        if let Some((status, update)) =
+            task_operator_status_update(&self.get_task(task_id)?, action, input)?
+        {
+            return self.update_task_status(task_id, status, changed_by, update);
+        }
+
+        match action {
+            OperatorActionKind::ReassignTask => self.assign_task(
+                task_id,
+                input.assigned_to.ok_or_else(|| {
+                    StoreError::Validation(
+                        "reassign_task requires an assigned_to agent".to_string(),
+                    )
+                })?,
+                changed_by,
+                input.note,
+            ),
+            OperatorActionKind::VerifyTask
+            | OperatorActionKind::FollowUpHandoff
+            | OperatorActionKind::ExpireHandoff => Err(StoreError::Validation(
+                format!("operator action {action} is not valid for tasks"),
+            )),
+            OperatorActionKind::AcknowledgeTask
+            | OperatorActionKind::UnacknowledgeTask
+            | OperatorActionKind::SetTaskPriority
+            | OperatorActionKind::SetTaskSeverity
+            | OperatorActionKind::BlockTask
+            | OperatorActionKind::UnblockTask
+            | OperatorActionKind::UpdateTaskNote => unreachable!("handled above"),
+        }
     }
 
     /// Loads a single handoff by id.
@@ -786,9 +879,98 @@ impl Store {
             } else {
                 touch_task_in_connection(conn, &handoff.task_id)?;
             }
+            let task = get_task_in_connection(conn, &handoff.task_id)?;
+            let note = format!(
+                "handoff_action=resolve; handoff_id={handoff_id}; status:{}->{}",
+                handoff.status, status
+            );
+
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id: &handoff.task_id,
+                    event_type: TaskEventType::HandoffUpdated,
+                    actor: resolved_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    note: Some(note.as_str()),
+                },
+            )?;
 
             get_handoff_in_connection(conn, handoff_id)
         })
+    }
+
+    /// Applies a handoff-scoped operator action using runtime-owned semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the action is invalid for handoffs or the write
+    /// fails.
+    pub fn apply_handoff_operator_action(
+        &self,
+        handoff_id: &str,
+        action: OperatorActionKind,
+        changed_by: &str,
+        input: HandoffOperatorActionInput<'_>,
+    ) -> StoreResult<Handoff> {
+        match action {
+            OperatorActionKind::ExpireHandoff => {
+                let _ = input;
+                self.resolve_handoff(handoff_id, HandoffStatus::Expired, changed_by)
+            }
+            OperatorActionKind::FollowUpHandoff => self.in_transaction(|conn| {
+                let handoff = get_handoff_in_connection(conn, handoff_id)?;
+                if handoff.status != HandoffStatus::Open {
+                    return Err(StoreError::Validation(
+                        "only open handoffs can be followed up".to_string(),
+                    ));
+                }
+                conn.execute(
+                    r"
+                    UPDATE handoffs
+                    SET updated_at = CURRENT_TIMESTAMP
+                    WHERE handoff_id = ?1
+                    ",
+                    [handoff_id],
+                )?;
+                touch_task_in_connection(conn, &handoff.task_id)?;
+                let task = get_task_in_connection(conn, &handoff.task_id)?;
+                let base_note = format!(
+                    "handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true"
+                );
+                let note = input.note.map_or(base_note.clone(), |extra| {
+                    format!("{base_note}; note={extra}")
+                });
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id: &handoff.task_id,
+                        event_type: TaskEventType::HandoffUpdated,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_handoff_in_connection(conn, handoff_id)
+            }),
+            OperatorActionKind::AcknowledgeTask
+            | OperatorActionKind::UnacknowledgeTask
+            | OperatorActionKind::VerifyTask
+            | OperatorActionKind::ReassignTask
+            | OperatorActionKind::SetTaskPriority
+            | OperatorActionKind::SetTaskSeverity
+            | OperatorActionKind::BlockTask
+            | OperatorActionKind::UnblockTask
+            | OperatorActionKind::UpdateTaskNote => Err(StoreError::Validation(format!(
+                "operator action {action} is not valid for handoffs"
+            ))),
+        }
     }
 
     /// Lists handoffs globally or for one task.
@@ -1419,6 +1601,22 @@ fn assign_task_in_connection(
     assigned_by: &str,
     reason: Option<&str>,
 ) -> StoreResult<()> {
+    let assignee_current_task = conn
+        .query_row(
+            "SELECT current_task_id FROM agents WHERE agent_id = ?1",
+            [assigned_to],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if assignee_current_task
+        .as_deref()
+        .is_some_and(|current_task_id| current_task_id != task_id)
+    {
+        return Err(StoreError::Validation(
+            "assigned agent already owns another active task".to_string(),
+        ));
+    }
     let from_status = conn
         .query_row(
             "SELECT status FROM tasks WHERE task_id = ?1",
@@ -1468,6 +1666,16 @@ fn assign_task_in_connection(
     } else {
         TaskEventType::Assigned
     };
+    let owner_change_note = match previous_owner.as_deref() {
+        Some(previous_owner) if previous_owner != assigned_to => {
+            format!("owner:{previous_owner}->{assigned_to}")
+        }
+        Some(previous_owner) => format!("owner:{previous_owner}->{assigned_to}"),
+        None => format!("owner:none->{assigned_to}"),
+    };
+    let note = reason.map_or(owner_change_note.clone(), |reason| {
+        format!("{owner_change_note}; note={reason}")
+    });
     record_task_event_in_connection(
         conn,
         &TaskEventWrite {
@@ -1478,7 +1686,7 @@ fn assign_task_in_connection(
             to_status: TaskStatus::Assigned,
             verification_state: None,
             owner_agent_id: Some(assigned_to),
-            note: reason,
+            note: Some(note.as_str()),
         },
     )?;
 
@@ -1576,6 +1784,101 @@ fn sync_owner_for_task_status(
     )?;
 
     Ok(())
+}
+
+fn task_operator_triage_update(
+    action: OperatorActionKind,
+    input: TaskOperatorActionInput<'_>,
+) -> StoreResult<Option<TaskTriageUpdate<'_>>> {
+    let update = match action {
+        OperatorActionKind::AcknowledgeTask => TaskTriageUpdate {
+            acknowledged: Some(true),
+            event_note: input.note,
+            ..TaskTriageUpdate::default()
+        },
+        OperatorActionKind::UnacknowledgeTask => TaskTriageUpdate {
+            acknowledged: Some(false),
+            event_note: input.note,
+            ..TaskTriageUpdate::default()
+        },
+        OperatorActionKind::SetTaskPriority => TaskTriageUpdate {
+            priority: Some(input.priority.ok_or_else(|| {
+                StoreError::Validation("set_task_priority requires a priority value".to_string())
+            })?),
+            event_note: input.note,
+            ..TaskTriageUpdate::default()
+        },
+        OperatorActionKind::SetTaskSeverity => TaskTriageUpdate {
+            severity: Some(input.severity.ok_or_else(|| {
+                StoreError::Validation("set_task_severity requires a severity value".to_string())
+            })?),
+            event_note: input.note,
+            ..TaskTriageUpdate::default()
+        },
+        OperatorActionKind::UpdateTaskNote => TaskTriageUpdate {
+            owner_note: input.owner_note,
+            clear_owner_note: input.clear_owner_note,
+            event_note: input.note,
+            ..TaskTriageUpdate::default()
+        },
+        OperatorActionKind::VerifyTask
+        | OperatorActionKind::ReassignTask
+        | OperatorActionKind::BlockTask
+        | OperatorActionKind::UnblockTask
+        | OperatorActionKind::FollowUpHandoff
+        | OperatorActionKind::ExpireHandoff => return Ok(None),
+    };
+
+    Ok(Some(update))
+}
+
+fn task_operator_status_update<'a>(
+    task: &Task,
+    action: OperatorActionKind,
+    input: TaskOperatorActionInput<'a>,
+) -> StoreResult<Option<(TaskStatus, TaskStatusUpdate<'a>)>> {
+    let update = match action {
+        OperatorActionKind::BlockTask => (
+            TaskStatus::Blocked,
+            TaskStatusUpdate {
+                blocked_reason: Some(input.blocked_reason.ok_or_else(|| {
+                    StoreError::Validation("block_task requires a blocked reason".to_string())
+                })?),
+                event_note: input.note,
+                ..TaskStatusUpdate::default()
+            },
+        ),
+        OperatorActionKind::UnblockTask => {
+            if task.status != TaskStatus::Blocked {
+                return Err(StoreError::Validation(
+                    "only blocked tasks can be unblocked".to_string(),
+                ));
+            }
+            let target_status = if task.owner_agent_id.is_some() {
+                TaskStatus::Assigned
+            } else {
+                TaskStatus::Open
+            };
+            (
+                target_status,
+                TaskStatusUpdate {
+                    event_note: input.note,
+                    ..TaskStatusUpdate::default()
+                },
+            )
+        }
+        OperatorActionKind::AcknowledgeTask
+        | OperatorActionKind::UnacknowledgeTask
+        | OperatorActionKind::VerifyTask
+        | OperatorActionKind::ReassignTask
+        | OperatorActionKind::SetTaskPriority
+        | OperatorActionKind::SetTaskSeverity
+        | OperatorActionKind::UpdateTaskNote
+        | OperatorActionKind::FollowUpHandoff
+        | OperatorActionKind::ExpireHandoff => return Ok(None),
+    };
+
+    Ok(Some(update))
 }
 
 fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {

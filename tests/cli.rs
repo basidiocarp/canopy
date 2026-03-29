@@ -403,3 +403,214 @@ fn cli_updates_triage_metadata_and_supports_due_handoffs() {
             "\"due_at\": \"2000-01-01T00:00:00Z\"",
         ));
 }
+
+#[test]
+fn cli_applies_operator_actions_and_records_runtime_history() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Operator task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "assign",
+            "--task-id",
+            &task_id,
+            "--assigned-to",
+            "codex-1",
+            "--assigned-by",
+            "operator",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "acknowledge_task",
+            "--changed-by",
+            "operator",
+            "--note",
+            "triage started",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"acknowledged_by\": \"operator\""));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "reassign_task",
+            "--changed-by",
+            "operator",
+            "--assigned-to",
+            "claude-1",
+            "--note",
+            "handoff to reviewer",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"owner_agent_id\": \"claude-1\""));
+
+    let handoff_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            &task_id,
+            "--from-agent-id",
+            "claude-1",
+            "--to-agent-id",
+            "codex-1",
+            "--handoff-type",
+            "request_review",
+            "--summary",
+            "check the change",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let handoff: Value = serde_json::from_slice(&handoff_output).expect("parse handoff");
+    let handoff_id = handoff["handoff_id"]
+        .as_str()
+        .expect("handoff id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "action",
+            "--handoff-id",
+            &handoff_id,
+            "--action",
+            "follow_up_handoff",
+            "--changed-by",
+            "operator",
+            "--note",
+            "need review before release",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"open\""));
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse task detail");
+    let events = detail["events"].as_array().expect("events");
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "triage_updated"
+                && event["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("acknowledged:false->true"))
+        }),
+        "expected acknowledge history event"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "ownership_transferred"
+                && event["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("owner:codex-1->claude-1"))
+        }),
+        "expected reassignment history event"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "handoff_updated"
+                && event["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("handoff_action=follow_up"))
+        }),
+        "expected handoff follow-up history event"
+    );
+}

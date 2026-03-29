@@ -2,7 +2,7 @@ use canopy::models::{
     AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
     HandoffType, TaskEventType, TaskStatus, VerificationState,
 };
-use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store};
+use canopy::store::{EvidenceLinkRefs, HandoffTiming, Store, TaskStatusUpdate};
 use tempfile::tempdir;
 
 #[test]
@@ -115,6 +115,14 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             })
             .is_err()
     );
+    let second_task = store
+        .create_task("Second task", None, "operator", "/tmp/project")
+        .expect("create second task");
+    assert!(
+        store
+            .assign_task(&second_task.task_id, &agent.agent_id, "operator", None)
+            .is_err()
+    );
 
     let heartbeat = store
         .heartbeat_agent(
@@ -131,8 +139,9 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     assert!(heartbeat.heartbeat_at.is_some());
 
     let tasks = store.list_tasks().expect("list tasks");
-    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0], assigned);
+    assert_eq!(tasks[1].task_id, second_task.task_id);
     let shown = store.get_task(&task.task_id).expect("show task");
     assert_eq!(shown, assigned);
 
@@ -227,9 +236,10 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             &task.task_id,
             TaskStatus::ReviewRequired,
             "operator",
-            Some(VerificationState::Pending),
-            None,
-            None,
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Pending),
+                ..TaskStatusUpdate::default()
+            },
         )
         .expect("mark review required");
     assert_eq!(review_required.status, TaskStatus::ReviewRequired);
@@ -246,9 +256,10 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             &task.task_id,
             TaskStatus::Blocked,
             "operator",
-            None,
-            Some("waiting on a second opinion"),
-            None,
+            TaskStatusUpdate {
+                blocked_reason: Some("waiting on a second opinion"),
+                ..TaskStatusUpdate::default()
+            },
         )
         .expect("mark blocked");
     assert_eq!(blocked.status, TaskStatus::Blocked);
@@ -262,9 +273,11 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             &task.task_id,
             TaskStatus::Completed,
             "claude-1",
-            Some(VerificationState::Passed),
-            None,
-            Some("review completed and accepted"),
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("review completed and accepted"),
+                ..TaskStatusUpdate::default()
+            },
         )
         .expect("complete task");
     assert_eq!(completed.status, TaskStatus::Completed);
@@ -280,7 +293,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let events = store
         .list_task_events(&task.task_id)
         .expect("list task events");
-    assert_eq!(events.len(), 6);
+    assert_eq!(events.len(), 7);
     assert_eq!(events[1].event_type, TaskEventType::Assigned);
     assert_eq!(events[1].to_status, TaskStatus::Assigned);
     assert_eq!(
@@ -292,26 +305,31 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         events[2].owner_agent_id.as_deref(),
         Some(reviewer.agent_id.as_str())
     );
-    assert_eq!(events[3].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[3].to_status, TaskStatus::ReviewRequired);
+    assert_eq!(events[3].event_type, TaskEventType::HandoffUpdated);
+    assert_eq!(events[3].to_status, TaskStatus::Assigned);
+    let handoff_note = events[3].note.as_deref().expect("handoff note");
+    assert!(handoff_note.starts_with("handoff_action=resolve; handoff_id="));
+    assert!(handoff_note.ends_with("; status:open->accepted"));
+    assert_eq!(events[4].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[4].to_status, TaskStatus::ReviewRequired);
     assert_eq!(
-        events[3].verification_state,
+        events[4].verification_state,
         Some(VerificationState::Pending)
     );
-    assert_eq!(events[4].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[4].to_status, TaskStatus::Blocked);
+    assert_eq!(events[5].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[5].to_status, TaskStatus::Blocked);
     assert_eq!(
-        events[4].note.as_deref(),
+        events[5].note.as_deref(),
         Some("waiting on a second opinion")
     );
-    assert_eq!(events[5].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[5].to_status, TaskStatus::Completed);
+    assert_eq!(events[6].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[6].to_status, TaskStatus::Completed);
     assert_eq!(
-        events[5].verification_state,
+        events[6].verification_state,
         Some(VerificationState::Passed)
     );
     assert_eq!(
-        events[5].note.as_deref(),
+        events[6].note.as_deref(),
         Some("review completed and accepted")
     );
 
