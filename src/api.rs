@@ -130,6 +130,20 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         derive_review_with_graph_pressure_task_ids(&tasks, &relationship_summaries);
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(&tasks, &handoffs, now);
+    let due_soon_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            now,
+            Freshness::Stale,
+        );
     let review_decision_follow_through_task_ids =
         derive_review_decision_follow_through_task_ids(&tasks, &handoffs, now);
     let review_awaiting_support_task_ids =
@@ -217,6 +231,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &assigned_awaiting_claim_task_ids,
             &review_with_graph_pressure_task_ids,
             &review_handoff_follow_through_task_ids,
+            &due_soon_review_handoff_follow_through_task_ids,
+            &overdue_review_handoff_follow_through_task_ids,
             &review_decision_follow_through_task_ids,
             &review_awaiting_support_task_ids,
             &review_ready_for_decision_task_ids,
@@ -594,6 +610,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::ReviewWithGraphPressure;
             options.sort = TaskSort::Attention;
         }
+        SnapshotPreset::DueSoonReviewHandoffFollowThrough => {
+            options.view = TaskView::DueSoonReviewHandoffFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::OverdueReviewHandoffFollowThrough => {
+            options.view = TaskView::OverdueReviewHandoffFollowThrough;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::ReviewHandoffFollowThrough => {
             options.view = TaskView::ReviewHandoffFollowThrough;
             options.sort = TaskSort::Attention;
@@ -729,6 +753,8 @@ fn matches_view(
     assigned_awaiting_claim_task_ids: &HashSet<String>,
     review_with_graph_pressure_task_ids: &HashSet<String>,
     review_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_review_handoff_follow_through_task_ids: &HashSet<String>,
+    overdue_review_handoff_follow_through_task_ids: &HashSet<String>,
     review_decision_follow_through_task_ids: &HashSet<String>,
     review_awaiting_support_task_ids: &HashSet<String>,
     review_ready_for_decision_task_ids: &HashSet<String>,
@@ -743,6 +769,39 @@ fn matches_view(
     relationship_summary: Option<&TaskRelationshipSummary>,
     view: TaskView,
 ) -> bool {
+    if let Some(matches) = matches_review_view(
+        &task.task_id,
+        view,
+        review_with_graph_pressure_task_ids,
+        review_handoff_follow_through_task_ids,
+        due_soon_review_handoff_follow_through_task_ids,
+        overdue_review_handoff_follow_through_task_ids,
+        review_decision_follow_through_task_ids,
+        review_awaiting_support_task_ids,
+        review_ready_for_decision_task_ids,
+        review_ready_for_closeout_task_ids,
+    ) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_handoff_view(
+        &task.task_id,
+        view,
+        open_handoff_task_ids,
+        pending_handoff_acceptance_task_ids,
+        due_soon_handoff_acceptance_task_ids,
+        overdue_handoff_acceptance_task_ids,
+        accepted_handoff_follow_through_task_ids,
+        due_soon_accepted_handoff_follow_through_task_ids,
+        overdue_accepted_handoff_follow_through_task_ids,
+    ) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_deadline_view(task, deadline_summary, view) {
+        return matches;
+    }
+
     match view {
         TaskView::All => true,
         TaskView::Active => matches!(
@@ -763,6 +822,55 @@ fn matches_view(
                 })
         }
         TaskView::PausedResumable => paused_resumable_task_ids.contains(&task.task_id),
+        TaskView::DueSoon
+        | TaskView::DueSoonExecution
+        | TaskView::DueSoonReview
+        | TaskView::OverdueExecution
+        | TaskView::OverdueExecutionOwned
+        | TaskView::OverdueExecutionUnclaimed
+        | TaskView::OverdueReview => unreachable!("deadline views handled above"),
+        TaskView::AwaitingHandoffAcceptance
+        | TaskView::DueSoonHandoffAcceptance
+        | TaskView::OverdueHandoffAcceptance
+        | TaskView::AcceptedHandoffFollowThrough
+        | TaskView::DueSoonAcceptedHandoffFollowThrough
+        | TaskView::OverdueAcceptedHandoffFollowThrough
+        | TaskView::Handoffs => unreachable!("handoff views handled above"),
+        TaskView::Blocked => {
+            task.status == TaskStatus::Blocked
+                || task.verification_state == VerificationState::Failed
+        }
+        TaskView::BlockedByDependencies => {
+            task.status == TaskStatus::Blocked
+                && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
+        }
+        TaskView::ReviewWithGraphPressure
+        | TaskView::DueSoonReviewHandoffFollowThrough
+        | TaskView::OverdueReviewHandoffFollowThrough
+        | TaskView::ReviewHandoffFollowThrough
+        | TaskView::ReviewDecisionFollowThrough
+        | TaskView::ReviewAwaitingSupport
+        | TaskView::ReviewReadyForDecision
+        | TaskView::ReviewReadyForCloseout => unreachable!("review queue views handled above"),
+        TaskView::Review => {
+            task.status == TaskStatus::ReviewRequired
+                || task.verification_state == VerificationState::Pending
+        }
+        TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
+            summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
+        }),
+        TaskView::Attention => {
+            task_attention.is_some_and(|attention| attention.level != AttentionLevel::Normal)
+        }
+    }
+}
+
+fn matches_deadline_view(
+    task: &Task,
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    view: TaskView,
+) -> Option<bool> {
+    Some(match view {
         TaskView::DueSoon => deadline_summary
             .is_some_and(|summary| summary.active_deadline_state == DeadlineState::DueSoon),
         TaskView::DueSoonExecution => deadline_summary
@@ -785,60 +893,76 @@ fn matches_view(
         TaskView::OverdueReview => {
             deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::Overdue)
         }
-        TaskView::AwaitingHandoffAcceptance => {
-            pending_handoff_acceptance_task_ids.contains(&task.task_id)
+        _ => return None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn matches_review_view(
+    task_id: &str,
+    view: TaskView,
+    review_with_graph_pressure_task_ids: &HashSet<String>,
+    review_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_review_handoff_follow_through_task_ids: &HashSet<String>,
+    overdue_review_handoff_follow_through_task_ids: &HashSet<String>,
+    review_decision_follow_through_task_ids: &HashSet<String>,
+    review_awaiting_support_task_ids: &HashSet<String>,
+    review_ready_for_decision_task_ids: &HashSet<String>,
+    review_ready_for_closeout_task_ids: &HashSet<String>,
+) -> Option<bool> {
+    Some(match view {
+        TaskView::ReviewWithGraphPressure => review_with_graph_pressure_task_ids.contains(task_id),
+        TaskView::DueSoonReviewHandoffFollowThrough => {
+            due_soon_review_handoff_follow_through_task_ids.contains(task_id)
         }
-        TaskView::DueSoonHandoffAcceptance => {
-            due_soon_handoff_acceptance_task_ids.contains(&task.task_id)
-        }
-        TaskView::OverdueHandoffAcceptance => {
-            overdue_handoff_acceptance_task_ids.contains(&task.task_id)
-        }
-        TaskView::AcceptedHandoffFollowThrough => {
-            accepted_handoff_follow_through_task_ids.contains(&task.task_id)
-        }
-        TaskView::DueSoonAcceptedHandoffFollowThrough => {
-            due_soon_accepted_handoff_follow_through_task_ids.contains(&task.task_id)
-        }
-        TaskView::OverdueAcceptedHandoffFollowThrough => {
-            overdue_accepted_handoff_follow_through_task_ids.contains(&task.task_id)
-        }
-        TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
-        TaskView::Blocked => {
-            task.status == TaskStatus::Blocked
-                || task.verification_state == VerificationState::Failed
-        }
-        TaskView::BlockedByDependencies => {
-            task.status == TaskStatus::Blocked
-                && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
-        }
-        TaskView::ReviewWithGraphPressure => {
-            review_with_graph_pressure_task_ids.contains(&task.task_id)
+        TaskView::OverdueReviewHandoffFollowThrough => {
+            overdue_review_handoff_follow_through_task_ids.contains(task_id)
         }
         TaskView::ReviewHandoffFollowThrough => {
-            review_handoff_follow_through_task_ids.contains(&task.task_id)
+            review_handoff_follow_through_task_ids.contains(task_id)
         }
         TaskView::ReviewDecisionFollowThrough => {
-            review_decision_follow_through_task_ids.contains(&task.task_id)
+            review_decision_follow_through_task_ids.contains(task_id)
         }
-        TaskView::ReviewAwaitingSupport => review_awaiting_support_task_ids.contains(&task.task_id),
-        TaskView::ReviewReadyForDecision => {
-            review_ready_for_decision_task_ids.contains(&task.task_id)
+        TaskView::ReviewAwaitingSupport => review_awaiting_support_task_ids.contains(task_id),
+        TaskView::ReviewReadyForDecision => review_ready_for_decision_task_ids.contains(task_id),
+        TaskView::ReviewReadyForCloseout => review_ready_for_closeout_task_ids.contains(task_id),
+        _ => return None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn matches_handoff_view(
+    task_id: &str,
+    view: TaskView,
+    open_handoff_task_ids: &HashSet<String>,
+    pending_handoff_acceptance_task_ids: &HashSet<String>,
+    due_soon_handoff_acceptance_task_ids: &HashSet<String>,
+    overdue_handoff_acceptance_task_ids: &HashSet<String>,
+    accepted_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_accepted_handoff_follow_through_task_ids: &HashSet<String>,
+    overdue_accepted_handoff_follow_through_task_ids: &HashSet<String>,
+) -> Option<bool> {
+    Some(match view {
+        TaskView::AwaitingHandoffAcceptance => {
+            pending_handoff_acceptance_task_ids.contains(task_id)
         }
-        TaskView::ReviewReadyForCloseout => {
-            review_ready_for_closeout_task_ids.contains(&task.task_id)
+        TaskView::DueSoonHandoffAcceptance => {
+            due_soon_handoff_acceptance_task_ids.contains(task_id)
         }
-        TaskView::Review => {
-            task.status == TaskStatus::ReviewRequired
-                || task.verification_state == VerificationState::Pending
+        TaskView::OverdueHandoffAcceptance => overdue_handoff_acceptance_task_ids.contains(task_id),
+        TaskView::AcceptedHandoffFollowThrough => {
+            accepted_handoff_follow_through_task_ids.contains(task_id)
         }
-        TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
-            summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
-        }),
-        TaskView::Attention => {
-            task_attention.is_some_and(|attention| attention.level != AttentionLevel::Normal)
+        TaskView::DueSoonAcceptedHandoffFollowThrough => {
+            due_soon_accepted_handoff_follow_through_task_ids.contains(task_id)
         }
-    }
+        TaskView::OverdueAcceptedHandoffFollowThrough => {
+            overdue_accepted_handoff_follow_through_task_ids.contains(task_id)
+        }
+        TaskView::Handoffs => open_handoff_task_ids.contains(task_id),
+        _ => return None,
+    })
 }
 
 fn matches_filters(
@@ -2523,9 +2647,30 @@ fn derive_review_handoff_follow_through_task_ids(
     handoffs: &[Handoff],
     now: OffsetDateTime,
 ) -> HashSet<String> {
+    derive_review_handoff_follow_through_task_ids_inner(tasks, handoffs, now, None)
+}
+
+fn derive_review_handoff_follow_through_task_ids_with_freshness(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+    freshness: Freshness,
+) -> HashSet<String> {
+    derive_review_handoff_follow_through_task_ids_inner(tasks, handoffs, now, Some(freshness))
+}
+
+fn derive_review_handoff_follow_through_task_ids_inner(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+    freshness: Option<Freshness>,
+) -> HashSet<String> {
     let handoff_task_ids: HashSet<_> = handoffs
         .iter()
         .filter(|handoff| review_handoff_requires_follow_through(handoff, now))
+        .filter(|handoff| {
+            freshness.is_none_or(|freshness| handoff_freshness(handoff, now) == freshness)
+        })
         .map(|handoff| handoff.task_id.as_str())
         .collect();
 
