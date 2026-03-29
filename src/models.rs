@@ -208,7 +208,11 @@ pub enum TaskEventType {
     OwnershipTransferred,
     StatusChanged,
     TriageUpdated,
+    HandoffCreated,
     HandoffUpdated,
+    CouncilMessagePosted,
+    EvidenceAttached,
+    FollowUpTaskCreated,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -275,6 +279,10 @@ pub enum OperatorActionKind {
     BlockTask,
     UnblockTask,
     UpdateTaskNote,
+    CreateHandoff,
+    PostCouncilMessage,
+    AttachEvidence,
+    CreateFollowUpTask,
     AcceptHandoff,
     RejectHandoff,
     CancelHandoff,

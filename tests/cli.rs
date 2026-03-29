@@ -245,6 +245,174 @@ fn cli_rejects_invalid_council_message_type() {
 }
 
 #[test]
+fn cli_task_creation_actions_flow_through_task_action_command() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Coordinate next task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "create_handoff",
+            "--changed-by",
+            "operator",
+            "--from-agent-id",
+            "codex-1",
+            "--to-agent-id",
+            "claude-1",
+            "--handoff-type",
+            "request_review",
+            "--handoff-summary",
+            "review the operator plan",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "post_council_message",
+            "--changed-by",
+            "operator",
+            "--author-agent-id",
+            "codex-1",
+            "--message-type",
+            "status",
+            "--message-body",
+            "Coordination started.",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "attach_evidence",
+            "--changed-by",
+            "operator",
+            "--evidence-source-kind",
+            "manual_note",
+            "--evidence-source-ref",
+            "operator-note-1",
+            "--evidence-label",
+            "Operator note",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "create_follow_up_task",
+            "--changed-by",
+            "operator",
+            "--follow-up-title",
+            "Finish review fallout",
+            "--follow-up-description",
+            "Track the remaining coordination work.",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"handoff_created\""))
+        .stdout(predicate::str::contains("\"council_message_posted\""))
+        .stdout(predicate::str::contains("\"evidence_attached\""))
+        .stdout(predicate::str::contains("\"follow_up_task_created\""));
+}
+
+#[test]
 fn cli_requires_blocked_reason_for_blocked_status() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");

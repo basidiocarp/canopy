@@ -3,7 +3,8 @@ use canopy::models::{
     HandoffType, OperatorActionKind, TaskEventType, TaskStatus, VerificationState,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskStatusUpdate,
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
+    TaskStatusUpdate,
 };
 use tempfile::tempdir;
 
@@ -363,6 +364,210 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         task_heartbeats
             .iter()
             .any(|heartbeat| heartbeat.agent_id == agent.agent_id)
+    );
+}
+
+#[test]
+fn task_creation_actions_create_artifacts_and_record_history() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    for agent in [
+        AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        },
+        AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        },
+    ] {
+        store.register_agent(&agent).expect("register agent");
+    }
+
+    let task = store
+        .create_task("Operator coordination", None, "operator", "/tmp/project")
+        .expect("create task");
+    let _ = store
+        .assign_task(&task.task_id, "codex-1", "operator", Some("initial owner"))
+        .expect("assign task");
+
+    let _ = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::CreateHandoff,
+            "operator",
+            TaskOperatorActionInput {
+                from_agent_id: Some("codex-1"),
+                to_agent_id: Some("claude-1"),
+                handoff_type: Some(HandoffType::RequestReview),
+                handoff_summary: Some("review the coordination patch"),
+                requested_action: Some("confirm the runtime contract"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("create handoff action");
+
+    let created_handoff = store
+        .list_handoffs(Some(&task.task_id))
+        .expect("list handoffs")
+        .into_iter()
+        .next()
+        .expect("created handoff");
+
+    let _ = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::PostCouncilMessage,
+            "operator",
+            TaskOperatorActionInput {
+                author_agent_id: Some("codex-1"),
+                message_type: Some(CouncilMessageType::Status),
+                message_body: Some("Ready for operator follow-through."),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("post council message");
+
+    let _ = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::AttachEvidence,
+            "operator",
+            TaskOperatorActionInput {
+                evidence_source_kind: Some(EvidenceSourceKind::HyphaeSession),
+                evidence_source_ref: Some("ses_456"),
+                evidence_label: Some("Hyphae session"),
+                evidence_summary: Some("Linked implementation session"),
+                related_handoff_id: Some(created_handoff.handoff_id.as_str()),
+                related_session_id: Some("ses_456"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("attach evidence");
+
+    let _ = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::CreateFollowUpTask,
+            "operator",
+            TaskOperatorActionInput {
+                follow_up_title: Some("Close the follow-up queue"),
+                follow_up_description: Some("Track the remaining operator work."),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("create follow-up task");
+
+    let tasks = store.list_tasks().expect("list tasks");
+    assert_eq!(tasks.len(), 2);
+    assert!(
+        tasks
+            .iter()
+            .any(|item| item.title == "Close the follow-up queue")
+    );
+
+    let messages = store
+        .list_council_messages(&task.task_id)
+        .expect("list council messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_type, CouncilMessageType::Status);
+
+    let evidence = store.list_evidence(&task.task_id).expect("list evidence");
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].related_handoff_id.as_deref(),
+        Some(created_handoff.handoff_id.as_str())
+    );
+
+    let events = store
+        .list_task_events(&task.task_id)
+        .expect("list task events");
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::HandoffCreated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("handoff_id="))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::CouncilMessagePosted
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("message_id="))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::EvidenceAttached
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("evidence_id="))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::FollowUpTaskCreated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("follow_up_task_id="))
+    }));
+}
+
+#[test]
+fn task_creation_actions_reject_terminal_tasks() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("Closed coordination task", None, "operator", "/tmp/project")
+        .expect("create task");
+    let _ = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("done"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("complete task");
+
+    let error = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::CreateFollowUpTask,
+            "operator",
+            TaskOperatorActionInput {
+                follow_up_title: Some("Should not be allowed"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect_err("reject follow-up creation on terminal task");
+
+    assert!(
+        error
+            .to_string()
+            .contains("operator action create_follow_up_task is not valid for terminal tasks")
     );
 }
 

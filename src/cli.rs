@@ -18,6 +18,7 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     Agent {
         #[command(subcommand)]
@@ -127,6 +128,7 @@ pub enum HandoffCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum TaskCommand {
     Create {
         #[arg(long)]
@@ -203,6 +205,48 @@ pub enum TaskCommand {
         clear_owner_note: bool,
         #[arg(long)]
         note: Option<String>,
+        #[arg(long)]
+        from_agent_id: Option<String>,
+        #[arg(long)]
+        to_agent_id: Option<String>,
+        #[arg(long)]
+        handoff_type: Option<HandoffType>,
+        #[arg(long)]
+        handoff_summary: Option<String>,
+        #[arg(long)]
+        requested_action: Option<String>,
+        #[arg(long)]
+        due_at: Option<String>,
+        #[arg(long)]
+        expires_at: Option<String>,
+        #[arg(long)]
+        author_agent_id: Option<String>,
+        #[arg(long)]
+        message_type: Option<CouncilMessageType>,
+        #[arg(long)]
+        message_body: Option<String>,
+        #[arg(long)]
+        evidence_source_kind: Option<EvidenceSourceKind>,
+        #[arg(long)]
+        evidence_source_ref: Option<String>,
+        #[arg(long)]
+        evidence_label: Option<String>,
+        #[arg(long)]
+        evidence_summary: Option<String>,
+        #[arg(long)]
+        related_handoff_id: Option<String>,
+        #[arg(long)]
+        related_session_id: Option<String>,
+        #[arg(long)]
+        related_memory_query: Option<String>,
+        #[arg(long)]
+        related_symbol: Option<String>,
+        #[arg(long)]
+        related_file: Option<String>,
+        #[arg(long)]
+        follow_up_title: Option<String>,
+        #[arg(long)]
+        follow_up_description: Option<String>,
     },
     List,
     ListView {

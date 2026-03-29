@@ -95,6 +95,27 @@ pub struct TaskOperatorActionInput<'a> {
     pub owner_note: Option<&'a str>,
     pub clear_owner_note: bool,
     pub note: Option<&'a str>,
+    pub from_agent_id: Option<&'a str>,
+    pub to_agent_id: Option<&'a str>,
+    pub handoff_type: Option<HandoffType>,
+    pub handoff_summary: Option<&'a str>,
+    pub requested_action: Option<&'a str>,
+    pub due_at: Option<&'a str>,
+    pub expires_at: Option<&'a str>,
+    pub author_agent_id: Option<&'a str>,
+    pub message_type: Option<CouncilMessageType>,
+    pub message_body: Option<&'a str>,
+    pub evidence_source_kind: Option<EvidenceSourceKind>,
+    pub evidence_source_ref: Option<&'a str>,
+    pub evidence_label: Option<&'a str>,
+    pub evidence_summary: Option<&'a str>,
+    pub related_handoff_id: Option<&'a str>,
+    pub related_session_id: Option<&'a str>,
+    pub related_memory_query: Option<&'a str>,
+    pub related_symbol: Option<&'a str>,
+    pub related_file: Option<&'a str>,
+    pub follow_up_title: Option<&'a str>,
+    pub follow_up_description: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -353,71 +374,9 @@ impl Store {
         requested_by: &str,
         project_root: &str,
     ) -> StoreResult<Task> {
-        let task = Task {
-            task_id: Ulid::new().to_string(),
-            title: title.to_string(),
-            description: description.map(ToOwned::to_owned),
-            requested_by: requested_by.to_string(),
-            project_root: project_root.to_string(),
-            status: TaskStatus::Open,
-            verification_state: VerificationState::Unknown,
-            priority: TaskPriority::Medium,
-            severity: TaskSeverity::None,
-            owner_agent_id: None,
-            owner_note: None,
-            acknowledged_by: None,
-            acknowledged_at: None,
-            blocked_reason: None,
-            verified_by: None,
-            verified_at: None,
-            closed_by: None,
-            closure_summary: None,
-            closed_at: None,
-            created_at: String::new(),
-            updated_at: String::new(),
-        };
-        self.conn.execute(
-            r"
-            INSERT INTO tasks (
-                task_id, title, description, requested_by, project_root, status,
-                verification_state, priority, severity, owner_agent_id, owner_note,
-                acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
-                closed_by, closure_summary, closed_at, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ",
-            params![
-                task.task_id,
-                task.title,
-                task.description,
-                task.requested_by,
-                task.project_root,
-                task.status.to_string(),
-                task.verification_state.to_string(),
-                task.priority.to_string(),
-                task.severity.to_string(),
-                task.owner_agent_id,
-                task.owner_note,
-                task.acknowledged_by,
-                task.acknowledged_at,
-                task.blocked_reason,
-                task.verified_by,
-                task.verified_at,
-                task.closed_by,
-                task.closure_summary,
-                task.closed_at,
-            ],
-        )?;
-        self.record_task_event(&TaskEventWrite {
-            task_id: &task.task_id,
-            event_type: TaskEventType::Created,
-            actor: requested_by,
-            from_status: None,
-            to_status: TaskStatus::Open,
-            verification_state: Some(VerificationState::Unknown),
-            owner_agent_id: None,
-            note: description,
-        })?;
-        self.get_task(&task.task_id)
+        self.in_transaction(|conn| {
+            create_task_in_connection(conn, title, description, requested_by, project_root)
+        })
     }
 
     /// Assigns a task to an agent and records the assignment event.
@@ -716,14 +675,18 @@ impl Store {
         changed_by: &str,
         input: TaskOperatorActionInput<'_>,
     ) -> StoreResult<Task> {
-        if let Some(update) = task_operator_triage_update(action, input)? {
+        if let Some(update) = task_operator_triage_update(action, &input)? {
             return self.update_task_triage(task_id, changed_by, update);
         }
 
         if let Some((status, update)) =
-            task_operator_status_update(&self.get_task(task_id)?, action, input)?
+            task_operator_status_update(&self.get_task(task_id)?, action, &input)?
         {
             return self.update_task_status(task_id, status, changed_by, update);
+        }
+
+        if let Some(task) = self.apply_task_creation_action(task_id, action, changed_by, &input)? {
+            return Ok(task);
         }
 
         match action {
@@ -752,8 +715,236 @@ impl Store {
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
-            | OperatorActionKind::UpdateTaskNote => unreachable!("handled above"),
+            | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::CreateHandoff
+            | OperatorActionKind::PostCouncilMessage
+            | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::CreateFollowUpTask => unreachable!("handled above"),
         }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_task_creation_action(
+        &self,
+        task_id: &str,
+        action: OperatorActionKind,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Option<Task>> {
+        let current_task = self.get_task(task_id)?;
+        if matches!(
+            current_task.status,
+            TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+        ) {
+            return Err(StoreError::Validation(format!(
+                "operator action {action} is not valid for terminal tasks"
+            )));
+        }
+
+        let task = match action {
+            OperatorActionKind::CreateHandoff => self.in_transaction(|conn| {
+                let handoff = create_handoff_in_connection(
+                    conn,
+                    task_id,
+                    input.from_agent_id.ok_or_else(|| {
+                        StoreError::Validation(
+                            "create_handoff requires a from_agent_id".to_string(),
+                        )
+                    })?,
+                    input.to_agent_id.ok_or_else(|| {
+                        StoreError::Validation("create_handoff requires a to_agent_id".to_string())
+                    })?,
+                    input.handoff_type.ok_or_else(|| {
+                        StoreError::Validation("create_handoff requires a handoff_type".to_string())
+                    })?,
+                    input
+                        .handoff_summary
+                        .filter(|summary| !summary.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "create_handoff requires a handoff_summary".to_string(),
+                            )
+                        })?,
+                    input.requested_action,
+                    HandoffTiming {
+                        due_at: input.due_at,
+                        expires_at: input.expires_at,
+                    },
+                )?;
+                let task = get_task_in_connection(conn, task_id)?;
+                let note = format!(
+                    "handoff_id={}; from_agent_id={}; to_agent_id={}; handoff_type={}; summary={}",
+                    handoff.handoff_id,
+                    handoff.from_agent_id,
+                    handoff.to_agent_id,
+                    handoff.handoff_type,
+                    handoff.summary
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::HandoffCreated,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::PostCouncilMessage => self.in_transaction(|conn| {
+                let message = add_council_message_in_connection(
+                    conn,
+                    task_id,
+                    input.author_agent_id.ok_or_else(|| {
+                        StoreError::Validation(
+                            "post_council_message requires an author_agent_id".to_string(),
+                        )
+                    })?,
+                    input.message_type.ok_or_else(|| {
+                        StoreError::Validation(
+                            "post_council_message requires a message_type".to_string(),
+                        )
+                    })?,
+                    input
+                        .message_body
+                        .filter(|body| !body.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "post_council_message requires a message_body".to_string(),
+                            )
+                        })?,
+                )?;
+                let task = get_task_in_connection(conn, task_id)?;
+                let note = format!(
+                    "message_id={}; author_agent_id={}; message_type={}; body={}",
+                    message.message_id, message.author_agent_id, message.message_type, message.body
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::CouncilMessagePosted,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::AttachEvidence => self.in_transaction(|conn| {
+                let evidence = add_evidence_in_connection(
+                    conn,
+                    task_id,
+                    input.evidence_source_kind.ok_or_else(|| {
+                        StoreError::Validation(
+                            "attach_evidence requires an evidence_source_kind".to_string(),
+                        )
+                    })?,
+                    input
+                        .evidence_source_ref
+                        .filter(|source_ref| !source_ref.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "attach_evidence requires an evidence_source_ref".to_string(),
+                            )
+                        })?,
+                    input
+                        .evidence_label
+                        .filter(|label| !label.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "attach_evidence requires an evidence_label".to_string(),
+                            )
+                        })?,
+                    input.evidence_summary,
+                    EvidenceLinkRefs {
+                        related_handoff_id: input.related_handoff_id,
+                        session_id: input.related_session_id,
+                        memory_query: input.related_memory_query,
+                        symbol: input.related_symbol,
+                        file: input.related_file,
+                    },
+                )?;
+                let task = get_task_in_connection(conn, task_id)?;
+                let note = format!(
+                    "evidence_id={}; source_kind={}; source_ref={}; label={}",
+                    evidence.evidence_id, evidence.source_kind, evidence.source_ref, evidence.label
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::EvidenceAttached,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::CreateFollowUpTask => self.in_transaction(|conn| {
+                let parent_task = get_task_in_connection(conn, task_id)?;
+                let follow_up = create_task_in_connection(
+                    conn,
+                    input
+                        .follow_up_title
+                        .filter(|title| !title.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "create_follow_up_task requires a follow_up_title".to_string(),
+                            )
+                        })?,
+                    input.follow_up_description,
+                    changed_by,
+                    &parent_task.project_root,
+                )?;
+                let note = format!(
+                    "follow_up_task_id={}; title={}",
+                    follow_up.task_id, follow_up.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::FollowUpTaskCreated,
+                        actor: changed_by,
+                        from_status: Some(parent_task.status),
+                        to_status: parent_task.status,
+                        verification_state: Some(parent_task.verification_state),
+                        owner_agent_id: parent_task.owner_agent_id.as_deref(),
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::AcknowledgeTask
+            | OperatorActionKind::UnacknowledgeTask
+            | OperatorActionKind::VerifyTask
+            | OperatorActionKind::ReassignTask
+            | OperatorActionKind::SetTaskPriority
+            | OperatorActionKind::SetTaskSeverity
+            | OperatorActionKind::BlockTask
+            | OperatorActionKind::UnblockTask
+            | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::AcceptHandoff
+            | OperatorActionKind::RejectHandoff
+            | OperatorActionKind::CancelHandoff
+            | OperatorActionKind::CompleteHandoff
+            | OperatorActionKind::FollowUpHandoff
+            | OperatorActionKind::ExpireHandoff => return Ok(None),
+        };
+
+        Ok(Some(task))
     }
 
     /// Loads a single handoff by id.
@@ -782,48 +973,18 @@ impl Store {
         requested_action: Option<&str>,
         timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff> {
-        self.ensure_task_exists(task_id)?;
-        self.ensure_agent_exists(from_agent_id)?;
-        self.ensure_agent_exists(to_agent_id)?;
-        validate_handoff_timing(timing)?;
-
-        let handoff = Handoff {
-            handoff_id: Ulid::new().to_string(),
-            task_id: task_id.to_string(),
-            from_agent_id: from_agent_id.to_string(),
-            to_agent_id: to_agent_id.to_string(),
-            handoff_type,
-            summary: summary.to_string(),
-            requested_action: requested_action.map(ToOwned::to_owned),
-            due_at: timing.due_at.map(ToOwned::to_owned),
-            expires_at: timing.expires_at.map(ToOwned::to_owned),
-            status: HandoffStatus::Open,
-            created_at: String::new(),
-            updated_at: String::new(),
-            resolved_at: None,
-        };
-        self.conn.execute(
-            r"
-            INSERT INTO handoffs (
-                handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
-            ",
-            params![
-                handoff.handoff_id,
-                handoff.task_id,
-                handoff.from_agent_id,
-                handoff.to_agent_id,
-                handoff.handoff_type.to_string(),
-                handoff.summary,
-                handoff.requested_action,
-                handoff.due_at,
-                handoff.expires_at,
-                handoff.status.to_string(),
-            ],
-        )?;
-        touch_task_in_connection(&self.conn, task_id)?;
-        self.get_handoff(&handoff.handoff_id)
+        self.in_transaction(|conn| {
+            create_handoff_in_connection(
+                conn,
+                task_id,
+                from_agent_id,
+                to_agent_id,
+                handoff_type,
+                summary,
+                requested_action,
+                timing,
+            )
+        })
     }
 
     /// Resolves an existing handoff with a terminal or accepted state.
@@ -993,7 +1154,11 @@ impl Store {
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
-            | OperatorActionKind::UpdateTaskNote => Err(StoreError::Validation(format!(
+            | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::CreateHandoff
+            | OperatorActionKind::PostCouncilMessage
+            | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::CreateFollowUpTask => Err(StoreError::Validation(format!(
                 "operator action {action} is not valid for handoffs"
             ))),
         }
@@ -1086,31 +1251,9 @@ impl Store {
         message_type: CouncilMessageType,
         body: &str,
     ) -> StoreResult<CouncilMessage> {
-        self.ensure_task_exists(task_id)?;
-        self.ensure_agent_exists(author_agent_id)?;
-
-        let message = CouncilMessage {
-            message_id: Ulid::new().to_string(),
-            task_id: task_id.to_string(),
-            author_agent_id: author_agent_id.to_string(),
-            message_type,
-            body: body.to_string(),
-        };
-        self.conn.execute(
-            r"
-            INSERT INTO council_messages (message_id, task_id, author_agent_id, message_type, body)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            ",
-            params![
-                message.message_id,
-                message.task_id,
-                message.author_agent_id,
-                message.message_type.to_string(),
-                message.body
-            ],
-        )?;
-        touch_task_in_connection(&self.conn, task_id)?;
-        Ok(message)
+        self.in_transaction(|conn| {
+            add_council_message_in_connection(conn, task_id, author_agent_id, message_type, body)
+        })
     }
 
     /// Lists all council messages for a task in append order.
@@ -1148,61 +1291,17 @@ impl Store {
         summary: Option<&str>,
         links: EvidenceLinkRefs<'_>,
     ) -> StoreResult<EvidenceRef> {
-        self.ensure_task_exists(task_id)?;
-        if let Some(handoff_id) = links.related_handoff_id {
-            let handoff = self.get_handoff(handoff_id)?;
-            if handoff.task_id != task_id {
-                return Err(StoreError::Validation(
-                    "related handoff must belong to the same task".to_string(),
-                ));
-            }
-        }
-
-        let navigation = normalize_evidence_navigation(
-            source_kind,
-            source_ref,
-            links.session_id,
-            links.memory_query,
-            links.symbol,
-            links.file,
-        );
-
-        let evidence = EvidenceRef {
-            evidence_id: Ulid::new().to_string(),
-            task_id: task_id.to_string(),
-            source_kind,
-            source_ref: source_ref.to_string(),
-            label: label.to_string(),
-            summary: summary.map(ToOwned::to_owned),
-            related_handoff_id: links.related_handoff_id.map(ToOwned::to_owned),
-            related_session_id: navigation.session_id.map(ToOwned::to_owned),
-            related_memory_query: navigation.memory_query.map(ToOwned::to_owned),
-            related_symbol: navigation.symbol.map(ToOwned::to_owned),
-            related_file: navigation.file.map(ToOwned::to_owned),
-        };
-        self.conn.execute(
-            r"
-            INSERT INTO evidence_refs (
-                evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
-                related_session_id, related_memory_query, related_symbol, related_file
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            params![
-                evidence.evidence_id,
-                evidence.task_id,
-                evidence.source_kind.to_string(),
-                evidence.source_ref,
-                evidence.label,
-                evidence.summary,
-                evidence.related_handoff_id,
-                evidence.related_session_id,
-                evidence.related_memory_query,
-                evidence.related_symbol,
-                evidence.related_file,
-            ],
-        )?;
-        touch_task_in_connection(&self.conn, task_id)?;
-        Ok(evidence)
+        self.in_transaction(|conn| {
+            add_evidence_in_connection(
+                conn,
+                task_id,
+                source_kind,
+                source_ref,
+                label,
+                summary,
+                links,
+            )
+        })
     }
 
     /// Lists evidence refs for one task.
@@ -1458,10 +1557,6 @@ impl Store {
             }
         }
     }
-
-    fn record_task_event(&self, event: &TaskEventWrite<'_>) -> StoreResult<()> {
-        record_task_event_in_connection(&self.conn, event)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1470,6 +1565,253 @@ struct EvidenceNavigation<'a> {
     memory_query: Option<&'a str>,
     symbol: Option<&'a str>,
     file: Option<&'a str>,
+}
+
+fn create_task_in_connection(
+    conn: &Connection,
+    title: &str,
+    description: Option<&str>,
+    requested_by: &str,
+    project_root: &str,
+) -> StoreResult<Task> {
+    let task = Task {
+        task_id: Ulid::new().to_string(),
+        title: title.to_string(),
+        description: description.map(ToOwned::to_owned),
+        requested_by: requested_by.to_string(),
+        project_root: project_root.to_string(),
+        status: TaskStatus::Open,
+        verification_state: VerificationState::Unknown,
+        priority: TaskPriority::Medium,
+        severity: TaskSeverity::None,
+        owner_agent_id: None,
+        owner_note: None,
+        acknowledged_by: None,
+        acknowledged_at: None,
+        blocked_reason: None,
+        verified_by: None,
+        verified_at: None,
+        closed_by: None,
+        closure_summary: None,
+        closed_at: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    conn.execute(
+        r"
+        INSERT INTO tasks (
+            task_id, title, description, requested_by, project_root, status,
+            verification_state, priority, severity, owner_agent_id, owner_note,
+            acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
+            closed_by, closure_summary, closed_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ",
+        params![
+            task.task_id,
+            task.title,
+            task.description,
+            task.requested_by,
+            task.project_root,
+            task.status.to_string(),
+            task.verification_state.to_string(),
+            task.priority.to_string(),
+            task.severity.to_string(),
+            task.owner_agent_id,
+            task.owner_note,
+            task.acknowledged_by,
+            task.acknowledged_at,
+            task.blocked_reason,
+            task.verified_by,
+            task.verified_at,
+            task.closed_by,
+            task.closure_summary,
+            task.closed_at,
+        ],
+    )?;
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: &task.task_id,
+            event_type: TaskEventType::Created,
+            actor: requested_by,
+            from_status: None,
+            to_status: TaskStatus::Open,
+            verification_state: Some(VerificationState::Unknown),
+            owner_agent_id: None,
+            note: description,
+        },
+    )?;
+    get_task_in_connection(conn, &task.task_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_handoff_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    from_agent_id: &str,
+    to_agent_id: &str,
+    handoff_type: HandoffType,
+    summary: &str,
+    requested_action: Option<&str>,
+    timing: HandoffTiming<'_>,
+) -> StoreResult<Handoff> {
+    get_task_in_connection(conn, task_id)?;
+    get_agent_in_connection(conn, from_agent_id)?;
+    get_agent_in_connection(conn, to_agent_id)?;
+    if from_agent_id == to_agent_id {
+        return Err(StoreError::Validation(
+            "handoff source and target agents must differ".to_string(),
+        ));
+    }
+    validate_handoff_timing(timing)?;
+
+    let handoff = Handoff {
+        handoff_id: Ulid::new().to_string(),
+        task_id: task_id.to_string(),
+        from_agent_id: from_agent_id.to_string(),
+        to_agent_id: to_agent_id.to_string(),
+        handoff_type,
+        summary: summary.to_string(),
+        requested_action: requested_action.map(ToOwned::to_owned),
+        due_at: timing.due_at.map(ToOwned::to_owned),
+        expires_at: timing.expires_at.map(ToOwned::to_owned),
+        status: HandoffStatus::Open,
+        created_at: String::new(),
+        updated_at: String::new(),
+        resolved_at: None,
+    };
+    conn.execute(
+        r"
+        INSERT INTO handoffs (
+            handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
+            summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+        ",
+        params![
+            handoff.handoff_id,
+            handoff.task_id,
+            handoff.from_agent_id,
+            handoff.to_agent_id,
+            handoff.handoff_type.to_string(),
+            handoff.summary,
+            handoff.requested_action,
+            handoff.due_at,
+            handoff.expires_at,
+            handoff.status.to_string(),
+        ],
+    )?;
+    touch_task_in_connection(conn, task_id)?;
+    get_handoff_in_connection(conn, &handoff.handoff_id)
+}
+
+fn add_council_message_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    author_agent_id: &str,
+    message_type: CouncilMessageType,
+    body: &str,
+) -> StoreResult<CouncilMessage> {
+    get_task_in_connection(conn, task_id)?;
+    get_agent_in_connection(conn, author_agent_id)?;
+    if body.trim().is_empty() {
+        return Err(StoreError::Validation(
+            "council messages require a non-empty body".to_string(),
+        ));
+    }
+
+    let message = CouncilMessage {
+        message_id: Ulid::new().to_string(),
+        task_id: task_id.to_string(),
+        author_agent_id: author_agent_id.to_string(),
+        message_type,
+        body: body.to_string(),
+    };
+    conn.execute(
+        r"
+        INSERT INTO council_messages (message_id, task_id, author_agent_id, message_type, body)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ",
+        params![
+            message.message_id,
+            message.task_id,
+            message.author_agent_id,
+            message.message_type.to_string(),
+            message.body
+        ],
+    )?;
+    touch_task_in_connection(conn, task_id)?;
+    Ok(message)
+}
+
+fn add_evidence_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    source_kind: EvidenceSourceKind,
+    source_ref: &str,
+    label: &str,
+    summary: Option<&str>,
+    links: EvidenceLinkRefs<'_>,
+) -> StoreResult<EvidenceRef> {
+    get_task_in_connection(conn, task_id)?;
+    if source_ref.trim().is_empty() || label.trim().is_empty() {
+        return Err(StoreError::Validation(
+            "evidence requires a non-empty source_ref and label".to_string(),
+        ));
+    }
+    if let Some(handoff_id) = links.related_handoff_id {
+        let handoff = get_handoff_in_connection(conn, handoff_id)?;
+        if handoff.task_id != task_id {
+            return Err(StoreError::Validation(
+                "related handoff must belong to the same task".to_string(),
+            ));
+        }
+    }
+
+    let navigation = normalize_evidence_navigation(
+        source_kind,
+        source_ref,
+        links.session_id,
+        links.memory_query,
+        links.symbol,
+        links.file,
+    );
+
+    let evidence = EvidenceRef {
+        evidence_id: Ulid::new().to_string(),
+        task_id: task_id.to_string(),
+        source_kind,
+        source_ref: source_ref.to_string(),
+        label: label.to_string(),
+        summary: summary.map(ToOwned::to_owned),
+        related_handoff_id: links.related_handoff_id.map(ToOwned::to_owned),
+        related_session_id: navigation.session_id.map(ToOwned::to_owned),
+        related_memory_query: navigation.memory_query.map(ToOwned::to_owned),
+        related_symbol: navigation.symbol.map(ToOwned::to_owned),
+        related_file: navigation.file.map(ToOwned::to_owned),
+    };
+    conn.execute(
+        r"
+        INSERT INTO evidence_refs (
+            evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
+            related_session_id, related_memory_query, related_symbol, related_file
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        ",
+        params![
+            evidence.evidence_id,
+            evidence.task_id,
+            evidence.source_kind.to_string(),
+            evidence.source_ref,
+            evidence.label,
+            evidence.summary,
+            evidence.related_handoff_id,
+            evidence.related_session_id,
+            evidence.related_memory_query,
+            evidence.related_symbol,
+            evidence.related_file,
+        ],
+    )?;
+    touch_task_in_connection(conn, task_id)?;
+    Ok(evidence)
 }
 
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
@@ -1812,10 +2154,10 @@ fn sync_owner_for_task_status(
     Ok(())
 }
 
-fn task_operator_triage_update(
+fn task_operator_triage_update<'a>(
     action: OperatorActionKind,
-    input: TaskOperatorActionInput<'_>,
-) -> StoreResult<Option<TaskTriageUpdate<'_>>> {
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<Option<TaskTriageUpdate<'a>>> {
     let update = match action {
         OperatorActionKind::AcknowledgeTask => TaskTriageUpdate {
             acknowledged: Some(true),
@@ -1851,6 +2193,10 @@ fn task_operator_triage_update(
         | OperatorActionKind::ReassignTask
         | OperatorActionKind::BlockTask
         | OperatorActionKind::UnblockTask
+        | OperatorActionKind::CreateHandoff
+        | OperatorActionKind::PostCouncilMessage
+        | OperatorActionKind::AttachEvidence
+        | OperatorActionKind::CreateFollowUpTask
         | OperatorActionKind::AcceptHandoff
         | OperatorActionKind::RejectHandoff
         | OperatorActionKind::CancelHandoff
@@ -1865,7 +2211,7 @@ fn task_operator_triage_update(
 fn task_operator_status_update<'a>(
     task: &Task,
     action: OperatorActionKind,
-    input: TaskOperatorActionInput<'a>,
+    input: &'a TaskOperatorActionInput<'a>,
 ) -> StoreResult<Option<(TaskStatus, TaskStatusUpdate<'a>)>> {
     let update = match action {
         OperatorActionKind::VerifyTask => {
@@ -1956,6 +2302,10 @@ fn task_operator_status_update<'a>(
         | OperatorActionKind::SetTaskPriority
         | OperatorActionKind::SetTaskSeverity
         | OperatorActionKind::UpdateTaskNote
+        | OperatorActionKind::CreateHandoff
+        | OperatorActionKind::PostCouncilMessage
+        | OperatorActionKind::AttachEvidence
+        | OperatorActionKind::CreateFollowUpTask
         | OperatorActionKind::AcceptHandoff
         | OperatorActionKind::RejectHandoff
         | OperatorActionKind::CancelHandoff

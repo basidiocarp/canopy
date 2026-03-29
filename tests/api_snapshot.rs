@@ -356,6 +356,26 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert!(
         allowed_actions
             .iter()
+            .any(|action| action["kind"] == "create_handoff")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "post_council_message")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "attach_evidence")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "create_follow_up_task")
+    );
+    assert!(
+        allowed_actions
+            .iter()
             .any(|action| action["kind"] == "block_task")
     );
     assert!(
@@ -597,30 +617,35 @@ fn api_snapshot_status_sort_uses_operator_priority_order() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    Command::cargo_bin("canopy")
-        .expect("build canopy binary")
-        .args([
-            "--db",
-            db_path.to_str().expect("db path"),
-            "agent",
-            "register",
-            "--agent-id",
-            "codex-1",
-            "--host-id",
-            "codex-local",
-            "--host-type",
-            "codex",
-            "--host-instance",
-            "local",
-            "--model",
-            "gpt-5.4",
-            "--project-root",
-            "/tmp/project",
-            "--worktree-id",
-            "wt-1",
-        ])
-        .assert()
-        .success();
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
 
     for (title, status) in [
         ("Blocked task", "blocked"),
@@ -702,30 +727,35 @@ fn api_snapshot_attention_view_returns_only_tasks_needing_attention() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    Command::cargo_bin("canopy")
-        .expect("build canopy binary")
-        .args([
-            "--db",
-            db_path.to_str().expect("db path"),
-            "agent",
-            "register",
-            "--agent-id",
-            "codex-1",
-            "--host-id",
-            "codex-local",
-            "--host-type",
-            "codex",
-            "--host-instance",
-            "local",
-            "--model",
-            "gpt-5.4",
-            "--project-root",
-            "/tmp/project",
-            "--worktree-id",
-            "wt-1",
-        ])
-        .assert()
-        .success();
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
 
     let healthy_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -829,30 +859,35 @@ fn api_snapshot_uses_attention_thresholds_for_stale_task_handoff_and_owner_heart
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    Command::cargo_bin("canopy")
-        .expect("build canopy binary")
-        .args([
-            "--db",
-            db_path.to_str().expect("db path"),
-            "agent",
-            "register",
-            "--agent-id",
-            "codex-1",
-            "--host-id",
-            "codex-local",
-            "--host-type",
-            "codex",
-            "--host-instance",
-            "local",
-            "--model",
-            "gpt-5.4",
-            "--project-root",
-            "/tmp/project",
-            "--worktree-id",
-            "wt-1",
-        ])
-        .assert()
-        .success();
+    for (agent_id, host_id, host_type, host_instance, model) in [
+        ("codex-1", "codex-local", "codex", "local", "gpt-5.4"),
+        ("claude-1", "claude-local", "claude", "local", "opus"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                host_id,
+                "--host-type",
+                host_type,
+                "--host-instance",
+                host_instance,
+                "--model",
+                model,
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
 
     let task_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -905,7 +940,7 @@ fn api_snapshot_uses_attention_thresholds_for_stale_task_handoff_and_owner_heart
             "--from-agent-id",
             "codex-1",
             "--to-agent-id",
-            "codex-1",
+            "claude-1",
             "--handoff-type",
             "request_help",
             "--summary",
@@ -970,7 +1005,13 @@ fn api_snapshot_uses_attention_thresholds_for_stale_task_handoff_and_owner_heart
     assert!(reasons.contains(&"stale_owner_heartbeat"));
     assert!(reasons.contains(&"stale_open_handoff"));
     assert_eq!(snapshot["handoff_attention"][0]["level"], "critical");
-    assert_eq!(snapshot["agent_attention"][0]["freshness"], "stale");
+    let stale_agent = snapshot["agent_attention"]
+        .as_array()
+        .expect("agent attention")
+        .iter()
+        .find(|item| item["agent_id"] == "codex-1")
+        .expect("stale codex agent");
+    assert_eq!(stale_agent["freshness"], "stale");
     assert_eq!(snapshot["attention"]["critical_tasks"], 1);
     assert_eq!(snapshot["attention"]["stale_handoffs"], 1);
     assert_eq!(snapshot["attention"]["stale_agents"], 1);

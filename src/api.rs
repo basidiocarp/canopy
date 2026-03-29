@@ -813,6 +813,38 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
         ),
         make_task_allowed_action(
             task,
+            OperatorActionKind::CreateHandoff,
+            task_level,
+            "create_handoff",
+            format!("Create handoff for {}", task.title),
+            "Create a new handoff from the operator console.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::PostCouncilMessage,
+            task_level,
+            "post_council_message",
+            format!("Post council message for {}", task.title),
+            "Post a new council message on the task thread.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::AttachEvidence,
+            task_level,
+            "attach_evidence",
+            format!("Attach evidence to {}", task.title),
+            "Attach supporting evidence and navigation context to the task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::CreateFollowUpTask,
+            task_level,
+            "create_follow_up_task",
+            format!("Create follow-up task for {}", task.title),
+            "Create a follow-up task in the same project from this task detail.",
+        ),
+        make_task_allowed_action(
+            task,
             if task.status == TaskStatus::Blocked {
                 OperatorActionKind::UnblockTask
             } else {
