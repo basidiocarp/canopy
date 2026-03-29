@@ -1761,3 +1761,116 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
     assert!(handoff_task_ids.contains(&pending_task_id.as_str()));
     assert!(handoff_task_ids.contains(&expired_task_id.as_str()));
 }
+
+#[test]
+fn api_snapshot_paused_resumable_view_tracks_paused_execution() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "agent-a",
+            "--host-id",
+            "agent-a",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+
+    let create_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Paused task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&create_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    for action in ["claim_task", "start_task", "pause_task"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "task",
+                "action",
+                "--task-id",
+                &task_id,
+                "--action",
+                action,
+                "--changed-by",
+                "operator",
+                "--acting-agent-id",
+                "agent-a",
+            ])
+            .assert()
+            .success();
+    }
+
+    let paused_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "paused_resumable",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let paused_snapshot: Value =
+        serde_json::from_slice(&paused_output).expect("parse paused snapshot");
+    let paused_task_ids: Vec<_> = paused_snapshot["tasks"]
+        .as_array()
+        .expect("paused tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(paused_task_ids, vec![task_id.as_str()]);
+    assert!(
+        paused_snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .iter()
+            .any(|attention| {
+                attention["task_id"] == task_id
+                    && attention["reasons"].as_array().is_some_and(|reasons| {
+                        reasons.iter().any(|reason| reason == "paused_resumable")
+                    })
+            })
+    );
+}
