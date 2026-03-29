@@ -768,6 +768,28 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
             "--task-id",
             &task_id,
             "--action",
+            "set_task_due_at",
+            "--changed-by",
+            "operator",
+            "--due-at",
+            "2026-04-01T00:00:00Z",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "set_task_due_at requires a non-terminal task outside review",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
             "verify_task",
             "--changed-by",
             "operator",
@@ -953,4 +975,131 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
         }),
         "expected handoff follow-up history event"
     );
+}
+
+#[test]
+fn cli_sets_and_clears_task_and_review_deadlines() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Track deadline controls",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "set_task_due_at",
+            "--changed-by",
+            "operator",
+            "--due-at",
+            "2026-03-30T18:00:00Z",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"due_at\": \"2026-03-30T18:00:00Z\"",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "set_review_due_at",
+            "--changed-by",
+            "operator",
+            "--review-due-at",
+            "2026-03-31T12:00:00Z",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"review_due_at\": \"2026-03-31T12:00:00Z\"",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "clear_task_due_at",
+            "--changed-by",
+            "operator",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"due_at\": null"));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "clear_review_due_at",
+            "--changed-by",
+            "operator",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"review_due_at\": null"));
 }

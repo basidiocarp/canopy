@@ -1,7 +1,14 @@
 use assert_cmd::Command;
+use canopy::api::{self, SnapshotOptions};
+use canopy::models::{
+    DeadlineState, OperatorActionKind, SnapshotPreset, TaskAttentionReason, TaskDeadlineKind,
+    TaskStatus, VerificationState,
+};
+use canopy::store::{Store, TaskDeadlineUpdate, TaskStatusUpdate};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use tempfile::tempdir;
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[test]
 fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
@@ -3511,5 +3518,159 @@ fn api_snapshot_assigned_awaiting_claim_view_tracks_manual_assignment() {
                             .any(|reason| reason == "assigned_awaiting_claim")
                     })
             })
+    );
+}
+
+#[test]
+fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    let now = OffsetDateTime::now_utc();
+    let due_soon_at = (now + Duration::hours(12))
+        .format(&Rfc3339)
+        .expect("format due soon deadline");
+    let overdue_at = (now - Duration::hours(2))
+        .format(&Rfc3339)
+        .expect("format overdue deadline");
+
+    let due_soon_task = store
+        .create_task("Execution due soon", None, "operator", "/tmp/project")
+        .expect("create due soon task");
+    store
+        .update_task_deadlines(
+            &due_soon_task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: Some(due_soon_at.as_str()),
+                clear_due_at: false,
+                review_due_at: None,
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set due soon deadline");
+
+    let overdue_execution_task = store
+        .create_task("Execution overdue", None, "operator", "/tmp/project")
+        .expect("create overdue execution task");
+    store
+        .update_task_deadlines(
+            &overdue_execution_task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: Some(overdue_at.as_str()),
+                clear_due_at: false,
+                review_due_at: None,
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set overdue execution deadline");
+
+    let overdue_review_task = store
+        .create_task("Review overdue", None, "operator", "/tmp/project")
+        .expect("create overdue review task");
+    store
+        .update_task_status(
+            &overdue_review_task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Pending),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move task into review");
+    store
+        .update_task_deadlines(
+            &overdue_review_task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: None,
+                clear_due_at: false,
+                review_due_at: Some(overdue_at.as_str()),
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set overdue review deadline");
+
+    let due_soon_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::DueSoon),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load due soon snapshot");
+    assert_eq!(due_soon_snapshot.tasks.len(), 1);
+    assert_eq!(due_soon_snapshot.tasks[0].task_id, due_soon_task.task_id);
+    assert_eq!(due_soon_snapshot.deadline_summaries.len(), 1);
+    assert_eq!(
+        due_soon_snapshot.deadline_summaries[0].active_deadline_state,
+        DeadlineState::DueSoon
+    );
+
+    let overdue_execution_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::OverdueExecution),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load overdue execution snapshot");
+    assert_eq!(overdue_execution_snapshot.tasks.len(), 1);
+    assert_eq!(
+        overdue_execution_snapshot.tasks[0].task_id,
+        overdue_execution_task.task_id
+    );
+    assert!(
+        overdue_execution_snapshot.task_attention[0]
+            .reasons
+            .iter()
+            .any(|reason| *reason == TaskAttentionReason::OverdueExecution)
+    );
+
+    let overdue_review_snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            preset: Some(SnapshotPreset::OverdueReview),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load overdue review snapshot");
+    assert_eq!(overdue_review_snapshot.tasks.len(), 1);
+    assert_eq!(
+        overdue_review_snapshot.tasks[0].task_id,
+        overdue_review_task.task_id
+    );
+    assert_eq!(
+        overdue_review_snapshot.deadline_summaries[0]
+            .active_deadline_kind
+            .expect("active deadline kind"),
+        TaskDeadlineKind::Review
+    );
+    assert!(
+        overdue_review_snapshot.task_attention[0]
+            .reasons
+            .iter()
+            .any(|reason| *reason == TaskAttentionReason::OverdueReview)
+    );
+
+    let detail = api::task_detail(&store, &overdue_review_task.task_id)
+        .expect("load overdue review task detail");
+    assert_eq!(
+        detail.deadline_summary.review_due_at.as_deref(),
+        Some(overdue_at.as_str())
+    );
+    assert!(
+        detail
+            .allowed_actions
+            .iter()
+            .any(|action| action.kind == OperatorActionKind::ClearReviewDueAt)
     );
 }

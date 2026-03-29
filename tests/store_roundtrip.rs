@@ -4,8 +4,8 @@ use canopy::models::{
     VerificationState,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
-    TaskStatusUpdate,
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskDeadlineUpdate,
+    TaskOperatorActionInput, TaskStatusUpdate,
 };
 use tempfile::tempdir;
 
@@ -1272,4 +1272,115 @@ fn handoff_operator_actions_cover_resolution_paths() {
         }),
         "expected handoff completion to be recorded in task history"
     );
+}
+
+#[test]
+fn task_deadline_updates_persist_and_record_history() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("Track deadline semantics", None, "operator", "/tmp/project")
+        .expect("create task");
+
+    let with_execution_due = store
+        .update_task_deadlines(
+            &task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: Some("2026-03-30T18:00:00Z"),
+                clear_due_at: false,
+                review_due_at: None,
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set execution due date");
+    assert_eq!(
+        with_execution_due.due_at.as_deref(),
+        Some("2026-03-30T18:00:00Z")
+    );
+    assert_eq!(with_execution_due.review_due_at, None);
+
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Pending),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move task into review");
+    assert!(
+        store
+            .update_task_deadlines(
+                &task.task_id,
+                "operator",
+                TaskDeadlineUpdate {
+                    due_at: Some("2026-04-01T00:00:00Z"),
+                    clear_due_at: false,
+                    review_due_at: None,
+                    clear_review_due_at: false,
+                    event_note: None,
+                },
+            )
+            .is_err()
+    );
+
+    let with_review_due = store
+        .update_task_deadlines(
+            &task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: None,
+                clear_due_at: false,
+                review_due_at: Some("2026-03-31T12:00:00Z"),
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .expect("set review due date");
+    assert_eq!(
+        with_review_due.review_due_at.as_deref(),
+        Some("2026-03-31T12:00:00Z")
+    );
+
+    let cleared = store
+        .update_task_deadlines(
+            &task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: None,
+                clear_due_at: true,
+                review_due_at: None,
+                clear_review_due_at: true,
+                event_note: None,
+            },
+        )
+        .expect("clear deadlines");
+    assert!(cleared.due_at.is_none());
+    assert!(cleared.review_due_at.is_none());
+
+    let deadline_events = store
+        .list_task_events(&task.task_id)
+        .expect("list task events")
+        .into_iter()
+        .filter(|event| event.event_type == TaskEventType::DeadlineUpdated)
+        .collect::<Vec<_>>();
+    assert_eq!(deadline_events.len(), 3);
+    assert!(deadline_events.iter().any(|event| {
+        event
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("due_at"))
+    }));
+    assert!(deadline_events.iter().any(|event| {
+        event
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("review_due_at"))
+    }));
 }

@@ -1,12 +1,13 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
-    AgentRegistration, ApiSnapshot, AttentionLevel, ExecutionActionKind, Freshness, Handoff,
-    HandoffAttention, HandoffAttentionReason, HandoffType, OperatorAction, OperatorActionKind,
-    OperatorActionTargetKind, SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment,
-    TaskAttention, TaskAttentionReason, TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary,
-    TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority, TaskRelationship,
-    TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSort, TaskStatus, TaskView,
-    VerificationState, derive_review_cycle_context,
+    AgentRegistration, ApiSnapshot, AttentionLevel, DeadlineState, ExecutionActionKind, Freshness,
+    Handoff, HandoffAttention, HandoffAttentionReason, HandoffType, OperatorAction,
+    OperatorActionKind, OperatorActionTargetKind, SnapshotAttentionSummary, SnapshotPreset, Task,
+    TaskAssignment, TaskAttention, TaskAttentionReason, TaskDeadlineKind, TaskDeadlineSummary,
+    TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary, TaskHeartbeatSummary,
+    TaskOwnershipSummary, TaskPriority, TaskRelationship, TaskRelationshipKind,
+    TaskRelationshipSummary, TaskSeverity, TaskSort, TaskStatus, TaskView, VerificationState,
+    derive_review_cycle_context,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
@@ -17,6 +18,7 @@ use time::{
 
 const TASK_AGING_HOURS: i64 = 6;
 const TASK_STALE_HOURS: i64 = 24;
+const DEADLINE_SOON_HOURS: i64 = 24;
 const HANDOFF_AGING_HOURS: i64 = 6;
 const HANDOFF_STALE_HOURS: i64 = 24;
 const HEARTBEAT_AGING_MINUTES: i64 = 15;
@@ -142,12 +144,14 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &project_execution_summaries,
         &accepted_handoff_follow_through_task_ids,
     );
+    let project_deadline_summaries = derive_task_deadline_summaries(&tasks, now);
 
     let all_heartbeats = store.list_all_agent_heartbeats()?;
     let agent_attention = derive_agent_attention(&agents, now);
     let handoff_attention = derive_handoff_attention(&handoffs, now);
     let task_attention = derive_task_attention(
         &tasks,
+        &project_deadline_summaries,
         &handoffs,
         &agent_attention,
         &relationship_summaries,
@@ -174,6 +178,10 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .iter()
         .map(|attention| (attention.task_id.clone(), attention.clone()))
         .collect();
+    let deadline_summary_by_id: HashMap<_, _> = project_deadline_summaries
+        .iter()
+        .map(|summary| (summary.task_id.clone(), summary.clone()))
+        .collect();
     let relationship_summary_by_id: HashMap<_, _> = relationship_summaries
         .iter()
         .map(|summary| (summary.task_id.clone(), summary.clone()))
@@ -194,6 +202,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
+            deadline_summary_by_id.get(&task.task_id),
             task_attention_by_id.get(&task.task_id),
             relationship_summary_by_id.get(&task.task_id),
             options.view,
@@ -218,6 +227,10 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     let filtered_task_attention = task_attention
         .into_iter()
         .filter(|attention| task_ids.contains(&attention.task_id))
+        .collect::<Vec<_>>();
+    let filtered_deadline_summaries = project_deadline_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
         .collect::<Vec<_>>();
     let filtered_handoff_attention = handoff_attention
         .into_iter()
@@ -258,6 +271,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     let operator_actions = derive_operator_actions(
         &tasks,
         &filtered_task_attention,
+        &filtered_deadline_summaries,
         &filtered_relationship_summaries,
         &execution_summaries,
         &filtered_handoffs,
@@ -278,6 +292,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         heartbeats,
         tasks,
         task_attention: filtered_task_attention,
+        deadline_summaries: filtered_deadline_summaries,
         task_heartbeat_summaries,
         execution_summaries,
         ownership,
@@ -404,8 +419,15 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &review_decision_follow_through_task_ids,
         &review_awaiting_support_task_ids,
     );
+    let deadline_summary = derive_task_deadline_summaries(std::slice::from_ref(&task), now)
+        .into_iter()
+        .next()
+        .ok_or(StoreError::Validation(
+            "task deadline summary could not be derived".to_string(),
+        ))?;
     let attention = derive_task_attention(
         std::slice::from_ref(&task),
+        std::slice::from_ref(&deadline_summary),
         &handoffs,
         &agent_attention,
         std::slice::from_ref(&relationship_summary),
@@ -453,6 +475,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let operator_actions = derive_operator_actions(
         std::slice::from_ref(&task),
         std::slice::from_ref(&attention),
+        std::slice::from_ref(&deadline_summary),
         std::slice::from_ref(&relationship_summary),
         std::slice::from_ref(&execution_summary),
         &handoffs,
@@ -461,6 +484,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let allowed_actions = derive_allowed_actions(
         &task,
         &attention,
+        &deadline_summary,
         &relationship_summary,
         &execution_summary,
         &handoffs,
@@ -473,6 +497,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         agent_attention,
         agent_heartbeat_summaries,
         task,
+        deadline_summary,
         ownership,
         heartbeat_summary,
         execution_summary,
@@ -528,6 +553,7 @@ fn resolve_snapshot_options(options: SnapshotOptions<'_>) -> ResolvedSnapshotOpt
     resolved
 }
 
+#[allow(clippy::too_many_lines)]
 fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
     match preset {
         SnapshotPreset::Default => {}
@@ -588,6 +614,18 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::PausedResumable;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::DueSoon => {
+            options.view = TaskView::DueSoon;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::OverdueExecution => {
+            options.view = TaskView::OverdueExecution;
+            options.sort = TaskSort::Attention;
+        }
+        SnapshotPreset::OverdueReview => {
+            options.view = TaskView::OverdueReview;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::AwaitingHandoffAcceptance => {
             options.view = TaskView::AwaitingHandoffAcceptance;
             options.sort = TaskSort::UpdatedAt;
@@ -640,6 +678,7 @@ fn matches_view(
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
+    deadline_summary: Option<&TaskDeadlineSummary>,
     task_attention: Option<&TaskAttention>,
     relationship_summary: Option<&TaskRelationshipSummary>,
     view: TaskView,
@@ -664,6 +703,13 @@ fn matches_view(
                 })
         }
         TaskView::PausedResumable => paused_resumable_task_ids.contains(&task.task_id),
+        TaskView::DueSoon => deadline_summary
+            .is_some_and(|summary| summary.active_deadline_state == DeadlineState::DueSoon),
+        TaskView::OverdueExecution => deadline_summary
+            .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue),
+        TaskView::OverdueReview => {
+            deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::Overdue)
+        }
         TaskView::AwaitingHandoffAcceptance => {
             pending_handoff_acceptance_task_ids.contains(&task.task_id)
         }
@@ -1159,6 +1205,7 @@ fn derive_agent_heartbeat_summaries(
 fn derive_operator_actions(
     tasks: &[Task],
     task_attention: &[TaskAttention],
+    deadline_summaries: &[TaskDeadlineSummary],
     relationship_summaries: &[TaskRelationshipSummary],
     execution_summaries: &[TaskExecutionSummary],
     handoffs: &[Handoff],
@@ -1167,6 +1214,10 @@ fn derive_operator_actions(
     let task_attention_by_id: HashMap<_, _> = task_attention
         .iter()
         .map(|attention| (attention.task_id.as_str(), attention))
+        .collect();
+    let deadline_summary_by_task_id: HashMap<_, _> = deadline_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
         .collect();
     let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
         .iter()
@@ -1187,6 +1238,9 @@ fn derive_operator_actions(
         let Some(attention) = task_attention_by_id.get(task.task_id.as_str()) else {
             continue;
         };
+        let deadline_summary = deadline_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
         let relationship_summary = relationship_summary_by_task_id
             .get(task.task_id.as_str())
             .copied();
@@ -1234,6 +1288,53 @@ fn derive_operator_actions(
                 title: format!("Review {}", task.title),
                 summary: "Task is waiting on verification or operator review.".to_string(),
                 due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if let Some(deadline_summary) = deadline_summary
+            && matches!(
+                deadline_summary.active_deadline_state,
+                DeadlineState::DueSoon | DeadlineState::Overdue
+            )
+            && let Some(deadline_kind) = deadline_summary.active_deadline_kind
+        {
+            let (kind, label, summary) =
+                match (deadline_kind, deadline_summary.active_deadline_state) {
+                    (TaskDeadlineKind::Execution, DeadlineState::DueSoon) => (
+                        OperatorActionKind::SetTaskDueAt,
+                        format!("Adjust execution due date for {}", task.title),
+                        "Execution deadline is approaching and may need adjustment.".to_string(),
+                    ),
+                    (TaskDeadlineKind::Execution, DeadlineState::Overdue) => (
+                        OperatorActionKind::SetTaskDueAt,
+                        format!("Resolve overdue execution deadline for {}", task.title),
+                        "Execution deadline has passed and needs operator follow-through."
+                            .to_string(),
+                    ),
+                    (TaskDeadlineKind::Review, DeadlineState::DueSoon) => (
+                        OperatorActionKind::SetReviewDueAt,
+                        format!("Adjust review due date for {}", task.title),
+                        "Review deadline is approaching and may need adjustment.".to_string(),
+                    ),
+                    (TaskDeadlineKind::Review, DeadlineState::Overdue) => (
+                        OperatorActionKind::SetReviewDueAt,
+                        format!("Resolve overdue review deadline for {}", task.title),
+                        "Review deadline has passed and needs operator follow-through.".to_string(),
+                    ),
+                    (_, DeadlineState::None | DeadlineState::Scheduled) => unreachable!(),
+                };
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:deadline:{kind}", task.task_id),
+                kind,
+                target_kind: OperatorActionTargetKind::Task,
+                level: task_level(attention.level),
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: label,
+                summary,
+                due_at: deadline_summary.active_deadline_at.clone(),
                 expires_at: None,
             });
         }
@@ -1545,17 +1646,24 @@ fn derive_operator_actions(
     actions
 }
 
+#[allow(clippy::too_many_arguments)]
 fn derive_allowed_actions(
     task: &Task,
     attention: &TaskAttention,
+    deadline_summary: &TaskDeadlineSummary,
     relationship_summary: &TaskRelationshipSummary,
     execution_summary: &TaskExecutionSummary,
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
     now: OffsetDateTime,
 ) -> Vec<OperatorAction> {
-    let mut actions =
-        derive_allowed_task_actions(task, attention, relationship_summary, execution_summary);
+    let mut actions = derive_allowed_task_actions(
+        task,
+        attention,
+        deadline_summary,
+        relationship_summary,
+        execution_summary,
+    );
     actions.extend(derive_allowed_handoff_actions(
         handoffs,
         handoff_attention,
@@ -1568,6 +1676,7 @@ fn derive_allowed_actions(
 fn derive_allowed_task_actions(
     task: &Task,
     attention: &TaskAttention,
+    deadline_summary: &TaskDeadlineSummary,
     relationship_summary: &TaskRelationshipSummary,
     execution_summary: &TaskExecutionSummary,
 ) -> Vec<OperatorAction> {
@@ -1695,6 +1804,38 @@ fn derive_allowed_task_actions(
         ),
         make_task_allowed_action(
             task,
+            OperatorActionKind::SetTaskDueAt,
+            task_level,
+            "set_task_due_at",
+            format!("Set execution due date for {}", task.title),
+            "Set or revise the execution deadline for this task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::ClearTaskDueAt,
+            task_level,
+            "clear_task_due_at",
+            format!("Clear execution due date for {}", task.title),
+            "Clear the execution deadline for this task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::SetReviewDueAt,
+            task_level,
+            "set_review_due_at",
+            format!("Set review due date for {}", task.title),
+            "Set or revise the review deadline for this task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::ClearReviewDueAt,
+            task_level,
+            "clear_review_due_at",
+            format!("Clear review due date for {}", task.title),
+            "Clear the review deadline for this task.",
+        ),
+        make_task_allowed_action(
+            task,
             OperatorActionKind::CreateHandoff,
             task_level,
             "create_handoff",
@@ -1787,6 +1928,12 @@ fn derive_allowed_task_actions(
                 && task.owner_agent_id.is_some()
                 && execution_summary.run_count > 0
         }
+        OperatorActionKind::SetTaskDueAt => {
+            is_open_task_status(task.status) && task.status != TaskStatus::ReviewRequired
+        }
+        OperatorActionKind::ClearTaskDueAt => deadline_summary.due_at.is_some(),
+        OperatorActionKind::SetReviewDueAt => task.status == TaskStatus::ReviewRequired,
+        OperatorActionKind::ClearReviewDueAt => deadline_summary.review_due_at.is_some(),
         OperatorActionKind::PauseTask => {
             task.status == TaskStatus::InProgress && task.owner_agent_id.is_some()
         }
@@ -2388,6 +2535,88 @@ fn derive_review_ready_for_decision_task_ids(
         .collect()
 }
 
+fn deadline_state(deadline_at: Option<&str>, now: OffsetDateTime) -> DeadlineState {
+    let Some(deadline_at) = deadline_at else {
+        return DeadlineState::None;
+    };
+    let Some(deadline_at) = parse_timestamp(deadline_at) else {
+        return DeadlineState::None;
+    };
+    if deadline_at <= now {
+        DeadlineState::Overdue
+    } else if deadline_at <= now + time::Duration::hours(DEADLINE_SOON_HOURS) {
+        DeadlineState::DueSoon
+    } else {
+        DeadlineState::Scheduled
+    }
+}
+
+fn derive_task_deadline_summaries(tasks: &[Task], now: OffsetDateTime) -> Vec<TaskDeadlineSummary> {
+    tasks
+        .iter()
+        .map(|task| {
+            let execution_state = if matches!(
+                task.status,
+                TaskStatus::Open
+                    | TaskStatus::Assigned
+                    | TaskStatus::InProgress
+                    | TaskStatus::Blocked
+            ) {
+                deadline_state(task.due_at.as_deref(), now)
+            } else {
+                DeadlineState::None
+            };
+            let review_state = if task.status == TaskStatus::ReviewRequired {
+                deadline_state(task.review_due_at.as_deref(), now)
+            } else {
+                DeadlineState::None
+            };
+
+            let (active_deadline_kind, active_deadline_at, active_deadline_state) =
+                if review_state != DeadlineState::None {
+                    (
+                        Some(TaskDeadlineKind::Review),
+                        task.review_due_at.clone(),
+                        review_state,
+                    )
+                } else if execution_state != DeadlineState::None {
+                    (
+                        Some(TaskDeadlineKind::Execution),
+                        task.due_at.clone(),
+                        execution_state,
+                    )
+                } else {
+                    (None, None, DeadlineState::None)
+                };
+
+            let (due_in_seconds, overdue_by_seconds) = active_deadline_at
+                .as_deref()
+                .and_then(parse_timestamp)
+                .map_or((None, None), |deadline_at| {
+                    let diff = deadline_at - now;
+                    if diff.is_negative() {
+                        (None, Some((-diff).whole_seconds()))
+                    } else {
+                        (Some(diff.whole_seconds()), None)
+                    }
+                });
+
+            TaskDeadlineSummary {
+                task_id: task.task_id.clone(),
+                due_at: task.due_at.clone(),
+                review_due_at: task.review_due_at.clone(),
+                execution_state,
+                review_state,
+                active_deadline_kind,
+                active_deadline_at,
+                active_deadline_state,
+                due_in_seconds,
+                overdue_by_seconds,
+            }
+        })
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -2485,6 +2714,7 @@ fn derive_handoff_attention(handoffs: &[Handoff], now: OffsetDateTime) -> Vec<Ha
 #[allow(clippy::too_many_arguments)]
 fn derive_task_attention(
     tasks: &[Task],
+    deadline_summaries: &[TaskDeadlineSummary],
     handoffs: &[Handoff],
     agent_attention: &[AgentAttention],
     relationship_summaries: &[TaskRelationshipSummary],
@@ -2500,6 +2730,10 @@ fn derive_task_attention(
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
     now: OffsetDateTime,
 ) -> Vec<TaskAttention> {
+    let deadline_summary_by_task_id: HashMap<_, _> = deadline_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
     let agent_attention_by_id: HashMap<_, _> = agent_attention
         .iter()
         .map(|attention| (attention.agent_id.as_str(), attention))
@@ -2535,6 +2769,9 @@ fn derive_task_attention(
             let relationship_summary = relationship_summary_by_task_id
                 .get(task.task_id.as_str())
                 .copied();
+            let deadline_summary = deadline_summary_by_task_id
+                .get(task.task_id.as_str())
+                .copied();
             let owner_heartbeat_freshness = task.owner_agent_id.as_deref().and_then(|owner| {
                 agent_attention_by_id
                     .get(owner)
@@ -2556,6 +2793,26 @@ fn derive_task_attention(
                         reasons.push(TaskAttentionReason::BlockedByStaleDependency);
                     }
                 }
+            }
+            if deadline_summary
+                .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon)
+            {
+                reasons.push(TaskAttentionReason::DueSoonExecution);
+            }
+            if deadline_summary
+                .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue)
+            {
+                reasons.push(TaskAttentionReason::OverdueExecution);
+            }
+            if deadline_summary
+                .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon)
+            {
+                reasons.push(TaskAttentionReason::DueSoonReview);
+            }
+            if deadline_summary
+                .is_some_and(|summary| summary.review_state == DeadlineState::Overdue)
+            {
+                reasons.push(TaskAttentionReason::OverdueReview);
             }
             if task.status == TaskStatus::ReviewRequired {
                 reasons.push(TaskAttentionReason::ReviewRequired);
@@ -2640,6 +2897,8 @@ fn derive_task_attention(
                     reason,
                     TaskAttentionReason::Blocked
                         | TaskAttentionReason::BlockedByStaleDependency
+                        | TaskAttentionReason::OverdueExecution
+                        | TaskAttentionReason::OverdueReview
                         | TaskAttentionReason::CriticalPriority
                         | TaskAttentionReason::CriticalSeverity
                         | TaskAttentionReason::VerificationFailed

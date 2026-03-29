@@ -60,6 +60,9 @@ pub enum TaskView {
     InProgress,
     Stalled,
     PausedResumable,
+    DueSoon,
+    OverdueExecution,
+    OverdueReview,
     AwaitingHandoffAcceptance,
     AcceptedHandoffFollowThrough,
     Blocked,
@@ -98,6 +101,9 @@ pub enum SnapshotPreset {
     InProgress,
     Stalled,
     PausedResumable,
+    DueSoon,
+    OverdueExecution,
+    OverdueReview,
     AwaitingHandoffAcceptance,
     AcceptedHandoffFollowThrough,
     Blocked,
@@ -241,6 +247,7 @@ pub enum TaskEventType {
     StatusChanged,
     ExecutionUpdated,
     TriageUpdated,
+    DeadlineUpdated,
     RelationshipUpdated,
     HandoffCreated,
     HandoffUpdated,
@@ -290,6 +297,10 @@ pub enum TaskAttentionReason {
     Blocked,
     BlockedByActiveDependency,
     BlockedByStaleDependency,
+    DueSoonExecution,
+    OverdueExecution,
+    DueSoonReview,
+    OverdueReview,
     VerificationFailed,
     ReviewRequired,
     ReviewWithGraphPressure,
@@ -354,6 +365,10 @@ pub enum OperatorActionKind {
     BlockTask,
     UnblockTask,
     UpdateTaskNote,
+    SetTaskDueAt,
+    ClearTaskDueAt,
+    SetReviewDueAt,
+    ClearReviewDueAt,
     CreateHandoff,
     PostCouncilMessage,
     AttachEvidence,
@@ -456,6 +471,8 @@ pub struct Task {
     pub closed_by: Option<String>,
     pub closure_summary: Option<String>,
     pub closed_at: Option<String>,
+    pub due_at: Option<String>,
+    pub review_due_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -639,6 +656,38 @@ pub struct TaskAttention {
     pub reasons: Vec<TaskAttentionReason>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum DeadlineState {
+    None,
+    Scheduled,
+    DueSoon,
+    Overdue,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TaskDeadlineKind {
+    Execution,
+    Review,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDeadlineSummary {
+    pub task_id: String,
+    pub due_at: Option<String>,
+    pub review_due_at: Option<String>,
+    pub execution_state: DeadlineState,
+    pub review_state: DeadlineState,
+    pub active_deadline_kind: Option<TaskDeadlineKind>,
+    pub active_deadline_at: Option<String>,
+    pub active_deadline_state: DeadlineState,
+    pub due_in_seconds: Option<i64>,
+    pub overdue_by_seconds: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskRelationshipSummary {
     pub task_id: String,
@@ -738,6 +787,7 @@ pub struct ApiSnapshot {
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub tasks: Vec<Task>,
     pub task_attention: Vec<TaskAttention>,
+    pub deadline_summaries: Vec<TaskDeadlineSummary>,
     pub task_heartbeat_summaries: Vec<TaskHeartbeatSummary>,
     pub execution_summaries: Vec<TaskExecutionSummary>,
     pub ownership: Vec<TaskOwnershipSummary>,
@@ -755,6 +805,7 @@ pub struct TaskDetail {
     pub agent_attention: Vec<AgentAttention>,
     pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
     pub task: Task,
+    pub deadline_summary: TaskDeadlineSummary,
     pub ownership: TaskOwnershipSummary,
     pub heartbeat_summary: TaskHeartbeatSummary,
     pub execution_summary: TaskExecutionSummary,

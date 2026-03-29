@@ -224,6 +224,8 @@ pub enum TaskCommand {
         #[arg(long)]
         due_at: Option<String>,
         #[arg(long)]
+        review_due_at: Option<String>,
+        #[arg(long)]
         expires_at: Option<String>,
         #[arg(long)]
         author_agent_id: Option<String>,

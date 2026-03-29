@@ -105,6 +105,7 @@ pub struct TaskOperatorActionInput<'a> {
     pub handoff_summary: Option<&'a str>,
     pub requested_action: Option<&'a str>,
     pub due_at: Option<&'a str>,
+    pub review_due_at: Option<&'a str>,
     pub expires_at: Option<&'a str>,
     pub author_agent_id: Option<&'a str>,
     pub message_type: Option<CouncilMessageType>,
@@ -128,6 +129,15 @@ pub struct TaskOperatorActionInput<'a> {
 pub struct HandoffOperatorActionInput<'a> {
     pub acting_agent_id: Option<&'a str>,
     pub note: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskDeadlineUpdate<'a> {
+    pub due_at: Option<&'a str>,
+    pub clear_due_at: bool,
+    pub review_due_at: Option<&'a str>,
+    pub clear_review_due_at: bool,
+    pub event_note: Option<&'a str>,
 }
 
 const BASE_SCHEMA: &str = r"
@@ -164,6 +174,8 @@ const BASE_SCHEMA: &str = r"
         closed_by TEXT NULL,
         closure_summary TEXT NULL,
         closed_at TEXT NULL,
+        due_at TEXT NULL,
+        review_due_at TEXT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -431,7 +443,8 @@ impl Store {
             SELECT task_id, title, description, requested_by, project_root, status,
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
-                   verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
+                   verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
+                   created_at, updated_at
             FROM tasks
             ORDER BY rowid
             ",
@@ -687,6 +700,120 @@ impl Store {
         })
     }
 
+    /// Updates task deadline metadata without changing ownership or lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist, no deadline fields were
+    /// provided, or a supplied deadline is invalid for the current task state.
+    pub fn update_task_deadlines(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        update: TaskDeadlineUpdate<'_>,
+    ) -> StoreResult<Task> {
+        self.ensure_task_exists(task_id)?;
+        self.in_transaction(|conn| {
+            let current = get_task_in_connection(conn, task_id)?;
+
+            if update.due_at.is_none()
+                && update.review_due_at.is_none()
+                && !update.clear_due_at
+                && !update.clear_review_due_at
+            {
+                return Err(StoreError::Validation(
+                    "deadline update requires at least one field".to_string(),
+                ));
+            }
+
+            if update.due_at.is_some()
+                && (!is_open_task_status(current.status)
+                    || current.status == TaskStatus::ReviewRequired)
+            {
+                return Err(StoreError::Validation(
+                    "set_task_due_at requires a non-terminal task outside review".to_string(),
+                ));
+            }
+            if update.review_due_at.is_some() && current.status != TaskStatus::ReviewRequired {
+                return Err(StoreError::Validation(
+                    "set_review_due_at requires a task in review".to_string(),
+                ));
+            }
+
+            if let Some(due_at) = update.due_at {
+                parse_rfc3339_timestamp(due_at)?;
+            }
+            if let Some(review_due_at) = update.review_due_at {
+                parse_rfc3339_timestamp(review_due_at)?;
+            }
+
+            let next_due_at = if update.clear_due_at {
+                None
+            } else {
+                update
+                    .due_at
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.due_at.clone())
+            };
+            let next_review_due_at = if update.clear_review_due_at {
+                None
+            } else {
+                update
+                    .review_due_at
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.review_due_at.clone())
+            };
+
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET due_at = ?2,
+                    review_due_at = ?3,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                params![task_id, next_due_at, next_review_due_at],
+            )?;
+
+            let updated = get_task_in_connection(conn, task_id)?;
+            let mut notes = Vec::new();
+            if update.due_at.is_some() || update.clear_due_at {
+                notes.push(format!(
+                    "due_at:{:?}->{:?}",
+                    current.due_at.as_deref(),
+                    updated.due_at.as_deref()
+                ));
+            }
+            if update.review_due_at.is_some() || update.clear_review_due_at {
+                notes.push(format!(
+                    "review_due_at:{:?}->{:?}",
+                    current.review_due_at.as_deref(),
+                    updated.review_due_at.as_deref()
+                ));
+            }
+            if let Some(event_note) = update.event_note {
+                notes.push(format!("note={event_note}"));
+            }
+            let note = (!notes.is_empty()).then(|| notes.join("; "));
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::DeadlineUpdated,
+                    actor: changed_by,
+                    from_status: Some(current.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: note.as_deref(),
+                },
+            )?;
+            Ok(updated)
+        })
+    }
+
     /// Applies a task-scoped operator action using runtime-owned semantics.
     ///
     /// # Errors
@@ -703,6 +830,10 @@ impl Store {
     ) -> StoreResult<Task> {
         if let Some(update) = task_operator_triage_update(action, &input)? {
             return self.update_task_triage(task_id, changed_by, update);
+        }
+
+        if let Some(update) = task_operator_deadline_update(action, &input)? {
+            return self.update_task_deadlines(task_id, changed_by, update);
         }
 
         if let Some(task) = self.apply_task_execution_action(task_id, action, changed_by, &input)? {
@@ -841,6 +972,10 @@ impl Store {
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
             | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::SetTaskDueAt
+            | OperatorActionKind::ClearTaskDueAt
+            | OperatorActionKind::SetReviewDueAt
+            | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
@@ -1111,6 +1246,10 @@ impl Store {
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
             | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::SetTaskDueAt
+            | OperatorActionKind::ClearTaskDueAt
+            | OperatorActionKind::SetReviewDueAt
+            | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
@@ -1581,6 +1720,10 @@ impl Store {
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
             | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::SetTaskDueAt
+            | OperatorActionKind::ClearTaskDueAt
+            | OperatorActionKind::SetReviewDueAt
+            | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::AcceptHandoff
             | OperatorActionKind::RejectHandoff
             | OperatorActionKind::CancelHandoff
@@ -1947,6 +2090,10 @@ impl Store {
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
             | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::SetTaskDueAt
+            | OperatorActionKind::ClearTaskDueAt
+            | OperatorActionKind::SetReviewDueAt
+            | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
@@ -2132,6 +2279,7 @@ impl Store {
     ///
     /// Returns an error if the action is invalid for handoffs or the write
     /// fails.
+    #[allow(clippy::too_many_lines)]
     pub fn apply_handoff_operator_action(
         &self,
         handoff_id: &str,
@@ -2229,6 +2377,10 @@ impl Store {
             | OperatorActionKind::BlockTask
             | OperatorActionKind::UnblockTask
             | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::SetTaskDueAt
+            | OperatorActionKind::ClearTaskDueAt
+            | OperatorActionKind::SetReviewDueAt
+            | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
@@ -2763,6 +2915,8 @@ fn create_task_in_connection(
         closed_by: None,
         closure_summary: None,
         closed_at: None,
+        due_at: None,
+        review_due_at: None,
         created_at: String::new(),
         updated_at: String::new(),
     };
@@ -2772,8 +2926,8 @@ fn create_task_in_connection(
             task_id, title, description, requested_by, project_root, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
-            closed_by, closure_summary, closed_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            closed_by, closure_summary, closed_at, due_at, review_due_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -2795,6 +2949,8 @@ fn create_task_in_connection(
             task.closed_by,
             task.closure_summary,
             task.closed_at,
+            task.due_at,
+            task.review_due_at,
         ],
     )?;
     record_task_event_in_connection(
@@ -3126,6 +3282,8 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "owner_note", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_by", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "due_at", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "review_due_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
     conn.execute(
@@ -3710,6 +3868,10 @@ fn task_operator_triage_update<'a>(
         | OperatorActionKind::CloseFollowUpChain
         | OperatorActionKind::BlockTask
         | OperatorActionKind::UnblockTask
+        | OperatorActionKind::SetTaskDueAt
+        | OperatorActionKind::ClearTaskDueAt
+        | OperatorActionKind::SetReviewDueAt
+        | OperatorActionKind::ClearReviewDueAt
         | OperatorActionKind::CreateHandoff
         | OperatorActionKind::PostCouncilMessage
         | OperatorActionKind::AttachEvidence
@@ -3721,6 +3883,43 @@ fn task_operator_triage_update<'a>(
         | OperatorActionKind::CompleteHandoff
         | OperatorActionKind::FollowUpHandoff
         | OperatorActionKind::ExpireHandoff => return Ok(None),
+    };
+
+    Ok(Some(update))
+}
+
+fn task_operator_deadline_update<'a>(
+    action: OperatorActionKind,
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<Option<TaskDeadlineUpdate<'a>>> {
+    let update = match action {
+        OperatorActionKind::SetTaskDueAt => TaskDeadlineUpdate {
+            due_at: Some(input.due_at.ok_or_else(|| {
+                StoreError::Validation("set_task_due_at requires a due_at value".to_string())
+            })?),
+            event_note: input.note,
+            ..TaskDeadlineUpdate::default()
+        },
+        OperatorActionKind::ClearTaskDueAt => TaskDeadlineUpdate {
+            clear_due_at: true,
+            event_note: input.note,
+            ..TaskDeadlineUpdate::default()
+        },
+        OperatorActionKind::SetReviewDueAt => TaskDeadlineUpdate {
+            review_due_at: Some(input.review_due_at.ok_or_else(|| {
+                StoreError::Validation(
+                    "set_review_due_at requires a review_due_at value".to_string(),
+                )
+            })?),
+            event_note: input.note,
+            ..TaskDeadlineUpdate::default()
+        },
+        OperatorActionKind::ClearReviewDueAt => TaskDeadlineUpdate {
+            clear_review_due_at: true,
+            event_note: input.note,
+            ..TaskDeadlineUpdate::default()
+        },
+        _ => return Ok(None),
     };
 
     Ok(Some(update))
@@ -3859,6 +4058,10 @@ fn task_operator_status_update<'a>(
         | OperatorActionKind::SetTaskPriority
         | OperatorActionKind::SetTaskSeverity
         | OperatorActionKind::UpdateTaskNote
+        | OperatorActionKind::SetTaskDueAt
+        | OperatorActionKind::ClearTaskDueAt
+        | OperatorActionKind::SetReviewDueAt
+        | OperatorActionKind::ClearReviewDueAt
         | OperatorActionKind::CreateHandoff
         | OperatorActionKind::PostCouncilMessage
         | OperatorActionKind::AttachEvidence
@@ -3881,7 +4084,8 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
         SELECT task_id, title, description, requested_by, project_root, status,
                verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
-               verified_at, closed_by, closure_summary, closed_at, created_at, updated_at
+               verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
+               created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
         ",
@@ -4145,8 +4349,10 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_by: row.get(16)?,
         closure_summary: row.get(17)?,
         closed_at: row.get(18)?,
-        created_at: row.get(19)?,
-        updated_at: row.get(20)?,
+        due_at: row.get(19)?,
+        review_due_at: row.get(20)?,
+        created_at: row.get(21)?,
+        updated_at: row.get(22)?,
     })
 }
 
