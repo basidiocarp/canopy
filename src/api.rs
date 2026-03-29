@@ -104,6 +104,22 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &handoffs,
         &project_execution_summaries,
     );
+    let due_soon_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            &project_execution_summaries,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            &tasks,
+            &handoffs,
+            &project_execution_summaries,
+            now,
+            Freshness::Stale,
+        );
     let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
         &tasks,
         &project_assignments,
@@ -208,6 +224,8 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
+            &due_soon_accepted_handoff_follow_through_task_ids,
+            &overdue_accepted_handoff_follow_through_task_ids,
             deadline_summary_by_id.get(&task.task_id),
             task_attention_by_id.get(&task.task_id),
             relationship_summary_by_id.get(&task.task_id),
@@ -664,6 +682,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::AcceptedHandoffFollowThrough;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::DueSoonAcceptedHandoffFollowThrough => {
+            options.view = TaskView::DueSoonAcceptedHandoffFollowThrough;
+            options.sort = TaskSort::UpdatedAt;
+        }
+        SnapshotPreset::OverdueAcceptedHandoffFollowThrough => {
+            options.view = TaskView::OverdueAcceptedHandoffFollowThrough;
+            options.sort = TaskSort::UpdatedAt;
+        }
         SnapshotPreset::Blocked => {
             options.view = TaskView::Blocked;
             options.sort = TaskSort::Attention;
@@ -710,6 +736,8 @@ fn matches_view(
     claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
+    due_soon_accepted_handoff_follow_through_task_ids: &HashSet<String>,
+    overdue_accepted_handoff_follow_through_task_ids: &HashSet<String>,
     deadline_summary: Option<&TaskDeadlineSummary>,
     task_attention: Option<&TaskAttention>,
     relationship_summary: Option<&TaskRelationshipSummary>,
@@ -768,6 +796,12 @@ fn matches_view(
         }
         TaskView::AcceptedHandoffFollowThrough => {
             accepted_handoff_follow_through_task_ids.contains(&task.task_id)
+        }
+        TaskView::DueSoonAcceptedHandoffFollowThrough => {
+            due_soon_accepted_handoff_follow_through_task_ids.contains(&task.task_id)
+        }
+        TaskView::OverdueAcceptedHandoffFollowThrough => {
+            overdue_accepted_handoff_follow_through_task_ids.contains(&task.task_id)
         }
         TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
         TaskView::Blocked => {
@@ -2266,6 +2300,38 @@ fn derive_accepted_handoff_follow_through_task_ids(
     handoffs: &[Handoff],
     execution_summaries: &[TaskExecutionSummary],
 ) -> HashSet<String> {
+    derive_accepted_handoff_follow_through_task_ids_inner(
+        tasks,
+        handoffs,
+        execution_summaries,
+        None,
+        OffsetDateTime::now_utc(),
+    )
+}
+
+fn derive_accepted_handoff_follow_through_task_ids_with_freshness(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    execution_summaries: &[TaskExecutionSummary],
+    now: OffsetDateTime,
+    freshness: Freshness,
+) -> HashSet<String> {
+    derive_accepted_handoff_follow_through_task_ids_inner(
+        tasks,
+        handoffs,
+        execution_summaries,
+        Some(freshness),
+        now,
+    )
+}
+
+fn derive_accepted_handoff_follow_through_task_ids_inner(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    execution_summaries: &[TaskExecutionSummary],
+    freshness: Option<Freshness>,
+    now: OffsetDateTime,
+) -> HashSet<String> {
     let tasks_by_id: HashMap<_, _> = tasks
         .iter()
         .map(|task| (task.task_id.as_str(), task))
@@ -2278,6 +2344,9 @@ fn derive_accepted_handoff_follow_through_task_ids(
     handoffs
         .iter()
         .filter(|handoff| handoff.status == crate::models::HandoffStatus::Accepted)
+        .filter(|handoff| {
+            freshness.is_none_or(|freshness| handoff_freshness(handoff, now) == freshness)
+        })
         .filter_map(|handoff| {
             let task = tasks_by_id.get(handoff.task_id.as_str())?;
             if task.status != TaskStatus::Assigned {

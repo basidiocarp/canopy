@@ -1760,7 +1760,7 @@ fn api_snapshot_review_handoff_follow_through_tracks_open_and_accepted_review_ha
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    for agent_id in ["agent-a", "agent-b"] {
+    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -1955,7 +1955,7 @@ fn api_snapshot_review_decision_follow_through_tracks_open_decision_and_closeout
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    for agent_id in ["agent-a", "agent-b"] {
+    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -2999,7 +2999,7 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
         .format(&Rfc3339)
         .expect("format acceptance expiry");
 
-    for agent_id in ["agent-a", "agent-b"] {
+    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -3320,6 +3320,322 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
         .collect();
     assert!(handoff_task_ids.contains(&pending_task_id.as_str()));
     assert!(handoff_task_ids.contains(&expired_task_id.as_str()));
+}
+
+#[test]
+fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let now = OffsetDateTime::now_utc();
+    let due_soon_follow_through_due_at = (now + Duration::hours(1))
+        .format(&Rfc3339)
+        .expect("format due soon follow through deadline");
+    let overdue_follow_through_due_at = (now - Duration::hours(1))
+        .format(&Rfc3339)
+        .expect("format overdue follow through deadline");
+    let follow_through_expires_at = (now + Duration::hours(2))
+        .format(&Rfc3339)
+        .expect("format follow through expiry");
+
+    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "agent",
+                "register",
+                "--agent-id",
+                agent_id,
+                "--host-id",
+                agent_id,
+                "--host-type",
+                "codex",
+                "--host-instance",
+                "local",
+                "--model",
+                "gpt-5.4",
+                "--project-root",
+                "/tmp/project",
+                "--worktree-id",
+                "wt-1",
+            ])
+            .assert()
+            .success();
+    }
+
+    for title in [
+        "Accepted follow-through",
+        "Due soon accepted follow-through",
+        "Overdue accepted follow-through",
+        "Accepted and already resumed",
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "task",
+                "create",
+                "--title",
+                title,
+                "--requested-by",
+                "operator",
+                "--project-root",
+                "/tmp/project",
+            ])
+            .assert()
+            .success();
+    }
+
+    let snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let snapshot: Value = serde_json::from_slice(&snapshot_output).expect("parse snapshot");
+    let accepted_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Accepted follow-through")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("accepted task id")
+        .to_string();
+    let due_soon_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Due soon accepted follow-through")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("due soon task id")
+        .to_string();
+    let overdue_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Overdue accepted follow-through")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("overdue task id")
+        .to_string();
+    let resumed_task_id = snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["title"] == "Accepted and already resumed")
+        .and_then(|task| task["task_id"].as_str())
+        .expect("resumed task id")
+        .to_string();
+
+    let create_transfer_handoff = |task_id: &str, to_agent_id: &str, due_at: Option<&str>| {
+        let mut args = vec![
+            "--db",
+            db_path.to_str().expect("db path"),
+            "handoff",
+            "create",
+            "--task-id",
+            task_id,
+            "--from-agent-id",
+            "agent-a",
+            "--to-agent-id",
+            to_agent_id,
+            "--handoff-type",
+            "transfer_ownership",
+            "--summary",
+            "accepted owner follow-through",
+            "--requested-action",
+            "pick up execution after transfer",
+            "--expires-at",
+            follow_through_expires_at.as_str(),
+        ];
+        if let Some(due_at) = due_at {
+            args.extend(["--due-at", due_at]);
+        }
+
+        let output = Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args(&args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let handoff: Value = serde_json::from_slice(&output).expect("parse created handoff");
+        handoff["handoff_id"]
+            .as_str()
+            .expect("handoff id")
+            .to_string()
+    };
+
+    let accepted_handoff_id = create_transfer_handoff(&accepted_task_id, "agent-b", None);
+    let due_soon_handoff_id = create_transfer_handoff(
+        &due_soon_task_id,
+        "agent-c",
+        Some(due_soon_follow_through_due_at.as_str()),
+    );
+    let overdue_handoff_id = create_transfer_handoff(
+        &overdue_task_id,
+        "agent-d",
+        Some(overdue_follow_through_due_at.as_str()),
+    );
+    let resumed_handoff_id = create_transfer_handoff(
+        &resumed_task_id,
+        "agent-e",
+        Some(due_soon_follow_through_due_at.as_str()),
+    );
+
+    for (handoff_id, agent_id) in [
+        (accepted_handoff_id.as_str(), "agent-b"),
+        (due_soon_handoff_id.as_str(), "agent-c"),
+        (overdue_handoff_id.as_str(), "agent-d"),
+        (resumed_handoff_id.as_str(), "agent-e"),
+    ] {
+        Command::cargo_bin("canopy")
+            .expect("build canopy binary")
+            .args([
+                "--db",
+                db_path.to_str().expect("db path"),
+                "handoff",
+                "resolve",
+                "--handoff-id",
+                handoff_id,
+                "--status",
+                "accepted",
+                "--resolved-by",
+                agent_id,
+                "--acting-agent-id",
+                agent_id,
+            ])
+            .assert()
+            .success();
+    }
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &resumed_task_id,
+            "--action",
+            "start_task",
+            "--changed-by",
+            "operator",
+            "--acting-agent-id",
+            "agent-e",
+        ])
+        .assert()
+        .success();
+
+    let accepted_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "accepted_handoff_follow_through",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let accepted_snapshot: Value =
+        serde_json::from_slice(&accepted_output).expect("parse accepted follow-through snapshot");
+    let accepted_task_ids: Vec<_> = accepted_snapshot["tasks"]
+        .as_array()
+        .expect("accepted tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert!(accepted_task_ids.contains(&accepted_task_id.as_str()));
+    assert!(accepted_task_ids.contains(&due_soon_task_id.as_str()));
+    assert!(accepted_task_ids.contains(&overdue_task_id.as_str()));
+    assert!(!accepted_task_ids.contains(&resumed_task_id.as_str()));
+    assert!(
+        accepted_snapshot["task_attention"]
+            .as_array()
+            .expect("task attention")
+            .iter()
+            .any(|attention| {
+                attention["task_id"] == accepted_task_id
+                    && attention["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason == "accepted_handoff_pending_execution")
+                    })
+            })
+    );
+
+    let due_soon_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "due_soon_accepted_handoff_follow_through",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let due_soon_snapshot: Value =
+        serde_json::from_slice(&due_soon_output).expect("parse due soon accepted snapshot");
+    let due_soon_task_ids: Vec<_> = due_soon_snapshot["tasks"]
+        .as_array()
+        .expect("due soon tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(due_soon_task_ids, vec![due_soon_task_id.as_str()]);
+
+    let overdue_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--view",
+            "overdue_accepted_handoff_follow_through",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let overdue_snapshot: Value =
+        serde_json::from_slice(&overdue_output).expect("parse overdue accepted snapshot");
+    let overdue_task_ids: Vec<_> = overdue_snapshot["tasks"]
+        .as_array()
+        .expect("overdue tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(overdue_task_ids, vec![overdue_task_id.as_str()]);
 }
 
 #[test]
