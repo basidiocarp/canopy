@@ -693,13 +693,28 @@ impl Store {
             return self.update_task_triage(task_id, changed_by, update);
         }
 
-        if let Some((status, update)) =
-            task_operator_status_update(&self.get_task(task_id)?, action, &input)?
+        let current_task = self.get_task(task_id)?;
+        if let Some((status, update)) = task_operator_status_update(&current_task, action, &input)?
         {
+            if action == OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+                && self
+                    .list_related_tasks(task_id)?
+                    .into_iter()
+                    .any(|related| related.relationship_role == TaskRelationshipRole::BlockedBy)
+            {
+                return Err(StoreError::Validation(
+                    "reopen_blocked_task_when_unblocked requires the task to have no remaining blockers"
+                        .to_string(),
+                ));
+            }
             return self.update_task_status(task_id, status, changed_by, update);
         }
 
         if let Some(task) = self.apply_task_creation_action(task_id, action, changed_by, &input)? {
+            return Ok(task);
+        }
+
+        if let Some(task) = self.apply_task_graph_action(task_id, action, changed_by, &input)? {
             return Ok(task);
         }
 
@@ -725,6 +740,10 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::ResolveDependency
+            | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+            | OperatorActionKind::PromoteFollowUp
+            | OperatorActionKind::CloseFollowUpChain
             | OperatorActionKind::SetTaskPriority
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
@@ -736,6 +755,264 @@ impl Store {
             | OperatorActionKind::CreateFollowUpTask
             | OperatorActionKind::LinkTaskDependency => unreachable!("handled above"),
         }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_task_graph_action(
+        &self,
+        task_id: &str,
+        action: OperatorActionKind,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Option<Task>> {
+        let task = match action {
+            OperatorActionKind::ResolveDependency => self.in_transaction(|conn| {
+                let current_task = get_task_in_connection(conn, task_id)?;
+                let related_task_id = input.related_task_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "resolve_dependency requires a related_task_id".to_string(),
+                    )
+                })?;
+                let related_task = get_task_in_connection(conn, related_task_id)?;
+                let relationship = find_task_relationship_between_in_connection(
+                    conn,
+                    task_id,
+                    related_task_id,
+                    TaskRelationshipKind::Blocks,
+                )?
+                .ok_or_else(|| {
+                    StoreError::Validation(
+                        "resolve_dependency requires an existing dependency relationship"
+                            .to_string(),
+                    )
+                })?;
+                delete_task_relationship_in_connection(conn, &relationship.relationship_id)?;
+                let current_role = if relationship.source_task_id == task_id {
+                    TaskRelationshipRole::Blocks
+                } else {
+                    TaskRelationshipRole::BlockedBy
+                };
+                let current_note = format!(
+                    "relationship_id={}; action=resolve_dependency; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    current_role,
+                    related_task.task_id,
+                    related_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(current_task.status),
+                        to_status: current_task.status,
+                        verification_state: Some(current_task.verification_state),
+                        owner_agent_id: current_task.owner_agent_id.as_deref(),
+                        note: Some(current_note.as_str()),
+                    },
+                )?;
+                let inverse_role = if current_role == TaskRelationshipRole::Blocks {
+                    TaskRelationshipRole::BlockedBy
+                } else {
+                    TaskRelationshipRole::Blocks
+                };
+                let related_note = format!(
+                    "relationship_id={}; action=resolve_dependency; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    inverse_role,
+                    current_task.task_id,
+                    current_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id: related_task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(related_task.status),
+                        to_status: related_task.status,
+                        verification_state: Some(related_task.verification_state),
+                        owner_agent_id: related_task.owner_agent_id.as_deref(),
+                        note: Some(related_note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::PromoteFollowUp => self.in_transaction(|conn| {
+                let current_task = get_task_in_connection(conn, task_id)?;
+                let related_task_id = input.related_task_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "promote_follow_up requires a related_task_id".to_string(),
+                    )
+                })?;
+                let related_task = get_task_in_connection(conn, related_task_id)?;
+                let relationship = find_task_relationship_between_in_connection(
+                    conn,
+                    task_id,
+                    related_task_id,
+                    TaskRelationshipKind::FollowUp,
+                )?
+                .ok_or_else(|| {
+                    StoreError::Validation(
+                        "promote_follow_up requires an existing follow-up relationship"
+                            .to_string(),
+                    )
+                })?;
+                delete_task_relationship_in_connection(conn, &relationship.relationship_id)?;
+                let current_role = if relationship.source_task_id == task_id {
+                    TaskRelationshipRole::FollowUpChild
+                } else {
+                    TaskRelationshipRole::FollowUpParent
+                };
+                let current_note = format!(
+                    "relationship_id={}; action=promote_follow_up; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    current_role,
+                    related_task.task_id,
+                    related_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(current_task.status),
+                        to_status: current_task.status,
+                        verification_state: Some(current_task.verification_state),
+                        owner_agent_id: current_task.owner_agent_id.as_deref(),
+                        note: Some(current_note.as_str()),
+                    },
+                )?;
+                let inverse_role = if current_role == TaskRelationshipRole::FollowUpChild {
+                    TaskRelationshipRole::FollowUpParent
+                } else {
+                    TaskRelationshipRole::FollowUpChild
+                };
+                let related_note = format!(
+                    "relationship_id={}; action=promote_follow_up; kind={}; role={}; related_task_id={}; related_title={}",
+                    relationship.relationship_id,
+                    relationship.kind,
+                    inverse_role,
+                    current_task.task_id,
+                    current_task.title
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id: related_task_id,
+                        event_type: TaskEventType::RelationshipUpdated,
+                        actor: changed_by,
+                        from_status: Some(related_task.status),
+                        to_status: related_task.status,
+                        verification_state: Some(related_task.verification_state),
+                        owner_agent_id: related_task.owner_agent_id.as_deref(),
+                        note: Some(related_note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::CloseFollowUpChain => self.in_transaction(|conn| {
+                let current_task = get_task_in_connection(conn, task_id)?;
+                let relationships = list_source_task_relationships_in_connection(
+                    conn,
+                    task_id,
+                    TaskRelationshipKind::FollowUp,
+                )?;
+                if relationships.is_empty() {
+                    return Err(StoreError::Validation(
+                        "close_follow_up_chain requires follow-up child relationships".to_string(),
+                    ));
+                }
+
+                let mut related_tasks = Vec::with_capacity(relationships.len());
+                for relationship in &relationships {
+                    let related_task = get_task_in_connection(conn, &relationship.target_task_id)?;
+                    if is_open_task_status(related_task.status) {
+                        return Err(StoreError::Validation(
+                            "close_follow_up_chain requires all follow-up tasks to be terminal"
+                                .to_string(),
+                        ));
+                    }
+                    related_tasks.push((relationship.clone(), related_task));
+                }
+
+                for (relationship, related_task) in &related_tasks {
+                    delete_task_relationship_in_connection(conn, &relationship.relationship_id)?;
+                    let current_note = format!(
+                        "relationship_id={}; action=close_follow_up_chain; kind={}; role={}; related_task_id={}; related_title={}",
+                        relationship.relationship_id,
+                        relationship.kind,
+                        TaskRelationshipRole::FollowUpChild,
+                        related_task.task_id,
+                        related_task.title
+                    );
+                    record_task_event_in_connection(
+                        conn,
+                        &TaskEventWrite {
+                            task_id,
+                            event_type: TaskEventType::RelationshipUpdated,
+                            actor: changed_by,
+                            from_status: Some(current_task.status),
+                            to_status: current_task.status,
+                            verification_state: Some(current_task.verification_state),
+                            owner_agent_id: current_task.owner_agent_id.as_deref(),
+                            note: Some(current_note.as_str()),
+                        },
+                    )?;
+                    let related_note = format!(
+                        "relationship_id={}; action=close_follow_up_chain; kind={}; role={}; related_task_id={}; related_title={}",
+                        relationship.relationship_id,
+                        relationship.kind,
+                        TaskRelationshipRole::FollowUpParent,
+                        current_task.task_id,
+                        current_task.title
+                    );
+                    record_task_event_in_connection(
+                        conn,
+                        &TaskEventWrite {
+                            task_id: &related_task.task_id,
+                            event_type: TaskEventType::RelationshipUpdated,
+                            actor: changed_by,
+                            from_status: Some(related_task.status),
+                            to_status: related_task.status,
+                            verification_state: Some(related_task.verification_state),
+                            owner_agent_id: related_task.owner_agent_id.as_deref(),
+                            note: Some(related_note.as_str()),
+                        },
+                    )?;
+                }
+
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::AcknowledgeTask
+            | OperatorActionKind::UnacknowledgeTask
+            | OperatorActionKind::VerifyTask
+            | OperatorActionKind::ReassignTask
+            | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+            | OperatorActionKind::SetTaskPriority
+            | OperatorActionKind::SetTaskSeverity
+            | OperatorActionKind::BlockTask
+            | OperatorActionKind::UnblockTask
+            | OperatorActionKind::UpdateTaskNote
+            | OperatorActionKind::CreateHandoff
+            | OperatorActionKind::PostCouncilMessage
+            | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::CreateFollowUpTask
+            | OperatorActionKind::LinkTaskDependency
+            | OperatorActionKind::AcceptHandoff
+            | OperatorActionKind::RejectHandoff
+            | OperatorActionKind::CancelHandoff
+            | OperatorActionKind::CompleteHandoff
+            | OperatorActionKind::FollowUpHandoff
+            | OperatorActionKind::ExpireHandoff => return Ok(None),
+        };
+
+        Ok(Some(task))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1000,8 +1277,7 @@ impl Store {
                     TaskRelationshipRole::BlockedBy => {
                         (related_task_id, task_id, TaskRelationshipRole::BlockedBy)
                     }
-                    TaskRelationshipRole::FollowUpParent
-                    | TaskRelationshipRole::FollowUpChild => {
+                    TaskRelationshipRole::FollowUpParent | TaskRelationshipRole::FollowUpChild => {
                         return Err(StoreError::Validation(
                             "link_task_dependency only supports blocks or blocked_by roles"
                                 .to_string(),
@@ -1040,8 +1316,9 @@ impl Store {
                 let inverse_role = match relationship_role {
                     TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
                     TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
-                    TaskRelationshipRole::FollowUpParent
-                    | TaskRelationshipRole::FollowUpChild => unreachable!("validated above"),
+                    TaskRelationshipRole::FollowUpParent | TaskRelationshipRole::FollowUpChild => {
+                        unreachable!("validated above")
+                    }
                 };
                 let inverse_note = format!(
                     "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
@@ -1071,6 +1348,10 @@ impl Store {
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
             | OperatorActionKind::ReassignTask
+            | OperatorActionKind::ResolveDependency
+            | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+            | OperatorActionKind::PromoteFollowUp
+            | OperatorActionKind::CloseFollowUpChain
             | OperatorActionKind::SetTaskPriority
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
@@ -1290,6 +1571,10 @@ impl Store {
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
             | OperatorActionKind::ReassignTask
+            | OperatorActionKind::ResolveDependency
+            | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+            | OperatorActionKind::PromoteFollowUp
+            | OperatorActionKind::CloseFollowUpChain
             | OperatorActionKind::SetTaskPriority
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
@@ -1709,7 +1994,8 @@ impl Store {
         relationships
             .into_iter()
             .map(|relationship| {
-                let (related_task_id, relationship_role) = if relationship.source_task_id == task_id {
+                let (related_task_id, relationship_role) = if relationship.source_task_id == task_id
+                {
                     let role = match relationship.kind {
                         TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpChild,
                         TaskRelationshipKind::Blocks => TaskRelationshipRole::Blocks,
@@ -2103,6 +2389,77 @@ fn create_task_relationship_in_connection(
     get_task_relationship_in_connection(conn, &relationship.relationship_id)
 }
 
+fn find_task_relationship_between_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    related_task_id: &str,
+    kind: TaskRelationshipKind,
+) -> StoreResult<Option<TaskRelationship>> {
+    conn.query_row(
+        r"
+        SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+        FROM task_relationships
+        WHERE kind = ?1
+          AND (
+            (source_task_id = ?2 AND target_task_id = ?3)
+            OR (source_task_id = ?3 AND target_task_id = ?2)
+          )
+        ORDER BY created_at DESC
+        LIMIT 1
+        ",
+        params![kind.to_string(), task_id, related_task_id],
+        map_task_relationship,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn list_source_task_relationships_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    kind: TaskRelationshipKind,
+) -> StoreResult<Vec<TaskRelationship>> {
+    let mut statement = conn.prepare(
+        r"
+        SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+        FROM task_relationships
+        WHERE source_task_id = ?1 AND kind = ?2
+        ORDER BY created_at ASC
+        ",
+    )?;
+    let rows = statement.query_map(params![task_id, kind.to_string()], map_task_relationship)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+fn delete_task_relationship_in_connection(
+    conn: &Connection,
+    relationship_id: &str,
+) -> StoreResult<()> {
+    let relationship = get_task_relationship_in_connection(conn, relationship_id)?;
+    let deleted = conn.execute(
+        "DELETE FROM task_relationships WHERE relationship_id = ?1",
+        [relationship_id],
+    )?;
+    if deleted == 0 {
+        return Err(StoreError::NotFound("task relationship"));
+    }
+    touch_task_in_connection(conn, &relationship.source_task_id)?;
+    touch_task_in_connection(conn, &relationship.target_task_id)?;
+    Ok(())
+}
+
+fn is_open_task_status(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Open
+            | TaskStatus::Assigned
+            | TaskStatus::InProgress
+            | TaskStatus::Blocked
+            | TaskStatus::ReviewRequired
+    )
+}
+
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "priority", "TEXT NULL")?;
     ensure_column(conn, "tasks", "severity", "TEXT NULL")?;
@@ -2480,14 +2837,18 @@ fn task_operator_triage_update<'a>(
         },
         OperatorActionKind::VerifyTask
         | OperatorActionKind::ReassignTask
+        | OperatorActionKind::ResolveDependency
+        | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
+        | OperatorActionKind::PromoteFollowUp
+        | OperatorActionKind::CloseFollowUpChain
         | OperatorActionKind::BlockTask
         | OperatorActionKind::UnblockTask
         | OperatorActionKind::CreateHandoff
-            | OperatorActionKind::PostCouncilMessage
-            | OperatorActionKind::AttachEvidence
-            | OperatorActionKind::CreateFollowUpTask
-            | OperatorActionKind::LinkTaskDependency
-            | OperatorActionKind::AcceptHandoff
+        | OperatorActionKind::PostCouncilMessage
+        | OperatorActionKind::AttachEvidence
+        | OperatorActionKind::CreateFollowUpTask
+        | OperatorActionKind::LinkTaskDependency
+        | OperatorActionKind::AcceptHandoff
         | OperatorActionKind::RejectHandoff
         | OperatorActionKind::CancelHandoff
         | OperatorActionKind::CompleteHandoff
@@ -2498,6 +2859,7 @@ fn task_operator_triage_update<'a>(
     Ok(Some(update))
 }
 
+#[allow(clippy::too_many_lines)]
 fn task_operator_status_update<'a>(
     task: &Task,
     action: OperatorActionKind,
@@ -2586,9 +2948,30 @@ fn task_operator_status_update<'a>(
                 },
             )
         }
+        OperatorActionKind::ReopenBlockedTaskWhenUnblocked => {
+            if task.status != TaskStatus::Blocked {
+                return Err(StoreError::Validation(
+                    "reopen_blocked_task_when_unblocked requires a blocked task".to_string(),
+                ));
+            }
+            (
+                if task.owner_agent_id.is_some() {
+                    TaskStatus::Assigned
+                } else {
+                    TaskStatus::Open
+                },
+                TaskStatusUpdate {
+                    event_note: input.note,
+                    ..TaskStatusUpdate::default()
+                },
+            )
+        }
         OperatorActionKind::AcknowledgeTask
         | OperatorActionKind::UnacknowledgeTask
         | OperatorActionKind::ReassignTask
+        | OperatorActionKind::ResolveDependency
+        | OperatorActionKind::PromoteFollowUp
+        | OperatorActionKind::CloseFollowUpChain
         | OperatorActionKind::SetTaskPriority
         | OperatorActionKind::SetTaskSeverity
         | OperatorActionKind::UpdateTaskNote

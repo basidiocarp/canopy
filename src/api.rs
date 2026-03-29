@@ -4,7 +4,8 @@ use crate::models::{
     HandoffAttentionReason, OperatorAction, OperatorActionKind, OperatorActionTargetKind,
     SnapshotAttentionSummary, SnapshotPreset, Task, TaskAssignment, TaskAttention,
     TaskAttentionReason, TaskDetail, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
-    TaskSeverity, TaskSort, TaskStatus, TaskView, VerificationState,
+    TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSort,
+    TaskStatus, TaskView, VerificationState,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
@@ -66,10 +67,27 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         tasks.retain(|task| task.project_root == project_root);
     }
 
+    let project_task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
+    let relationships = store
+        .list_task_relationships(None)?
+        .into_iter()
+        .filter(|relationship| {
+            project_task_ids.contains(&relationship.source_task_id)
+                && project_task_ids.contains(&relationship.target_task_id)
+        })
+        .collect::<Vec<_>>();
+    let relationship_summaries = derive_task_relationship_summaries(&tasks, &relationships, now);
+
     let all_heartbeats = store.list_all_agent_heartbeats()?;
     let agent_attention = derive_agent_attention(&agents, now);
     let handoff_attention = derive_handoff_attention(&handoffs, now);
-    let task_attention = derive_task_attention(&tasks, &handoffs, &agent_attention, now);
+    let task_attention = derive_task_attention(
+        &tasks,
+        &handoffs,
+        &agent_attention,
+        &relationship_summaries,
+        now,
+    );
     let open_handoff_task_ids: HashSet<_> = handoffs
         .iter()
         .filter(|handoff| handoff.status.to_string() == "open")
@@ -79,12 +97,17 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .iter()
         .map(|attention| (attention.task_id.clone(), attention.clone()))
         .collect();
+    let relationship_summary_by_id: HashMap<_, _> = relationship_summaries
+        .iter()
+        .map(|summary| (summary.task_id.clone(), summary.clone()))
+        .collect();
 
     tasks.retain(|task| {
         matches_view(
             task,
             &open_handoff_task_ids,
             task_attention_by_id.get(&task.task_id),
+            relationship_summary_by_id.get(&task.task_id),
             options.view,
         ) && matches_filters(task, task_attention_by_id.get(&task.task_id), &options)
     });
@@ -130,17 +153,21 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|handoff| task_ids.contains(&handoff.task_id))
         .collect::<Vec<_>>();
-    let relationships = store
-        .list_task_relationships(None)?
+    let relationships = relationships
         .into_iter()
         .filter(|relationship| {
             task_ids.contains(&relationship.source_task_id)
                 || task_ids.contains(&relationship.target_task_id)
         })
         .collect::<Vec<_>>();
+    let filtered_relationship_summaries = relationship_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
     let operator_actions = derive_operator_actions(
         &tasks,
         &filtered_task_attention,
+        &filtered_relationship_summaries,
         &filtered_handoffs,
         &filtered_handoff_attention,
     );
@@ -170,6 +197,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             .filter(|evidence| task_ids.contains(&evidence.task_id))
             .collect(),
         relationships,
+        relationship_summaries: filtered_relationship_summaries,
     })
 }
 
@@ -179,6 +207,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
 ///
 /// Returns an error if the task does not exist or any underlying store query
 /// fails.
+#[allow(clippy::too_many_lines)]
 pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let task = store.get_task(task_id)?;
     let handoffs = store.list_handoffs(Some(task_id))?;
@@ -202,10 +231,35 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         })
         .collect::<Vec<_>>();
     let handoff_attention = derive_handoff_attention(&handoffs, now);
+    let project_tasks = store
+        .list_tasks()?
+        .into_iter()
+        .filter(|candidate| candidate.project_root == task.project_root)
+        .collect::<Vec<_>>();
+    let project_task_ids: HashSet<_> = project_tasks
+        .iter()
+        .map(|candidate| candidate.task_id.clone())
+        .collect();
+    let project_relationships = store
+        .list_task_relationships(None)?
+        .into_iter()
+        .filter(|relationship| {
+            project_task_ids.contains(&relationship.source_task_id)
+                && project_task_ids.contains(&relationship.target_task_id)
+        })
+        .collect::<Vec<_>>();
+    let relationship_summary =
+        derive_task_relationship_summaries(&project_tasks, &project_relationships, now)
+            .into_iter()
+            .find(|summary| summary.task_id == task.task_id)
+            .ok_or(StoreError::Validation(
+                "task relationship summary could not be derived".to_string(),
+            ))?;
     let attention = derive_task_attention(
         std::slice::from_ref(&task),
         &handoffs,
         &agent_attention,
+        std::slice::from_ref(&relationship_summary),
         now,
     )
     .into_iter()
@@ -240,11 +294,18 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let operator_actions = derive_operator_actions(
         std::slice::from_ref(&task),
         std::slice::from_ref(&attention),
+        std::slice::from_ref(&relationship_summary),
         &handoffs,
         &handoff_attention,
     );
-    let allowed_actions =
-        derive_allowed_actions(&task, &attention, &handoffs, &handoff_attention, now);
+    let allowed_actions = derive_allowed_actions(
+        &task,
+        &attention,
+        &relationship_summary,
+        &handoffs,
+        &handoff_attention,
+        now,
+    );
 
     Ok(TaskDetail {
         attention,
@@ -263,6 +324,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         messages: store.list_council_messages(task_id)?,
         evidence: store.list_evidence(task_id)?,
         relationships,
+        relationship_summary,
         related_tasks: store.list_related_tasks(task_id)?,
     })
 }
@@ -320,9 +382,17 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::Blocked;
             options.sort = TaskSort::Attention;
         }
+        SnapshotPreset::BlockedByDependencies => {
+            options.view = TaskView::BlockedByDependencies;
+            options.sort = TaskSort::Attention;
+        }
         SnapshotPreset::Handoffs => {
             options.view = TaskView::Handoffs;
             options.sort = TaskSort::UpdatedAt;
+        }
+        SnapshotPreset::FollowUpChains => {
+            options.view = TaskView::FollowUpChains;
+            options.sort = TaskSort::Attention;
         }
         SnapshotPreset::Critical => {
             options.view = TaskView::Attention;
@@ -341,6 +411,7 @@ fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
     task_attention: Option<&TaskAttention>,
+    relationship_summary: Option<&TaskRelationshipSummary>,
     view: TaskView,
 ) -> bool {
     match view {
@@ -353,11 +424,18 @@ fn matches_view(
             task.status == TaskStatus::Blocked
                 || task.verification_state == VerificationState::Failed
         }
+        TaskView::BlockedByDependencies => {
+            task.status == TaskStatus::Blocked
+                && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
+        }
         TaskView::Review => {
             task.status == TaskStatus::ReviewRequired
                 || task.verification_state == VerificationState::Pending
         }
         TaskView::Handoffs => open_handoff_task_ids.contains(&task.task_id),
+        TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
+            summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
+        }),
         TaskView::Attention => {
             task_attention.is_some_and(|attention| attention.level != AttentionLevel::Normal)
         }
@@ -410,6 +488,109 @@ fn sort_tasks(tasks: &mut [Task], sort: TaskSort, task_attention: &HashMap<Strin
             .cmp(&status_rank(right.status))
             .then_with(|| left.title.cmp(&right.title)),
     });
+}
+
+fn is_open_task_status(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Open
+            | TaskStatus::Assigned
+            | TaskStatus::InProgress
+            | TaskStatus::Blocked
+            | TaskStatus::ReviewRequired
+    )
+}
+
+fn derive_task_relationship_summaries(
+    tasks: &[Task],
+    relationships: &[TaskRelationship],
+    now: OffsetDateTime,
+) -> Vec<TaskRelationshipSummary> {
+    let tasks_by_id: HashMap<_, _> = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect();
+    let mut summaries: HashMap<String, TaskRelationshipSummary> = tasks
+        .iter()
+        .map(|task| {
+            (
+                task.task_id.clone(),
+                TaskRelationshipSummary {
+                    task_id: task.task_id.clone(),
+                    blocker_count: 0,
+                    active_blocker_count: 0,
+                    stale_blocker_count: 0,
+                    blocking_count: 0,
+                    follow_up_parent_count: 0,
+                    follow_up_child_count: 0,
+                    open_follow_up_child_count: 0,
+                },
+            )
+        })
+        .collect();
+
+    for relationship in relationships {
+        let Some(source_task) = tasks_by_id.get(relationship.source_task_id.as_str()) else {
+            continue;
+        };
+        let Some(target_task) = tasks_by_id.get(relationship.target_task_id.as_str()) else {
+            continue;
+        };
+
+        match relationship.kind {
+            TaskRelationshipKind::FollowUp => {
+                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+                    summary.follow_up_child_count += 1;
+                    if is_open_task_status(target_task.status) {
+                        summary.open_follow_up_child_count += 1;
+                    }
+                }
+                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+                    summary.follow_up_parent_count += 1;
+                }
+            }
+            TaskRelationshipKind::Blocks => {
+                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+                    summary.blocking_count += 1;
+                }
+                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+                    summary.blocker_count += 1;
+                    if relationship_blocker_is_stale(source_task, now) {
+                        summary.stale_blocker_count += 1;
+                    } else {
+                        summary.active_blocker_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            summaries
+                .remove(&task.task_id)
+                .unwrap_or(TaskRelationshipSummary {
+                    task_id: task.task_id.clone(),
+                    blocker_count: 0,
+                    active_blocker_count: 0,
+                    stale_blocker_count: 0,
+                    blocking_count: 0,
+                    follow_up_parent_count: 0,
+                    follow_up_child_count: 0,
+                    open_follow_up_child_count: 0,
+                })
+        })
+        .collect()
+}
+
+fn relationship_blocker_is_stale(task: &Task, now: OffsetDateTime) -> bool {
+    if !is_open_task_status(task.status) {
+        return true;
+    }
+
+    timestamp_freshness(&task.updated_at, now, TASK_AGING_HOURS, TASK_STALE_HOURS)
+        == Freshness::Stale
 }
 
 fn status_rank(status: TaskStatus) -> u8 {
@@ -607,12 +788,17 @@ fn derive_agent_heartbeat_summaries(
 fn derive_operator_actions(
     tasks: &[Task],
     task_attention: &[TaskAttention],
+    relationship_summaries: &[TaskRelationshipSummary],
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
 ) -> Vec<OperatorAction> {
     let task_attention_by_id: HashMap<_, _> = task_attention
         .iter()
         .map(|attention| (attention.task_id.as_str(), attention))
+        .collect();
+    let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
         .collect();
     let handoff_attention_by_id: HashMap<_, _> = handoff_attention
         .iter()
@@ -625,6 +811,9 @@ fn derive_operator_actions(
         let Some(attention) = task_attention_by_id.get(task.task_id.as_str()) else {
             continue;
         };
+        let relationship_summary = relationship_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
 
         if attention
             .reasons
@@ -695,6 +884,88 @@ fn derive_operator_actions(
                 expires_at: None,
             });
         }
+
+        if relationship_summary
+            .is_some_and(|summary| summary.blocker_count > 0 || summary.blocking_count > 0)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:resolve_dependency", task.task_id),
+                kind: OperatorActionKind::ResolveDependency,
+                target_kind: OperatorActionTargetKind::Task,
+                level: attention.level,
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Resolve dependency for {}", task.title),
+                summary:
+                    "Task still has dependency edges that may need to be removed or rewritten."
+                        .to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::Blocked
+            && relationship_summary.is_some_and(|summary| summary.blocker_count == 0)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:reopen", task.task_id),
+                kind: OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
+                target_kind: OperatorActionTargetKind::Task,
+                level: attention.level,
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Reopen {}", task.title),
+                summary:
+                    "Task is blocked without remaining dependency blockers and can be reopened."
+                        .to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if relationship_summary.is_some_and(|summary| summary.follow_up_child_count > 0) {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:promote_follow_up", task.task_id),
+                kind: OperatorActionKind::PromoteFollowUp,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Promote follow-up on {}", task.title),
+                summary: "Promote a follow-up task out of the current task chain.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if relationship_summary.is_some_and(|summary| {
+            summary.follow_up_child_count > 0 && summary.open_follow_up_child_count == 0
+        }) {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:close_follow_up_chain", task.task_id),
+                kind: OperatorActionKind::CloseFollowUpChain,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Close follow-up chain for {}", task.title),
+                summary: "Detach resolved follow-up tasks from this task chain.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
     }
 
     for handoff in handoffs
@@ -742,11 +1013,12 @@ fn derive_operator_actions(
 fn derive_allowed_actions(
     task: &Task,
     attention: &TaskAttention,
+    relationship_summary: &TaskRelationshipSummary,
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
     now: OffsetDateTime,
 ) -> Vec<OperatorAction> {
-    let mut actions = derive_allowed_task_actions(task, attention);
+    let mut actions = derive_allowed_task_actions(task, attention, relationship_summary);
     actions.extend(derive_allowed_handoff_actions(
         handoffs,
         handoff_attention,
@@ -756,7 +1028,11 @@ fn derive_allowed_actions(
 }
 
 #[allow(clippy::too_many_lines)]
-fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<OperatorAction> {
+fn derive_allowed_task_actions(
+    task: &Task,
+    attention: &TaskAttention,
+    relationship_summary: &TaskRelationshipSummary,
+) -> Vec<OperatorAction> {
     let task_level = if attention.level == AttentionLevel::Normal {
         AttentionLevel::NeedsAttention
     } else {
@@ -898,6 +1174,52 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
             "verify",
             format!("Review {}", task.title),
             "Record verification outcome and operator review status.",
+        ));
+    }
+
+    if relationship_summary.blocker_count > 0 || relationship_summary.blocking_count > 0 {
+        actions.push(make_task_allowed_action(
+            task,
+            OperatorActionKind::ResolveDependency,
+            task_level,
+            "resolve_dependency",
+            format!("Resolve dependency for {}", task.title),
+            "Remove an existing blocker relationship from this task graph.",
+        ));
+    }
+
+    if task.status == TaskStatus::Blocked && relationship_summary.blocker_count == 0 {
+        actions.push(make_task_allowed_action(
+            task,
+            OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
+            task_level,
+            "reopen_when_unblocked",
+            format!("Reopen {}", task.title),
+            "Reopen a blocked task after its dependency blockers are cleared.",
+        ));
+    }
+
+    if relationship_summary.follow_up_child_count > 0 {
+        actions.push(make_task_allowed_action(
+            task,
+            OperatorActionKind::PromoteFollowUp,
+            task_level,
+            "promote_follow_up",
+            format!("Promote follow-up on {}", task.title),
+            "Detach one follow-up task from the current chain.",
+        ));
+    }
+
+    if relationship_summary.follow_up_child_count > 0
+        && relationship_summary.open_follow_up_child_count == 0
+    {
+        actions.push(make_task_allowed_action(
+            task,
+            OperatorActionKind::CloseFollowUpChain,
+            task_level,
+            "close_follow_up_chain",
+            format!("Close follow-up chain for {}", task.title),
+            "Detach resolved follow-up tasks from this task chain.",
         ));
     }
 
@@ -1152,11 +1474,16 @@ fn derive_task_attention(
     tasks: &[Task],
     handoffs: &[Handoff],
     agent_attention: &[AgentAttention],
+    relationship_summaries: &[TaskRelationshipSummary],
     now: OffsetDateTime,
 ) -> Vec<TaskAttention> {
     let agent_attention_by_id: HashMap<_, _> = agent_attention
         .iter()
         .map(|attention| (attention.agent_id.as_str(), attention))
+        .collect();
+    let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
         .collect();
     let mut handoff_freshness_by_task: HashMap<&str, Freshness> = HashMap::new();
 
@@ -1174,19 +1501,15 @@ fn derive_task_attention(
     tasks
         .iter()
         .map(|task| {
-            let is_open = matches!(
-                task.status,
-                TaskStatus::Open
-                    | TaskStatus::Assigned
-                    | TaskStatus::InProgress
-                    | TaskStatus::Blocked
-                    | TaskStatus::ReviewRequired
-            );
+            let is_open = is_open_task_status(task.status);
             let freshness = if is_open {
                 timestamp_freshness(&task.updated_at, now, TASK_AGING_HOURS, TASK_STALE_HOURS)
             } else {
                 Freshness::Fresh
             };
+            let relationship_summary = relationship_summary_by_task_id
+                .get(task.task_id.as_str())
+                .copied();
             let owner_heartbeat_freshness = task.owner_agent_id.as_deref().and_then(|owner| {
                 agent_attention_by_id
                     .get(owner)
@@ -1200,12 +1523,23 @@ fn derive_task_attention(
             let mut reasons = Vec::new();
             if task.status == TaskStatus::Blocked {
                 reasons.push(TaskAttentionReason::Blocked);
+                if let Some(summary) = relationship_summary {
+                    if summary.active_blocker_count > 0 {
+                        reasons.push(TaskAttentionReason::BlockedByActiveDependency);
+                    }
+                    if summary.stale_blocker_count > 0 {
+                        reasons.push(TaskAttentionReason::BlockedByStaleDependency);
+                    }
+                }
             }
             if task.status == TaskStatus::ReviewRequired {
                 reasons.push(TaskAttentionReason::ReviewRequired);
             }
             if task.verification_state == VerificationState::Failed {
                 reasons.push(TaskAttentionReason::VerificationFailed);
+            }
+            if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
+                reasons.push(TaskAttentionReason::HasOpenFollowUps);
             }
             match task.priority {
                 TaskPriority::High => reasons.push(TaskAttentionReason::HighPriority),
@@ -1247,6 +1581,7 @@ fn derive_task_attention(
                 matches!(
                     reason,
                     TaskAttentionReason::Blocked
+                        | TaskAttentionReason::BlockedByStaleDependency
                         | TaskAttentionReason::CriticalPriority
                         | TaskAttentionReason::CriticalSeverity
                         | TaskAttentionReason::VerificationFailed

@@ -153,8 +153,12 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .get_output()
         .stdout
         .clone();
-    let blocker_task: Value = serde_json::from_slice(&blocker_task_output).expect("parse blocker task");
-    let blocker_task_id = blocker_task["task_id"].as_str().expect("blocker task id").to_string();
+    let blocker_task: Value =
+        serde_json::from_slice(&blocker_task_output).expect("parse blocker task");
+    let blocker_task_id = blocker_task["task_id"]
+        .as_str()
+        .expect("blocker task id")
+        .to_string();
 
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -275,7 +279,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .iter()
             .map(|value| value.as_str().expect("reason"))
             .collect::<Vec<_>>(),
-        vec!["review_required", "unacknowledged"]
+        vec!["review_required", "has_open_follow_ups", "unacknowledged"]
     );
     assert_eq!(snapshot["agents"].as_array().expect("agents").len(), 2);
     assert_eq!(
@@ -320,14 +324,38 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .as_array()
             .expect("operator actions")
             .len(),
-        2
+        4
     );
     assert_eq!(snapshot["operator_actions"][0]["kind"], "acknowledge_task");
     assert_eq!(snapshot["operator_actions"][0]["target_kind"], "task");
     assert_eq!(snapshot["operator_actions"][1]["kind"], "verify_task");
     assert_eq!(snapshot["operator_actions"][1]["target_kind"], "task");
+    assert_eq!(
+        snapshot["operator_actions"][2]["kind"],
+        "resolve_dependency"
+    );
+    assert_eq!(snapshot["operator_actions"][2]["target_kind"], "task");
+    assert_eq!(snapshot["operator_actions"][3]["kind"], "promote_follow_up");
+    assert_eq!(snapshot["operator_actions"][3]["target_kind"], "task");
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
-    assert_eq!(snapshot["relationships"].as_array().expect("relationships").len(), 2);
+    assert_eq!(
+        snapshot["relationships"]
+            .as_array()
+            .expect("relationships")
+            .len(),
+        2
+    );
+    assert_eq!(
+        snapshot["relationship_summaries"]
+            .as_array()
+            .expect("relationship summaries")
+            .len(),
+        1
+    );
+    assert_eq!(
+        snapshot["relationship_summaries"][0]["open_follow_up_child_count"],
+        1
+    );
 
     let task_detail_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -397,7 +425,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .as_array()
             .expect("operator actions")
             .len(),
-        2
+        4
     );
     let allowed_actions = detail["allowed_actions"]
         .as_array()
@@ -460,6 +488,16 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert!(
         allowed_actions
             .iter()
+            .any(|action| action["kind"] == "resolve_dependency")
+    );
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "promote_follow_up")
+    );
+    assert!(
+        allowed_actions
+            .iter()
             .any(|action| action["kind"] == "block_task")
     );
     assert!(
@@ -475,8 +513,25 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(detail["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(detail["evidence"][0]["related_session_id"], "ses_123");
     assert!(detail["evidence"][0]["related_memory_query"].is_null());
-    assert_eq!(detail["relationships"].as_array().expect("relationships").len(), 2);
-    assert_eq!(detail["related_tasks"].as_array().expect("related tasks").len(), 2);
+    assert_eq!(
+        detail["relationships"]
+            .as_array()
+            .expect("relationships")
+            .len(),
+        2
+    );
+    assert_eq!(detail["relationship_summary"]["blocker_count"], 1);
+    assert_eq!(
+        detail["relationship_summary"]["open_follow_up_child_count"],
+        1
+    );
+    assert_eq!(
+        detail["related_tasks"]
+            .as_array()
+            .expect("related tasks")
+            .len(),
+        2
+    );
     assert!(
         detail["related_tasks"]
             .as_array()
@@ -1253,6 +1308,188 @@ fn api_snapshot_presets_and_triage_filters_use_runtime_metadata() {
     assert_ne!(
         severity_snapshot["tasks"][0]["task_id"],
         normal_task["task_id"]
+    );
+
+    let blocker_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Blocker task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let blocker_task: Value = serde_json::from_slice(&blocker_output).expect("parse blocker task");
+    let blocker_task_id = blocker_task["task_id"]
+        .as_str()
+        .expect("blocker task id")
+        .to_string();
+
+    let blocked_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Dependency blocked task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let blocked_task: Value = serde_json::from_slice(&blocked_output).expect("parse blocked task");
+    let blocked_task_id = blocked_task["task_id"]
+        .as_str()
+        .expect("blocked task id")
+        .to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &blocked_task_id,
+            "--status",
+            "blocked",
+            "--changed-by",
+            "operator",
+            "--blocked-reason",
+            "waiting on blocker task",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &blocked_task_id,
+            "--action",
+            "link_task_dependency",
+            "--changed-by",
+            "operator",
+            "--related-task-id",
+            &blocker_task_id,
+            "--relationship-role",
+            "blocked_by",
+        ])
+        .assert()
+        .success();
+
+    let follow_up_parent_id = normal_task["task_id"]
+        .as_str()
+        .expect("normal task id")
+        .to_string();
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &follow_up_parent_id,
+            "--action",
+            "create_follow_up_task",
+            "--changed-by",
+            "operator",
+            "--follow-up-title",
+            "Normal follow-up",
+        ])
+        .assert()
+        .success();
+
+    let dependency_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "blocked_by_dependencies",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dependency_snapshot: Value =
+        serde_json::from_slice(&dependency_snapshot_output).expect("parse dependency snapshot");
+    let dependency_task_ids: Vec<_> = dependency_snapshot["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .map(|task| task["task_id"].as_str().expect("task id"))
+        .collect();
+    assert_eq!(dependency_task_ids, vec![blocked_task_id.as_str()]);
+    assert_eq!(
+        dependency_snapshot["relationship_summaries"][0]["active_blocker_count"],
+        1
+    );
+    assert!(
+        dependency_snapshot["task_attention"][0]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|reason| reason == "blocked_by_active_dependency")
+    );
+
+    let follow_up_snapshot_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "snapshot",
+            "--project-root",
+            "/tmp/project",
+            "--preset",
+            "follow_up_chains",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let follow_up_snapshot: Value =
+        serde_json::from_slice(&follow_up_snapshot_output).expect("parse follow-up snapshot");
+    assert_eq!(
+        follow_up_snapshot["tasks"].as_array().expect("tasks").len(),
+        2
+    );
+    assert!(
+        follow_up_snapshot["relationship_summaries"]
+            .as_array()
+            .expect("relationship summaries")
+            .iter()
+            .any(|summary| summary["open_follow_up_child_count"] == 1)
     );
 }
 

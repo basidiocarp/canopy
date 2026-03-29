@@ -634,6 +634,192 @@ fn task_creation_actions_reject_terminal_tasks() {
 }
 
 #[test]
+fn graph_operator_actions_update_relationships_and_status() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let parent = store
+        .create_task("Coordinate release", None, "operator", "/tmp/project")
+        .expect("create parent");
+    let blocker = store
+        .create_task("Fix blocker", None, "operator", "/tmp/project")
+        .expect("create blocker");
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::LinkTaskDependency,
+            "operator",
+            TaskOperatorActionInput {
+                related_task_id: Some(&blocker.task_id),
+                relationship_role: Some(TaskRelationshipRole::BlockedBy),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("link dependency");
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::BlockTask,
+            "operator",
+            TaskOperatorActionInput {
+                blocked_reason: Some("waiting on dependency"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("block task");
+
+    let reopen_error = store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
+            "operator",
+            TaskOperatorActionInput::default(),
+        )
+        .expect_err("reject reopen while blockers remain");
+    assert!(reopen_error.to_string().contains("no remaining blockers"));
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::ResolveDependency,
+            "operator",
+            TaskOperatorActionInput {
+                related_task_id: Some(&blocker.task_id),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("resolve dependency");
+    assert!(
+        store
+            .list_related_tasks(&parent.task_id)
+            .expect("list related tasks after dependency resolution")
+            .into_iter()
+            .all(|related| related.relationship_role != TaskRelationshipRole::BlockedBy)
+    );
+
+    let reopened = store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
+            "operator",
+            TaskOperatorActionInput::default(),
+        )
+        .expect("reopen blocked task");
+    assert_eq!(reopened.status, TaskStatus::Open);
+    assert!(reopened.blocked_reason.is_none());
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::CreateFollowUpTask,
+            "operator",
+            TaskOperatorActionInput {
+                follow_up_title: Some("Follow up A"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("create first follow-up");
+    let follow_up_a = store
+        .list_tasks()
+        .expect("list tasks")
+        .into_iter()
+        .find(|task| task.title == "Follow up A")
+        .expect("follow-up A");
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::PromoteFollowUp,
+            "operator",
+            TaskOperatorActionInput {
+                related_task_id: Some(&follow_up_a.task_id),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("promote follow-up");
+    assert!(
+        store
+            .list_related_tasks(&parent.task_id)
+            .expect("list related tasks after promotion")
+            .into_iter()
+            .all(|related| related.related_task_id != follow_up_a.task_id)
+    );
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::CreateFollowUpTask,
+            "operator",
+            TaskOperatorActionInput {
+                follow_up_title: Some("Follow up B"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("create second follow-up");
+    let follow_up_b = store
+        .list_tasks()
+        .expect("list tasks")
+        .into_iter()
+        .find(|task| task.title == "Follow up B")
+        .expect("follow-up B");
+    store
+        .update_task_status(
+            &follow_up_b.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("done"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("complete second follow-up");
+
+    store
+        .apply_task_operator_action(
+            &parent.task_id,
+            OperatorActionKind::CloseFollowUpChain,
+            "operator",
+            TaskOperatorActionInput::default(),
+        )
+        .expect("close follow-up chain");
+    assert!(
+        store
+            .list_related_tasks(&parent.task_id)
+            .expect("list related tasks after close")
+            .into_iter()
+            .all(|related| related.relationship_role != TaskRelationshipRole::FollowUpChild)
+    );
+
+    let parent_events = store
+        .list_task_events(&parent.task_id)
+        .expect("list parent events");
+    assert!(parent_events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("action=resolve_dependency"))
+    }));
+    assert!(parent_events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("action=promote_follow_up"))
+    }));
+    assert!(parent_events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("action=close_follow_up_chain"))
+    }));
+}
+
+#[test]
 fn handoff_operator_actions_cover_resolution_paths() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");

@@ -55,8 +55,10 @@ pub enum TaskView {
     All,
     Active,
     Blocked,
+    BlockedByDependencies,
     Review,
     Handoffs,
+    FollowUpChains,
     Attention,
 }
 
@@ -71,7 +73,9 @@ pub enum SnapshotPreset {
     Attention,
     ReviewQueue,
     Blocked,
+    BlockedByDependencies,
     Handoffs,
+    FollowUpChains,
     Critical,
     Unacknowledged,
 }
@@ -240,8 +244,11 @@ pub enum Freshness {
 #[strum(serialize_all = "snake_case")]
 pub enum TaskAttentionReason {
     Blocked,
+    BlockedByActiveDependency,
+    BlockedByStaleDependency,
     VerificationFailed,
     ReviewRequired,
+    HasOpenFollowUps,
     Unacknowledged,
     HighPriority,
     CriticalPriority,
@@ -275,6 +282,10 @@ pub enum OperatorActionKind {
     UnacknowledgeTask,
     VerifyTask,
     ReassignTask,
+    ResolveDependency,
+    ReopenBlockedTaskWhenUnblocked,
+    PromoteFollowUp,
+    CloseFollowUpChain,
     SetTaskPriority,
     SetTaskSeverity,
     BlockTask,
@@ -510,6 +521,18 @@ pub struct TaskAttention {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskRelationshipSummary {
+    pub task_id: String,
+    pub blocker_count: usize,
+    pub active_blocker_count: usize,
+    pub stale_blocker_count: usize,
+    pub blocking_count: usize,
+    pub follow_up_parent_count: usize,
+    pub follow_up_child_count: usize,
+    pub open_follow_up_child_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnapshotAttentionSummary {
     pub tasks_needing_attention: usize,
     pub critical_tasks: usize,
@@ -586,6 +609,7 @@ pub struct ApiSnapshot {
     pub operator_actions: Vec<OperatorAction>,
     pub evidence: Vec<EvidenceRef>,
     pub relationships: Vec<TaskRelationship>,
+    pub relationship_summaries: Vec<TaskRelationshipSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -606,5 +630,6 @@ pub struct TaskDetail {
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
     pub relationships: Vec<TaskRelationship>,
+    pub relationship_summary: TaskRelationshipSummary,
     pub related_tasks: Vec<RelatedTask>,
 }
