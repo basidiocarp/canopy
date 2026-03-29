@@ -731,6 +731,130 @@ fn task_creation_actions_reject_terminal_tasks() {
 }
 
 #[test]
+fn review_operator_actions_record_decision_before_closeout() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register reviewer");
+
+    let task = store
+        .create_task("Close reviewed task", None, "operator", "/tmp/project")
+        .expect("create task");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Pending),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move task into review");
+    store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::AttachEvidence,
+            "operator",
+            TaskOperatorActionInput {
+                evidence_label: Some("Operator note"),
+                evidence_source_kind: Some(EvidenceSourceKind::ManualNote),
+                evidence_source_ref: Some("review-note-1"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("attach evidence");
+
+    let error = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::CloseTask,
+            "operator",
+            TaskOperatorActionInput {
+                closure_summary: Some("premature closeout"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect_err("reject closeout before a recorded decision");
+    assert!(
+        error
+            .to_string()
+            .contains("close_task requires a current-cycle decision context")
+    );
+
+    let review_task = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::RecordDecision,
+            "operator",
+            TaskOperatorActionInput {
+                author_agent_id: Some("claude-1"),
+                message_body: Some("Ship the reviewed task."),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("record decision");
+    assert_eq!(review_task.status, TaskStatus::ReviewRequired);
+    assert_eq!(review_task.verification_state, VerificationState::Pending);
+
+    let completed_task = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::CloseTask,
+            "operator",
+            TaskOperatorActionInput {
+                closure_summary: Some("review accepted and closed out"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("close task");
+    assert_eq!(completed_task.status, TaskStatus::Completed);
+    assert_eq!(completed_task.verification_state, VerificationState::Passed);
+
+    let messages = store
+        .list_council_messages(&task.task_id)
+        .expect("list messages");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.message_type == CouncilMessageType::Decision)
+    );
+
+    let events = store
+        .list_task_events(&task.task_id)
+        .expect("list task events");
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::CouncilMessagePosted
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("action=record_decision"))
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == TaskEventType::StatusChanged
+            && event.to_status == TaskStatus::Completed
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("review accepted and closed out"))
+    }));
+}
+
+#[test]
 fn graph_operator_actions_update_relationships_and_status() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");

@@ -339,6 +339,29 @@ fn cli_task_creation_actions_flow_through_task_action_command() {
             "--task-id",
             &task_id,
             "--action",
+            "attach_evidence",
+            "--changed-by",
+            "operator",
+            "--evidence-source-kind",
+            "manual_note",
+            "--evidence-source-ref",
+            "review-note-1",
+            "--evidence-label",
+            "Review note",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
             "post_council_message",
             "--changed-by",
             "operator",
@@ -754,7 +777,7 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "verify_task passed reviews require a closure summary",
+            "verify_task no longer accepts passed; use close_task",
         ));
 
     Command::cargo_bin("canopy")
@@ -767,15 +790,58 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
             "--task-id",
             &task_id,
             "--action",
-            "verify_task",
+            "attach_evidence",
             "--changed-by",
             "operator",
-            "--verification-state",
-            "passed",
+            "--evidence-source-kind",
+            "manual_note",
+            "--evidence-source-ref",
+            "review-note-1",
+            "--evidence-label",
+            "Review note",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "record_decision",
+            "--changed-by",
+            "operator",
+            "--author-agent-id",
+            "claude-1",
+            "--message-body",
+            "Decision recorded for closeout.",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"review_required\""));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "close_task",
+            "--changed-by",
+            "operator",
             "--closure-summary",
             "operator review accepted the task",
             "--note",
-            "review completed in canopy",
+            "review closeout completed in canopy",
         ])
         .assert()
         .success()

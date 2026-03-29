@@ -336,6 +336,8 @@ pub enum OperatorActionKind {
     AcknowledgeTask,
     UnacknowledgeTask,
     VerifyTask,
+    RecordDecision,
+    CloseTask,
     ReassignTask,
     ClaimTask,
     StartTask,
@@ -523,6 +525,60 @@ pub struct TaskEvent {
     pub execution_duration_seconds: Option<i64>,
     pub note: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReviewCycleContext {
+    pub has_evidence: bool,
+    pub has_council_message: bool,
+    pub has_council_decision: bool,
+}
+
+#[must_use]
+pub fn event_note_value<'a>(note: Option<&'a str>, key: &str) -> Option<&'a str> {
+    note.and_then(|note| {
+        note.split("; ").find_map(|segment| {
+            let (entry_key, value) = segment.split_once('=')?;
+            (entry_key.trim() == key).then_some(value.trim())
+        })
+    })
+}
+
+#[must_use]
+pub fn council_message_type_from_event_note(note: Option<&str>) -> Option<&str> {
+    event_note_value(note, "message_type")
+}
+
+pub fn derive_review_cycle_context<'a, I>(task_events: I) -> ReviewCycleContext
+where
+    I: IntoIterator<Item = &'a TaskEvent>,
+{
+    let task_events = task_events.into_iter().collect::<Vec<_>>();
+    let review_cycle_start_index = task_events
+        .iter()
+        .rposition(|event| {
+            event.event_type == TaskEventType::StatusChanged
+                && event.to_status == TaskStatus::ReviewRequired
+        })
+        .unwrap_or(0);
+
+    let mut context = ReviewCycleContext::default();
+    for event in task_events.into_iter().skip(review_cycle_start_index) {
+        match event.event_type {
+            TaskEventType::EvidenceAttached => {
+                context.has_evidence = true;
+            }
+            TaskEventType::CouncilMessagePosted => {
+                context.has_council_message = true;
+                if council_message_type_from_event_note(event.note.as_deref()) == Some("decision") {
+                    context.has_council_decision = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    context
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

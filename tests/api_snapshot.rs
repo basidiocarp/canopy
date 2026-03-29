@@ -2573,6 +2573,36 @@ fn api_snapshot_review_ready_for_decision_tracks_review_tasks_with_support_conte
             .iter()
             .any(|reason| reason == "review_ready_for_decision")
     );
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &review_task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse task detail");
+    let allowed_actions = detail["allowed_actions"]
+        .as_array()
+        .expect("allowed actions");
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "record_decision")
+    );
+    assert!(
+        !allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "close_task")
+    );
 }
 
 #[test]
@@ -2682,13 +2712,11 @@ fn api_snapshot_review_ready_for_closeout_requires_current_cycle_decision_contex
             "--task-id",
             &review_task_id,
             "--action",
-            "post_council_message",
+            "record_decision",
             "--changed-by",
             "operator",
             "--author-agent-id",
             "agent-a",
-            "--message-type",
-            "decision",
             "--message-body",
             "Close the review and ship it.",
         ])
@@ -2752,6 +2780,36 @@ fn api_snapshot_review_ready_for_closeout_requires_current_cycle_decision_contex
             .as_array()
             .expect("tasks")
             .is_empty()
+    );
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &review_task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse task detail");
+    let allowed_actions = detail["allowed_actions"]
+        .as_array()
+        .expect("allowed actions");
+    assert!(
+        allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "close_task")
+    );
+    assert!(
+        !allowed_actions
+            .iter()
+            .any(|action| action["kind"] == "record_decision")
     );
 }
 

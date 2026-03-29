@@ -6,7 +6,7 @@ use crate::models::{
     TaskAttention, TaskAttentionReason, TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary,
     TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority, TaskRelationship,
     TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSort, TaskStatus, TaskView,
-    VerificationState,
+    VerificationState, derive_review_cycle_context,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
@@ -1238,6 +1238,52 @@ fn derive_operator_actions(
             });
         }
 
+        if attention
+            .reasons
+            .contains(&TaskAttentionReason::ReviewReadyForDecision)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:record_decision", task.task_id),
+                kind: OperatorActionKind::RecordDecision,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Record decision for {}", task.title),
+                summary: "Persist the review decision for the current cycle.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if attention
+            .reasons
+            .contains(&TaskAttentionReason::ReviewReadyForCloseout)
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:close", task.task_id),
+                kind: OperatorActionKind::CloseTask,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Close {}", task.title),
+                summary: "Finalize review closeout and mark the task complete.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
         if task.owner_agent_id.is_some()
             && attention.reasons.iter().any(|reason| {
                 matches!(
@@ -1707,6 +1753,22 @@ fn derive_allowed_task_actions(
             },
             "Update task lifecycle state for operator triage.",
         ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::RecordDecision,
+            task_level,
+            "record_decision",
+            format!("Record decision for {}", task.title),
+            "Persist the current-cycle review decision before closeout.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::CloseTask,
+            task_level,
+            "close_task",
+            format!("Close {}", task.title),
+            "Finalize review closeout and mark the task complete.",
+        ),
     ];
 
     actions.retain(|action| match action.kind {
@@ -1737,6 +1799,20 @@ fn derive_allowed_task_actions(
                 && task.owner_agent_id.is_some()
                 && task.status != TaskStatus::Blocked
         }
+        OperatorActionKind::RecordDecision => {
+            task.status == TaskStatus::ReviewRequired
+                && task.verification_state == VerificationState::Pending
+                && attention
+                    .reasons
+                    .contains(&TaskAttentionReason::ReviewReadyForDecision)
+        }
+        OperatorActionKind::CloseTask => {
+            task.status == TaskStatus::ReviewRequired
+                && task.verification_state == VerificationState::Pending
+                && attention
+                    .reasons
+                    .contains(&TaskAttentionReason::ReviewReadyForCloseout)
+        }
         _ => true,
     });
 
@@ -1752,7 +1828,7 @@ fn derive_allowed_task_actions(
             task_level,
             "verify",
             format!("Review {}", task.title),
-            "Record verification outcome and operator review status.",
+            "Record a non-terminal review outcome and keep the task in review.",
         ));
     }
 
@@ -2231,58 +2307,13 @@ fn derive_review_awaiting_support_task_ids(
             let task_events = events_by_task_id
                 .get(task.task_id.as_str())
                 .map_or(&[][..], Vec::as_slice);
-            let context = derive_review_cycle_context(task_events);
+            let context = derive_review_cycle_context(task_events.iter().copied());
             let pending_council = context.has_council_message && !context.has_council_decision;
 
             !context.has_evidence || pending_council
         })
         .map(|task| task.task_id.clone())
         .collect()
-}
-
-fn council_message_type_from_event_note(note: Option<&str>) -> Option<&str> {
-    note.and_then(|note| {
-        note.split("; ").take(3).find_map(|segment| {
-            let (key, value) = segment.split_once('=')?;
-            (key.trim() == "message_type").then_some(value.trim())
-        })
-    })
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct ReviewCycleContext {
-    has_evidence: bool,
-    has_council_message: bool,
-    has_council_decision: bool,
-}
-
-fn derive_review_cycle_context(task_events: &[&TaskEvent]) -> ReviewCycleContext {
-    let review_cycle_start_index = task_events
-        .iter()
-        .rposition(|event| {
-            event.event_type == TaskEventType::StatusChanged
-                && event.to_status == TaskStatus::ReviewRequired
-        })
-        .unwrap_or(0);
-    let review_cycle_events = task_events.iter().skip(review_cycle_start_index).copied();
-
-    let mut context = ReviewCycleContext::default();
-    for event in review_cycle_events {
-        match event.event_type {
-            TaskEventType::EvidenceAttached => {
-                context.has_evidence = true;
-            }
-            TaskEventType::CouncilMessagePosted => {
-                context.has_council_message = true;
-                if council_message_type_from_event_note(event.note.as_deref()) == Some("decision") {
-                    context.has_council_decision = true;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    context
 }
 
 fn derive_review_ready_for_closeout_task_ids(
@@ -2315,7 +2346,7 @@ fn derive_review_ready_for_closeout_task_ids(
             let task_events = events_by_task_id
                 .get(task.task_id.as_str())
                 .map_or(&[][..], Vec::as_slice);
-            derive_review_cycle_context(task_events).has_council_decision
+            derive_review_cycle_context(task_events.iter().copied()).has_council_decision
         })
         .map(|task| task.task_id.clone())
         .collect()
@@ -2351,7 +2382,7 @@ fn derive_review_ready_for_decision_task_ids(
             let task_events = events_by_task_id
                 .get(task.task_id.as_str())
                 .map_or(&[][..], Vec::as_slice);
-            !derive_review_cycle_context(task_events).has_council_decision
+            !derive_review_cycle_context(task_events.iter().copied()).has_council_decision
         })
         .map(|task| task.task_id.clone())
         .collect()

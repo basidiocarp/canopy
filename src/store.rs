@@ -3,7 +3,7 @@ use crate::models::{
     CouncilMessageType, EvidenceRef, EvidenceSourceKind, ExecutionActionKind, Handoff,
     HandoffStatus, HandoffType, OperatorActionKind, RelatedTask, Task, TaskAssignment, TaskEvent,
     TaskEventType, TaskPriority, TaskRelationship, TaskRelationshipKind, TaskRelationshipRole,
-    TaskSeverity, TaskStatus, VerificationState,
+    TaskSeverity, TaskStatus, VerificationState, derive_review_cycle_context,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -693,6 +693,7 @@ impl Store {
     ///
     /// Returns an error if the action is invalid for tasks, required fields are
     /// missing, or the underlying write fails.
+    #[allow(clippy::too_many_lines)]
     pub fn apply_task_operator_action(
         &self,
         task_id: &str,
@@ -711,6 +712,74 @@ impl Store {
         let current_task = self.get_task(task_id)?;
         if let Some((status, update)) = task_operator_status_update(&current_task, action, &input)?
         {
+            if action == OperatorActionKind::CloseTask {
+                let review_cycle_context =
+                    derive_review_cycle_context(&self.list_task_events(task_id)?);
+                if !review_cycle_context.has_evidence {
+                    return Err(StoreError::Validation(
+                        "close_task requires current-cycle evidence support".to_string(),
+                    ));
+                }
+                if !review_cycle_context.has_council_decision {
+                    return Err(StoreError::Validation(
+                        "close_task requires a current-cycle decision context".to_string(),
+                    ));
+                }
+                if self
+                    .list_related_tasks(task_id)?
+                    .into_iter()
+                    .any(|related| {
+                        (related.relationship_role == TaskRelationshipRole::BlockedBy
+                            && matches!(
+                                related.status,
+                                TaskStatus::Open
+                                    | TaskStatus::Assigned
+                                    | TaskStatus::InProgress
+                                    | TaskStatus::Blocked
+                                    | TaskStatus::ReviewRequired
+                            ))
+                            || (related.relationship_role == TaskRelationshipRole::FollowUpChild
+                                && matches!(
+                                    related.status,
+                                    TaskStatus::Open
+                                        | TaskStatus::Assigned
+                                        | TaskStatus::InProgress
+                                        | TaskStatus::Blocked
+                                        | TaskStatus::ReviewRequired
+                                ))
+                    })
+                {
+                    return Err(StoreError::Validation(
+                        "close_task requires review tasks without unresolved graph pressure"
+                            .to_string(),
+                    ));
+                }
+                if self
+                    .list_handoffs(Some(task_id))?
+                    .into_iter()
+                    .any(|handoff| {
+                        matches!(
+                            handoff.handoff_type,
+                            HandoffType::RequestReview
+                                | HandoffType::RequestVerification
+                                | HandoffType::RecordDecision
+                                | HandoffType::CloseTask
+                        ) && match handoff.status {
+                            HandoffStatus::Open => !handoff_is_expired(&handoff).unwrap_or(false),
+                            HandoffStatus::Accepted => true,
+                            HandoffStatus::Rejected
+                            | HandoffStatus::Expired
+                            | HandoffStatus::Cancelled
+                            | HandoffStatus::Completed => false,
+                        }
+                    })
+                {
+                    return Err(StoreError::Validation(
+                        "close_task requires review handoff follow-through to resolve first"
+                            .to_string(),
+                    ));
+                }
+            }
             if action == OperatorActionKind::ReopenBlockedTaskWhenUnblocked
                 && self
                     .list_related_tasks(task_id)?
@@ -755,6 +824,8 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::RecordDecision
+            | OperatorActionKind::CloseTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
             | OperatorActionKind::ResumeTask
@@ -1025,6 +1096,8 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::RecordDecision
+            | OperatorActionKind::CloseTask
             | OperatorActionKind::ReassignTask
             | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
             | OperatorActionKind::ClaimTask
@@ -1073,6 +1146,95 @@ impl Store {
         }
 
         let task = match action {
+            OperatorActionKind::RecordDecision => self.in_transaction(|conn| {
+                let task = get_task_in_connection(conn, task_id)?;
+                if task.status != TaskStatus::ReviewRequired
+                    || task.verification_state != VerificationState::Pending
+                {
+                    return Err(StoreError::Validation(
+                        "record_decision requires a task awaiting review decision".to_string(),
+                    ));
+                }
+
+                let task_events = list_task_events_in_connection(conn, task_id)?;
+                let review_cycle_context = derive_review_cycle_context(&task_events);
+                if !review_cycle_context.has_evidence {
+                    return Err(StoreError::Validation(
+                        "record_decision requires current-cycle evidence support".to_string(),
+                    ));
+                }
+                if review_cycle_context.has_council_decision {
+                    return Err(StoreError::Validation(
+                        "record_decision requires a task without a current-cycle decision".to_string(),
+                    ));
+                }
+                if has_active_blockers_in_connection(conn, task_id)?
+                    || has_open_follow_up_children_in_connection(conn, task_id)?
+                {
+                    return Err(StoreError::Validation(
+                        "record_decision requires review tasks without graph pressure".to_string(),
+                    ));
+                }
+                if has_unresolved_review_handoffs_in_connection(
+                    conn,
+                    task_id,
+                    &[HandoffType::RequestReview, HandoffType::RequestVerification],
+                )? {
+                    return Err(StoreError::Validation(
+                        "record_decision requires review handoff follow-through to resolve first"
+                            .to_string(),
+                    ));
+                }
+                if has_unresolved_review_handoffs_in_connection(
+                    conn,
+                    task_id,
+                    &[HandoffType::RecordDecision, HandoffType::CloseTask],
+                )? {
+                    return Err(StoreError::Validation(
+                        "record_decision requires decision handoff follow-through to resolve first"
+                            .to_string(),
+                    ));
+                }
+
+                let message = add_council_message_in_connection(
+                    conn,
+                    task_id,
+                    input.author_agent_id.ok_or_else(|| {
+                        StoreError::Validation(
+                            "record_decision requires an author_agent_id".to_string(),
+                        )
+                    })?,
+                    CouncilMessageType::Decision,
+                    input
+                        .message_body
+                        .filter(|body| !body.trim().is_empty())
+                        .ok_or_else(|| {
+                            StoreError::Validation(
+                                "record_decision requires a message_body".to_string(),
+                            )
+                        })?,
+                )?;
+                let note = format!(
+                    "action=record_decision; message_id={}; author_agent_id={}; message_type={}; body={}",
+                    message.message_id, message.author_agent_id, message.message_type, message.body
+                );
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::CouncilMessagePosted,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        execution_action: None,
+                        execution_duration_seconds: None,
+                        note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
             OperatorActionKind::CreateHandoff => self.in_transaction(|conn| {
                 let handoff = create_handoff_in_connection(
                     conn,
@@ -1402,6 +1564,7 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::CloseTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
             | OperatorActionKind::ResumeTask
@@ -1772,6 +1935,8 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::RecordDecision
+            | OperatorActionKind::CloseTask
             | OperatorActionKind::ReassignTask
             | OperatorActionKind::ResolveDependency
             | OperatorActionKind::ReopenBlockedTaskWhenUnblocked
@@ -2046,6 +2211,8 @@ impl Store {
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
+            | OperatorActionKind::RecordDecision
+            | OperatorActionKind::CloseTask
             | OperatorActionKind::ReassignTask
             | OperatorActionKind::ClaimTask
             | OperatorActionKind::StartTask
@@ -3088,6 +3255,67 @@ fn handoff_is_expired(handoff: &Handoff) -> StoreResult<bool> {
     Ok(parse_rfc3339_timestamp(expires_at)? <= OffsetDateTime::now_utc())
 }
 
+fn list_handoffs_for_task_in_connection(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<Vec<Handoff>> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
+               summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+        FROM handoffs
+        WHERE task_id = ?1
+        ORDER BY rowid
+        ",
+    )?;
+    let rows = stmt.query_map([task_id], map_handoff)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+fn has_unresolved_review_handoffs_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    handoff_types: &[HandoffType],
+) -> StoreResult<bool> {
+    let handoffs = list_handoffs_for_task_in_connection(conn, task_id)?;
+    for handoff in handoffs {
+        if !handoff_types.contains(&handoff.handoff_type) {
+            continue;
+        }
+        let unresolved = match handoff.status {
+            HandoffStatus::Open => !handoff_is_expired(&handoff)?,
+            HandoffStatus::Accepted => true,
+            HandoffStatus::Rejected
+            | HandoffStatus::Expired
+            | HandoffStatus::Cancelled
+            | HandoffStatus::Completed => false,
+        };
+        if unresolved {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn has_open_follow_up_children_in_connection(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<bool> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT 1
+        FROM task_relationships
+        INNER JOIN tasks ON tasks.task_id = task_relationships.target_task_id
+        WHERE task_relationships.kind = 'follow_up'
+          AND task_relationships.source_task_id = ?1
+          AND tasks.status IN ('open', 'assigned', 'in_progress', 'blocked', 'review_required')
+        LIMIT 1
+        ",
+    )?;
+    Ok(stmt.exists([task_id])?)
+}
+
 fn normalize_evidence_navigation<'a>(
     source_kind: EvidenceSourceKind,
     source_ref: &'a str,
@@ -3467,6 +3695,8 @@ fn task_operator_triage_update<'a>(
             ..TaskTriageUpdate::default()
         },
         OperatorActionKind::VerifyTask
+        | OperatorActionKind::RecordDecision
+        | OperatorActionKind::CloseTask
         | OperatorActionKind::ClaimTask
         | OperatorActionKind::StartTask
         | OperatorActionKind::ResumeTask
@@ -3524,33 +3754,43 @@ fn task_operator_status_update<'a>(
                     "verify_task requires a concrete verification_state".to_string(),
                 ));
             }
-            if verification_state == VerificationState::Passed
-                && input
-                    .closure_summary
-                    .is_none_or(|summary| summary.trim().is_empty())
-            {
+            if verification_state == VerificationState::Passed {
                 return Err(StoreError::Validation(
-                    "verify_task passed reviews require a closure summary".to_string(),
+                    "verify_task no longer accepts passed; use close_task".to_string(),
                 ));
             }
 
-            let status = match verification_state {
-                VerificationState::Passed => TaskStatus::Completed,
-                VerificationState::Pending | VerificationState::Failed => {
-                    TaskStatus::ReviewRequired
-                }
-                VerificationState::Unknown => unreachable!("validated above"),
-            };
-
             (
-                status,
+                TaskStatus::ReviewRequired,
                 TaskStatusUpdate {
                     verification_state: Some(verification_state),
-                    closure_summary: if status == TaskStatus::Completed {
-                        input.closure_summary
-                    } else {
-                        None
-                    },
+                    event_note: input.note,
+                    ..TaskStatusUpdate::default()
+                },
+            )
+        }
+        OperatorActionKind::CloseTask => {
+            if task.status != TaskStatus::ReviewRequired
+                || task.verification_state != VerificationState::Pending
+            {
+                return Err(StoreError::Validation(
+                    "close_task requires a task awaiting review closeout".to_string(),
+                ));
+            }
+            if input
+                .closure_summary
+                .is_none_or(|summary| summary.trim().is_empty())
+            {
+                return Err(StoreError::Validation(
+                    "close_task requires a closure summary".to_string(),
+                ));
+            }
+
+            (
+                TaskStatus::Completed,
+                TaskStatusUpdate {
+                    verification_state: Some(VerificationState::Passed),
+                    closure_summary: input.closure_summary,
                     event_note: input.note,
                     ..TaskStatusUpdate::default()
                 },
@@ -3606,6 +3846,7 @@ fn task_operator_status_update<'a>(
         OperatorActionKind::AcknowledgeTask
         | OperatorActionKind::UnacknowledgeTask
         | OperatorActionKind::ReassignTask
+        | OperatorActionKind::RecordDecision
         | OperatorActionKind::ClaimTask
         | OperatorActionKind::StartTask
         | OperatorActionKind::ResumeTask
