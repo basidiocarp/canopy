@@ -91,6 +91,11 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &handoffs,
         &project_execution_summaries,
     );
+    let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
+        &tasks,
+        &project_execution_summaries,
+        &accepted_handoff_follow_through_task_ids,
+    );
     let paused_resumable_task_ids = derive_paused_resumable_task_ids(
         &tasks,
         &project_execution_summaries,
@@ -105,6 +110,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &handoffs,
         &agent_attention,
         &relationship_summaries,
+        &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
         now,
@@ -130,6 +136,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
             task,
             &open_handoff_task_ids,
             &pending_handoff_acceptance_task_ids,
+            &claimed_not_started_task_ids,
             &paused_resumable_task_ids,
             &accepted_handoff_follow_through_task_ids,
             task_attention_by_id.get(&task.task_id),
@@ -260,6 +267,11 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         std::slice::from_ref(&execution_summary),
     );
+    let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
+        std::slice::from_ref(&task),
+        std::slice::from_ref(&execution_summary),
+        &accepted_handoff_follow_through_task_ids,
+    );
     let paused_resumable_task_ids = derive_paused_resumable_task_ids(
         std::slice::from_ref(&task),
         std::slice::from_ref(&execution_summary),
@@ -310,6 +322,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         &agent_attention,
         std::slice::from_ref(&relationship_summary),
+        &claimed_not_started_task_ids,
         &paused_resumable_task_ids,
         &accepted_handoff_follow_through_task_ids,
         now,
@@ -437,6 +450,10 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.view = TaskView::Unclaimed;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::ClaimedNotStarted => {
+            options.view = TaskView::ClaimedNotStarted;
+            options.sort = TaskSort::UpdatedAt;
+        }
         SnapshotPreset::InProgress => {
             options.view = TaskView::InProgress;
             options.sort = TaskSort::UpdatedAt;
@@ -491,6 +508,7 @@ fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
     pending_handoff_acceptance_task_ids: &HashSet<String>,
+    claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
     task_attention: Option<&TaskAttention>,
@@ -504,6 +522,7 @@ fn matches_view(
             TaskStatus::Open | TaskStatus::Assigned | TaskStatus::InProgress
         ),
         TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
+        TaskView::ClaimedNotStarted => claimed_not_started_task_ids.contains(&task.task_id),
         TaskView::InProgress => task.status == TaskStatus::InProgress,
         TaskView::Stalled => {
             matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
@@ -1872,6 +1891,34 @@ fn derive_paused_resumable_task_ids(
         .collect()
 }
 
+fn derive_claimed_not_started_task_ids(
+    tasks: &[Task],
+    execution_summaries: &[TaskExecutionSummary],
+    accepted_handoff_follow_through_task_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let execution_by_task_id: HashMap<_, _> = execution_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+
+    tasks
+        .iter()
+        .filter(|task| {
+            task.status == TaskStatus::Assigned
+                && task.owner_agent_id.is_some()
+                && !accepted_handoff_follow_through_task_ids.contains(&task.task_id)
+                && execution_by_task_id
+                    .get(task.task_id.as_str())
+                    .is_some_and(|summary| {
+                        summary.claim_count > 0
+                            && summary.run_count == 0
+                            && summary.last_execution_action == Some(ExecutionActionKind::ClaimTask)
+                    })
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
 fn derive_agent_attention(
     agents: &[AgentRegistration],
     now: OffsetDateTime,
@@ -1966,11 +2013,13 @@ fn derive_handoff_attention(handoffs: &[Handoff], now: OffsetDateTime) -> Vec<Ha
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn derive_task_attention(
     tasks: &[Task],
     handoffs: &[Handoff],
     agent_attention: &[AgentAttention],
     relationship_summaries: &[TaskRelationshipSummary],
+    claimed_not_started_task_ids: &HashSet<String>,
     paused_resumable_task_ids: &HashSet<String>,
     accepted_handoff_follow_through_task_ids: &HashSet<String>,
     now: OffsetDateTime,
@@ -2040,6 +2089,9 @@ fn derive_task_attention(
             }
             if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
                 reasons.push(TaskAttentionReason::HasOpenFollowUps);
+            }
+            if claimed_not_started_task_ids.contains(&task.task_id) {
+                reasons.push(TaskAttentionReason::ClaimedNotStarted);
             }
             if paused_resumable_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::PausedResumable);
