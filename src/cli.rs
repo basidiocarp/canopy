@@ -192,7 +192,11 @@ pub enum TaskCommand {
         #[arg(long)]
         severity: Option<TaskSeverity>,
         #[arg(long)]
+        verification_state: Option<VerificationState>,
+        #[arg(long)]
         blocked_reason: Option<String>,
+        #[arg(long)]
+        closure_summary: Option<String>,
         #[arg(long)]
         owner_note: Option<String>,
         #[arg(long, default_value_t = false)]

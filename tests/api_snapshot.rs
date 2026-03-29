@@ -324,6 +324,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .as_array()
         .expect("allowed actions");
     assert!(allowed_actions.iter().any(|action| action["kind"] == "acknowledge_task"));
+    assert!(allowed_actions.iter().any(|action| action["kind"] == "verify_task"));
     assert!(allowed_actions.iter().any(|action| action["kind"] == "reassign_task"));
     assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_priority"));
     assert!(allowed_actions.iter().any(|action| action["kind"] == "set_task_severity"));

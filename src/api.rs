@@ -638,7 +638,10 @@ fn derive_operator_actions(
         }
 
         if task.status == TaskStatus::ReviewRequired
-            || task.verification_state == VerificationState::Pending
+            || matches!(
+                task.verification_state,
+                VerificationState::Pending | VerificationState::Failed
+            )
         {
             actions.push(OperatorAction {
                 action_id: format!("task:{}:verify", task.task_id),
@@ -753,7 +756,7 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
         return Vec::new();
     }
 
-    vec![
+    let mut actions = vec![
         make_task_allowed_action(
             task,
             if attention.acknowledged {
@@ -818,7 +821,25 @@ fn derive_allowed_task_actions(task: &Task, attention: &TaskAttention) -> Vec<Op
             },
             "Update task lifecycle state for operator triage.",
         ),
-    ]
+    ];
+
+    if task.status == TaskStatus::ReviewRequired
+        || matches!(
+            task.verification_state,
+            VerificationState::Pending | VerificationState::Failed
+        )
+    {
+        actions.push(make_task_allowed_action(
+            task,
+            OperatorActionKind::VerifyTask,
+            task_level,
+            "verify",
+            format!("Review {}", task.title),
+            "Record verification outcome and operator review status.",
+        ));
+    }
+
+    actions
 }
 
 fn derive_allowed_handoff_actions(

@@ -89,7 +89,9 @@ pub struct TaskOperatorActionInput<'a> {
     pub assigned_to: Option<&'a str>,
     pub priority: Option<TaskPriority>,
     pub severity: Option<TaskSeverity>,
+    pub verification_state: Option<VerificationState>,
     pub blocked_reason: Option<&'a str>,
+    pub closure_summary: Option<&'a str>,
     pub owner_note: Option<&'a str>,
     pub clear_owner_note: bool,
     pub note: Option<&'a str>,
@@ -735,13 +737,14 @@ impl Store {
                 changed_by,
                 input.note,
             ),
-            OperatorActionKind::VerifyTask
-            | OperatorActionKind::FollowUpHandoff
-            | OperatorActionKind::ExpireHandoff => Err(StoreError::Validation(
+            OperatorActionKind::FollowUpHandoff | OperatorActionKind::ExpireHandoff => Err(
+                StoreError::Validation(
                 format!("operator action {action} is not valid for tasks"),
-            )),
+                ),
+            ),
             OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
+            | OperatorActionKind::VerifyTask
             | OperatorActionKind::SetTaskPriority
             | OperatorActionKind::SetTaskSeverity
             | OperatorActionKind::BlockTask
@@ -1838,6 +1841,60 @@ fn task_operator_status_update<'a>(
     input: TaskOperatorActionInput<'a>,
 ) -> StoreResult<Option<(TaskStatus, TaskStatusUpdate<'a>)>> {
     let update = match action {
+        OperatorActionKind::VerifyTask => {
+            if !(task.status == TaskStatus::ReviewRequired
+                || matches!(
+                    task.verification_state,
+                    VerificationState::Pending | VerificationState::Failed
+                ))
+            {
+                return Err(StoreError::Validation(
+                    "verify_task requires a task that is awaiting or repeating review"
+                        .to_string(),
+                ));
+            }
+            let verification_state = input.verification_state.ok_or_else(|| {
+                StoreError::Validation(
+                    "verify_task requires a verification_state value".to_string(),
+                )
+            })?;
+            if verification_state == VerificationState::Unknown {
+                return Err(StoreError::Validation(
+                    "verify_task requires a concrete verification_state".to_string(),
+                ));
+            }
+            if verification_state == VerificationState::Passed
+                && input
+                    .closure_summary
+                    .is_none_or(|summary| summary.trim().is_empty())
+            {
+                return Err(StoreError::Validation(
+                    "verify_task passed reviews require a closure summary".to_string(),
+                ));
+            }
+
+            let status = match verification_state {
+                VerificationState::Passed => TaskStatus::Completed,
+                VerificationState::Pending | VerificationState::Failed => {
+                    TaskStatus::ReviewRequired
+                }
+                VerificationState::Unknown => unreachable!("validated above"),
+            };
+
+            (
+                status,
+                TaskStatusUpdate {
+                    verification_state: Some(verification_state),
+                    closure_summary: if status == TaskStatus::Completed {
+                        input.closure_summary
+                    } else {
+                        None
+                    },
+                    event_note: input.note,
+                    ..TaskStatusUpdate::default()
+                },
+            )
+        }
         OperatorActionKind::BlockTask => (
             TaskStatus::Blocked,
             TaskStatusUpdate {
@@ -1869,7 +1926,6 @@ fn task_operator_status_update<'a>(
         }
         OperatorActionKind::AcknowledgeTask
         | OperatorActionKind::UnacknowledgeTask
-        | OperatorActionKind::VerifyTask
         | OperatorActionKind::ReassignTask
         | OperatorActionKind::SetTaskPriority
         | OperatorActionKind::SetTaskSeverity

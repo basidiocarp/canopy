@@ -520,6 +520,96 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
         .success()
         .stdout(predicate::str::contains("\"owner_agent_id\": \"claude-1\""));
 
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "verify_task",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "failed",
+            "--note",
+            "premature review attempt",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "verify_task requires a task that is awaiting or repeating review",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "review_required",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "pending",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "verify_task",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "passed",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "verify_task passed reviews require a closure summary",
+        ));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "action",
+            "--task-id",
+            &task_id,
+            "--action",
+            "verify_task",
+            "--changed-by",
+            "operator",
+            "--verification-state",
+            "passed",
+            "--closure-summary",
+            "operator review accepted the task",
+            "--note",
+            "review completed in canopy",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"completed\""))
+        .stdout(predicate::str::contains("\"verification_state\": \"passed\""));
+
     let handoff_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
         .args([
@@ -603,6 +693,16 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
                     .is_some_and(|note| note.contains("owner:codex-1->claude-1"))
         }),
         "expected reassignment history event"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "status_changed"
+                && event["verification_state"] == "passed"
+                && event["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("operator review accepted the task"))
+        }),
+        "expected verify history event"
     );
     assert!(
         events.iter().any(|event| {
