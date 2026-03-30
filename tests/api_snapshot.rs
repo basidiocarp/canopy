@@ -1,8 +1,8 @@
 use assert_cmd::Command;
 use canopy::api::{self, SnapshotOptions};
 use canopy::models::{
-    AgentRegistration, AgentStatus, DeadlineState, OperatorActionKind, SnapshotPreset,
-    TaskAttentionReason, TaskDeadlineKind, TaskStatus, VerificationState,
+    AgentRegistration, AgentStatus, BreachSeverity, DeadlineState, OperatorActionKind,
+    SnapshotPreset, TaskAttentionReason, TaskDeadlineKind, TaskStatus, VerificationState,
 };
 use canopy::store::{Store, TaskDeadlineUpdate, TaskStatusUpdate};
 use rusqlite::{Connection, params};
@@ -371,6 +371,28 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         snapshot["relationship_summaries"][0]["open_follow_up_child_count"],
         1
     );
+    assert_eq!(snapshot["sla_summary"]["due_soon_count"], 0);
+    assert_eq!(snapshot["sla_summary"]["overdue_count"], 0);
+    assert_eq!(
+        snapshot["sla_summary"]["oldest_overdue_seconds"],
+        Value::Null
+    );
+    assert_eq!(snapshot["sla_summary"]["breach_severity"], "none");
+    assert_eq!(
+        snapshot["task_sla_summaries"]
+            .as_array()
+            .expect("task sla summaries")
+            .len(),
+        1
+    );
+    assert_eq!(snapshot["task_sla_summaries"][0]["task_id"], task_id);
+    assert_eq!(snapshot["task_sla_summaries"][0]["due_soon_count"], 0);
+    assert_eq!(snapshot["task_sla_summaries"][0]["overdue_count"], 0);
+    assert_eq!(
+        snapshot["task_sla_summaries"][0]["highest_risk_queue"],
+        Value::Null
+    );
+    assert_eq!(snapshot["task_sla_summaries"][0]["breach_severity"], "none");
 
     let task_detail_output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -423,6 +445,11 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         2
     );
     assert_eq!(detail["ownership"]["assignment_count"], 1);
+    assert_eq!(detail["sla_summary"]["due_soon_count"], 0);
+    assert_eq!(detail["sla_summary"]["overdue_count"], 0);
+    assert_eq!(detail["sla_summary"]["oldest_overdue_seconds"], Value::Null);
+    assert_eq!(detail["sla_summary"]["highest_risk_queue"], Value::Null);
+    assert_eq!(detail["sla_summary"]["breach_severity"], "none");
     assert_eq!(
         detail["assignments"].as_array().expect("assignments").len(),
         1
@@ -1760,7 +1787,9 @@ fn api_snapshot_review_handoff_follow_through_tracks_open_and_accepted_review_ha
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
+    for agent_id in [
+        "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
+    ] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -2158,7 +2187,9 @@ fn api_snapshot_review_decision_follow_through_tracks_open_decision_and_closeout
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
 
-    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
+    for agent_id in [
+        "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
+    ] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -3405,7 +3436,9 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
         .format(&Rfc3339)
         .expect("format acceptance expiry");
 
-    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
+    for agent_id in [
+        "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
+    ] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -3739,11 +3772,16 @@ fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
     let overdue_follow_through_due_at = (now - Duration::hours(1))
         .format(&Rfc3339)
         .expect("format overdue follow through deadline");
+    let stale_overdue_follow_through_due_at = (now - Duration::hours(3))
+        .format(&Rfc3339)
+        .expect("format stale overdue follow through deadline");
     let follow_through_expires_at = (now + Duration::hours(2))
         .format(&Rfc3339)
         .expect("format follow through expiry");
 
-    for agent_id in ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e"] {
+    for agent_id in [
+        "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
+    ] {
         Command::cargo_bin("canopy")
             .expect("build canopy binary")
             .args([
@@ -3894,6 +3932,11 @@ fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
         "agent-d",
         Some(overdue_follow_through_due_at.as_str()),
     );
+    let stale_overdue_handoff_id = create_transfer_handoff(
+        &overdue_task_id,
+        "agent-f",
+        Some(stale_overdue_follow_through_due_at.as_str()),
+    );
     let resumed_handoff_id = create_transfer_handoff(
         &resumed_task_id,
         "agent-e",
@@ -3903,6 +3946,7 @@ fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
     for (handoff_id, agent_id) in [
         (accepted_handoff_id.as_str(), "agent-b"),
         (due_soon_handoff_id.as_str(), "agent-c"),
+        (stale_overdue_handoff_id.as_str(), "agent-f"),
         (overdue_handoff_id.as_str(), "agent-d"),
         (resumed_handoff_id.as_str(), "agent-e"),
     ] {
@@ -4042,6 +4086,17 @@ fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
         .map(|task| task["task_id"].as_str().expect("task id"))
         .collect();
     assert_eq!(overdue_task_ids, vec![overdue_task_id.as_str()]);
+    let overdue_task_sla = overdue_snapshot["task_sla_summaries"]
+        .as_array()
+        .expect("overdue task sla summaries")
+        .iter()
+        .find(|summary| summary["task_id"] == overdue_task_id)
+        .expect("overdue task sla summary");
+    let oldest_overdue_seconds = overdue_task_sla["oldest_overdue_seconds"]
+        .as_i64()
+        .expect("oldest overdue seconds");
+    assert!(oldest_overdue_seconds >= 3_000);
+    assert!(oldest_overdue_seconds < 7_200);
 }
 
 #[test]
@@ -4535,9 +4590,17 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
     .expect("load due soon snapshot");
     assert_eq!(due_soon_snapshot.tasks.len(), 2);
     assert_eq!(due_soon_snapshot.deadline_summaries.len(), 2);
+    assert_eq!(due_soon_snapshot.sla_summary.due_soon_count, 2);
+    assert_eq!(due_soon_snapshot.sla_summary.overdue_count, 0);
     assert_eq!(
         due_soon_snapshot.deadline_summaries[0].active_deadline_state,
         DeadlineState::DueSoon
+    );
+    assert!(
+        due_soon_snapshot
+            .task_sla_summaries
+            .iter()
+            .all(|summary| summary.due_soon_count == 1 && summary.overdue_count == 0)
     );
 
     let due_soon_execution_snapshot = api::snapshot(
@@ -4571,6 +4634,12 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
     )
     .expect("load overdue execution snapshot");
     assert_eq!(overdue_execution_snapshot.tasks.len(), 2);
+    assert_eq!(overdue_execution_snapshot.sla_summary.due_soon_count, 0);
+    assert_eq!(overdue_execution_snapshot.sla_summary.overdue_count, 2);
+    assert_eq!(
+        overdue_execution_snapshot.sla_summary.breach_severity,
+        BreachSeverity::High
+    );
     assert!(
         overdue_execution_snapshot
             .tasks
@@ -4643,6 +4712,11 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
     )
     .expect("load overdue review snapshot");
     assert_eq!(overdue_review_snapshot.tasks.len(), 1);
+    assert_eq!(overdue_review_snapshot.sla_summary.overdue_count, 1);
+    assert_eq!(
+        overdue_review_snapshot.sla_summary.breach_severity,
+        BreachSeverity::High
+    );
     assert_eq!(
         overdue_review_snapshot.tasks[0].task_id,
         overdue_review_task.task_id

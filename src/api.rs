@@ -1,13 +1,13 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
-    AgentRegistration, ApiSnapshot, AttentionLevel, DeadlineState, ExecutionActionKind, Freshness,
-    Handoff, HandoffAttention, HandoffAttentionReason, HandoffType, OperatorAction,
-    OperatorActionKind, OperatorActionTargetKind, SnapshotAttentionSummary, SnapshotPreset, Task,
-    TaskAssignment, TaskAttention, TaskAttentionReason, TaskDeadlineKind, TaskDeadlineSummary,
-    TaskDetail, TaskEvent, TaskEventType, TaskExecutionSummary, TaskHeartbeatSummary,
-    TaskOwnershipSummary, TaskPriority, TaskRelationship, TaskRelationshipKind,
-    TaskRelationshipSummary, TaskSeverity, TaskSort, TaskStatus, TaskView, VerificationState,
-    derive_review_cycle_context,
+    AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState,
+    ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason, HandoffType,
+    OperatorAction, OperatorActionKind, OperatorActionTargetKind, SnapshotAttentionSummary,
+    SnapshotPreset, SnapshotSlaSummary, Task, TaskAssignment, TaskAttention, TaskAttentionReason,
+    TaskDeadlineKind, TaskDeadlineSummary, TaskDetail, TaskEvent, TaskEventType,
+    TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
+    TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSlaSummary,
+    TaskSort, TaskStatus, TaskView, VerificationState, derive_review_cycle_context,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
@@ -47,6 +47,27 @@ struct ResolvedSnapshotOptions {
     severity_at_least: Option<TaskSeverity>,
     acknowledged: Option<bool>,
     attention_at_least: Option<AttentionLevel>,
+}
+
+#[allow(clippy::struct_field_names)]
+struct SlaQueueSets<'a> {
+    due_soon_handoff_acceptance_task_ids: &'a HashSet<String>,
+    overdue_handoff_acceptance_task_ids: &'a HashSet<String>,
+    due_soon_accepted_handoff_follow_through_task_ids: &'a HashSet<String>,
+    overdue_accepted_handoff_follow_through_task_ids: &'a HashSet<String>,
+    due_soon_review_handoff_follow_through_task_ids: &'a HashSet<String>,
+    overdue_review_handoff_follow_through_task_ids: &'a HashSet<String>,
+    due_soon_review_decision_follow_through_task_ids: &'a HashSet<String>,
+    overdue_review_decision_follow_through_task_ids: &'a HashSet<String>,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, Default)]
+struct OverdueTaskSlaQueues {
+    handoff_acceptance: bool,
+    accepted_handoff_follow_through: bool,
+    review_handoff_follow_through: bool,
+    review_decision_follow_through: bool,
 }
 
 /// Builds a stable read snapshot for operator surfaces.
@@ -222,6 +243,30 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         derive_pending_handoff_acceptance_task_ids_with_freshness(&handoffs, now, Freshness::Aging);
     let overdue_handoff_acceptance_task_ids =
         derive_pending_handoff_acceptance_task_ids_with_freshness(&handoffs, now, Freshness::Stale);
+    let sla_queue_sets = SlaQueueSets {
+        due_soon_handoff_acceptance_task_ids: &due_soon_handoff_acceptance_task_ids,
+        overdue_handoff_acceptance_task_ids: &overdue_handoff_acceptance_task_ids,
+        due_soon_accepted_handoff_follow_through_task_ids:
+            &due_soon_accepted_handoff_follow_through_task_ids,
+        overdue_accepted_handoff_follow_through_task_ids:
+            &overdue_accepted_handoff_follow_through_task_ids,
+        due_soon_review_handoff_follow_through_task_ids:
+            &due_soon_review_handoff_follow_through_task_ids,
+        overdue_review_handoff_follow_through_task_ids:
+            &overdue_review_handoff_follow_through_task_ids,
+        due_soon_review_decision_follow_through_task_ids:
+            &due_soon_review_decision_follow_through_task_ids,
+        overdue_review_decision_follow_through_task_ids:
+            &overdue_review_decision_follow_through_task_ids,
+    };
+    let task_sla_summaries = derive_task_sla_summaries(
+        &tasks,
+        &project_deadline_summaries,
+        &handoffs,
+        &project_execution_summaries,
+        &sla_queue_sets,
+        now,
+    );
     let task_attention_by_id: HashMap<_, _> = task_attention
         .iter()
         .map(|attention| (attention.task_id.clone(), attention.clone()))
@@ -288,6 +333,10 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         .into_iter()
         .filter(|summary| task_ids.contains(&summary.task_id))
         .collect::<Vec<_>>();
+    let filtered_task_sla_summaries = task_sla_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
     let filtered_handoff_attention = handoff_attention
         .into_iter()
         .filter(|attention| task_ids.contains(&attention.task_id))
@@ -339,15 +388,18 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
         &filtered_agent_attention,
         &operator_actions,
     );
+    let sla_summary = summarize_sla(&filtered_task_sla_summaries);
 
     Ok(ApiSnapshot {
         attention,
+        sla_summary,
         agents,
         agent_attention: filtered_agent_attention,
         agent_heartbeat_summaries,
         heartbeats,
         tasks,
         task_attention: filtered_task_attention,
+        task_sla_summaries: filtered_task_sla_summaries,
         deadline_summaries: filtered_deadline_summaries,
         task_heartbeat_summaries,
         execution_summaries,
@@ -393,6 +445,22 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoffs,
         std::slice::from_ref(&execution_summary),
     );
+    let due_soon_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            std::slice::from_ref(&execution_summary),
+            now,
+            Freshness::Aging,
+        );
+    let overdue_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            std::slice::from_ref(&execution_summary),
+            now,
+            Freshness::Stale,
+        );
     let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
         std::slice::from_ref(&task),
         &assignments,
@@ -455,6 +523,34 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     );
     let review_handoff_follow_through_task_ids =
         derive_review_handoff_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
+    let due_soon_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            now,
+            Freshness::Stale,
+        );
+    let due_soon_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            std::slice::from_ref(&task),
+            &handoffs,
+            now,
+            Freshness::Stale,
+        );
     let review_decision_follow_through_task_ids =
         derive_review_decision_follow_through_task_ids(std::slice::from_ref(&task), &handoffs, now);
     let review_awaiting_support_task_ids =
@@ -481,6 +577,39 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         .ok_or(StoreError::Validation(
             "task deadline summary could not be derived".to_string(),
         ))?;
+    let due_soon_handoff_acceptance_task_ids =
+        derive_pending_handoff_acceptance_task_ids_with_freshness(&handoffs, now, Freshness::Aging);
+    let overdue_handoff_acceptance_task_ids =
+        derive_pending_handoff_acceptance_task_ids_with_freshness(&handoffs, now, Freshness::Stale);
+    let sla_queue_sets = SlaQueueSets {
+        due_soon_handoff_acceptance_task_ids: &due_soon_handoff_acceptance_task_ids,
+        overdue_handoff_acceptance_task_ids: &overdue_handoff_acceptance_task_ids,
+        due_soon_accepted_handoff_follow_through_task_ids:
+            &due_soon_accepted_handoff_follow_through_task_ids,
+        overdue_accepted_handoff_follow_through_task_ids:
+            &overdue_accepted_handoff_follow_through_task_ids,
+        due_soon_review_handoff_follow_through_task_ids:
+            &due_soon_review_handoff_follow_through_task_ids,
+        overdue_review_handoff_follow_through_task_ids:
+            &overdue_review_handoff_follow_through_task_ids,
+        due_soon_review_decision_follow_through_task_ids:
+            &due_soon_review_decision_follow_through_task_ids,
+        overdue_review_decision_follow_through_task_ids:
+            &overdue_review_decision_follow_through_task_ids,
+    };
+    let sla_summary = derive_task_sla_summaries(
+        std::slice::from_ref(&task),
+        std::slice::from_ref(&deadline_summary),
+        &handoffs,
+        std::slice::from_ref(&execution_summary),
+        &sla_queue_sets,
+        now,
+    )
+    .into_iter()
+    .next()
+    .ok_or(StoreError::Validation(
+        "task SLA summary could not be derived".to_string(),
+    ))?;
     let attention = derive_task_attention(
         std::slice::from_ref(&task),
         std::slice::from_ref(&deadline_summary),
@@ -550,6 +679,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
 
     Ok(TaskDetail {
         attention,
+        sla_summary,
         agent_attention,
         agent_heartbeat_summaries,
         task,
@@ -2511,26 +2641,39 @@ fn derive_accepted_handoff_follow_through_task_ids_inner(
         })
         .filter_map(|handoff| {
             let task = tasks_by_id.get(handoff.task_id.as_str())?;
-            if task.status != TaskStatus::Assigned {
-                return None;
-            }
-            if task.owner_agent_id.as_deref() != Some(handoff.to_agent_id.as_str()) {
-                return None;
-            }
-            let resolved_at = handoff.resolved_at.as_deref().and_then(parse_timestamp)?;
-            let last_execution_after_acceptance = execution_by_task_id
-                .get(handoff.task_id.as_str())
-                .and_then(|summary| summary.last_execution_at.as_deref())
-                .and_then(parse_timestamp)
-                .is_some_and(|last_execution_at| last_execution_at >= resolved_at);
-
-            if last_execution_after_acceptance {
-                None
-            } else {
-                Some(handoff.task_id.clone())
-            }
+            accepted_handoff_requires_follow_through(
+                handoff,
+                task,
+                execution_by_task_id.get(handoff.task_id.as_str()).copied(),
+            )
+            .then(|| handoff.task_id.clone())
         })
         .collect()
+}
+
+fn accepted_handoff_requires_follow_through(
+    handoff: &Handoff,
+    task: &Task,
+    execution_summary: Option<&TaskExecutionSummary>,
+) -> bool {
+    if handoff.status != crate::models::HandoffStatus::Accepted {
+        return false;
+    }
+    if task.status != TaskStatus::Assigned {
+        return false;
+    }
+    if task.owner_agent_id.as_deref() != Some(handoff.to_agent_id.as_str()) {
+        return false;
+    }
+    let Some(resolved_at) = handoff.resolved_at.as_deref().and_then(parse_timestamp) else {
+        return false;
+    };
+    let last_execution_after_acceptance = execution_summary
+        .and_then(|summary| summary.last_execution_at.as_deref())
+        .and_then(parse_timestamp)
+        .is_some_and(|last_execution_at| last_execution_at >= resolved_at);
+
+    !last_execution_after_acceptance
 }
 
 fn derive_paused_resumable_task_ids(
@@ -3319,6 +3462,285 @@ fn summarize_attention(
             .count(),
         actionable_tasks: actionable_task_count,
         actionable_handoffs: actionable_handoff_count,
+    }
+}
+
+fn summarize_sla(task_sla_summaries: &[TaskSlaSummary]) -> SnapshotSlaSummary {
+    SnapshotSlaSummary {
+        due_soon_count: task_sla_summaries
+            .iter()
+            .map(|summary| summary.due_soon_count)
+            .sum(),
+        overdue_count: task_sla_summaries
+            .iter()
+            .map(|summary| summary.overdue_count)
+            .sum(),
+        oldest_overdue_seconds: task_sla_summaries
+            .iter()
+            .filter(|summary| summary.overdue_count > 0)
+            .filter_map(|summary| summary.oldest_overdue_seconds)
+            .max(),
+        breach_severity: task_sla_summaries
+            .iter()
+            .map(|summary| summary.breach_severity)
+            .max_by_key(|severity| breach_severity_rank(*severity))
+            .unwrap_or(BreachSeverity::None),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn derive_task_sla_summaries(
+    tasks: &[Task],
+    deadline_summaries: &[TaskDeadlineSummary],
+    handoffs: &[Handoff],
+    execution_summaries: &[TaskExecutionSummary],
+    queue_sets: &SlaQueueSets<'_>,
+    now: OffsetDateTime,
+) -> Vec<TaskSlaSummary> {
+    let deadline_summary_by_task_id: HashMap<_, _> = deadline_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+    let execution_by_task_id: HashMap<_, _> = execution_summaries
+        .iter()
+        .map(|summary| (summary.task_id.as_str(), summary))
+        .collect();
+    let handoffs_by_task_id: HashMap<_, Vec<&Handoff>> =
+        handoffs.iter().fold(HashMap::new(), |mut acc, handoff| {
+            acc.entry(handoff.task_id.as_str())
+                .or_default()
+                .push(handoff);
+            acc
+        });
+
+    tasks
+        .iter()
+        .map(|task| {
+            let deadline_summary = deadline_summary_by_task_id
+                .get(task.task_id.as_str())
+                .copied();
+            let task_handoffs = handoffs_by_task_id
+                .get(task.task_id.as_str())
+                .map_or(&[][..], Vec::as_slice);
+
+            let execution_due_soon = deadline_summary
+                .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon);
+            let execution_overdue = deadline_summary
+                .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue);
+            let review_due_soon = deadline_summary
+                .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon);
+            let review_overdue = deadline_summary
+                .is_some_and(|summary| summary.review_state == DeadlineState::Overdue);
+
+            let due_soon_count = [
+                execution_due_soon,
+                review_due_soon,
+                queue_sets
+                    .due_soon_handoff_acceptance_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .due_soon_accepted_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .due_soon_review_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .due_soon_review_decision_follow_through_task_ids
+                    .contains(&task.task_id),
+            ]
+            .into_iter()
+            .filter(|flag| *flag)
+            .count();
+            let overdue_count = [
+                execution_overdue,
+                review_overdue,
+                queue_sets
+                    .overdue_handoff_acceptance_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .overdue_accepted_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .overdue_review_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                queue_sets
+                    .overdue_review_decision_follow_through_task_ids
+                    .contains(&task.task_id),
+            ]
+            .into_iter()
+            .filter(|flag| *flag)
+            .count();
+
+            let deadline_overdue_seconds =
+                deadline_summary.and_then(|summary| summary.overdue_by_seconds);
+            let overdue_queue_flags = OverdueTaskSlaQueues {
+                handoff_acceptance: queue_sets
+                    .overdue_handoff_acceptance_task_ids
+                    .contains(&task.task_id),
+                accepted_handoff_follow_through: queue_sets
+                    .overdue_accepted_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                review_handoff_follow_through: queue_sets
+                    .overdue_review_handoff_follow_through_task_ids
+                    .contains(&task.task_id),
+                review_decision_follow_through: queue_sets
+                    .overdue_review_decision_follow_through_task_ids
+                    .contains(&task.task_id),
+            };
+            let handoff_overdue_seconds = task_handoffs
+                .iter()
+                .filter_map(|handoff| {
+                    overdue_handoff_age_seconds(
+                        handoff,
+                        task,
+                        execution_by_task_id.get(task.task_id.as_str()).copied(),
+                        now,
+                        overdue_queue_flags,
+                    )
+                })
+                .max();
+            let oldest_overdue_seconds = [deadline_overdue_seconds, handoff_overdue_seconds]
+                .into_iter()
+                .flatten()
+                .max();
+            let highest_risk_queue =
+                highest_risk_queue_for_task(task, deadline_summary, queue_sets);
+
+            TaskSlaSummary {
+                task_id: task.task_id.clone(),
+                due_soon_count,
+                overdue_count,
+                oldest_overdue_seconds,
+                highest_risk_queue,
+                breach_severity: classify_breach_severity(due_soon_count, overdue_count),
+            }
+        })
+        .collect()
+}
+
+fn highest_risk_queue_for_task(
+    task: &Task,
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    queue_sets: &SlaQueueSets<'_>,
+) -> Option<SnapshotPreset> {
+    let task_id = &task.task_id;
+    [
+        (
+            queue_sets
+                .overdue_review_decision_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::OverdueReviewDecisionFollowThrough,
+        ),
+        (
+            queue_sets
+                .overdue_review_handoff_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::OverdueReviewHandoffFollowThrough,
+        ),
+        (
+            queue_sets
+                .overdue_accepted_handoff_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::OverdueAcceptedHandoffFollowThrough,
+        ),
+        (
+            queue_sets
+                .overdue_handoff_acceptance_task_ids
+                .contains(task_id),
+            SnapshotPreset::OverdueHandoffAcceptance,
+        ),
+        (
+            deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::Overdue),
+            SnapshotPreset::OverdueReview,
+        ),
+        (
+            deadline_summary.is_some_and(|summary| {
+                summary.execution_state == DeadlineState::Overdue && task.owner_agent_id.is_some()
+            }),
+            SnapshotPreset::OverdueExecutionOwned,
+        ),
+        (
+            deadline_summary.is_some_and(|summary| {
+                summary.execution_state == DeadlineState::Overdue && task.owner_agent_id.is_none()
+            }),
+            SnapshotPreset::OverdueExecutionUnclaimed,
+        ),
+        (
+            queue_sets
+                .due_soon_review_decision_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::DueSoonReviewDecisionFollowThrough,
+        ),
+        (
+            queue_sets
+                .due_soon_review_handoff_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::DueSoonReviewHandoffFollowThrough,
+        ),
+        (
+            queue_sets
+                .due_soon_accepted_handoff_follow_through_task_ids
+                .contains(task_id),
+            SnapshotPreset::DueSoonAcceptedHandoffFollowThrough,
+        ),
+        (
+            queue_sets
+                .due_soon_handoff_acceptance_task_ids
+                .contains(task_id),
+            SnapshotPreset::DueSoonHandoffAcceptance,
+        ),
+        (
+            deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::DueSoon),
+            SnapshotPreset::DueSoonReview,
+        ),
+        (
+            deadline_summary
+                .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon),
+            SnapshotPreset::DueSoonExecution,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(active, preset)| active.then_some(preset))
+}
+
+fn overdue_handoff_age_seconds(
+    handoff: &Handoff,
+    task: &Task,
+    execution_summary: Option<&TaskExecutionSummary>,
+    now: OffsetDateTime,
+    overdue_queue_flags: OverdueTaskSlaQueues,
+) -> Option<i64> {
+    let due_at = parse_timestamp(handoff.due_at.as_deref()?)?;
+    let is_follow_through = (overdue_queue_flags.review_handoff_follow_through
+        && review_handoff_requires_follow_through(handoff, now))
+        || (overdue_queue_flags.review_decision_follow_through
+            && review_decision_requires_follow_through(handoff, now))
+        || (overdue_queue_flags.accepted_handoff_follow_through
+            && accepted_handoff_requires_follow_through(handoff, task, execution_summary));
+    let is_acceptance = overdue_queue_flags.handoff_acceptance
+        && handoff.status == crate::models::HandoffStatus::Open
+        && !handoff_has_expired(handoff, now);
+
+    ((is_follow_through || is_acceptance) && due_at < now).then_some((now - due_at).whole_seconds())
+}
+
+fn classify_breach_severity(due_soon_count: usize, overdue_count: usize) -> BreachSeverity {
+    match (due_soon_count, overdue_count) {
+        (0, 0) => BreachSeverity::None,
+        (_, overdue_count) if overdue_count > 1 => BreachSeverity::Critical,
+        (_, 1) => BreachSeverity::High,
+        (due_soon_count, 0) if due_soon_count > 1 => BreachSeverity::Medium,
+        _ => BreachSeverity::Low,
+    }
+}
+
+const fn breach_severity_rank(severity: BreachSeverity) -> usize {
+    match severity {
+        BreachSeverity::None => 0,
+        BreachSeverity::Low => 1,
+        BreachSeverity::Medium => 2,
+        BreachSeverity::High => 3,
+        BreachSeverity::Critical => 4,
     }
 }
 

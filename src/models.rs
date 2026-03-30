@@ -317,6 +317,17 @@ pub enum Freshness {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+pub enum BreachSeverity {
+    None,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum TaskAttentionReason {
     Blocked,
     BlockedByActiveDependency,
@@ -713,6 +724,16 @@ pub struct TaskDeadlineSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskSlaSummary {
+    pub task_id: String,
+    pub due_soon_count: usize,
+    pub overdue_count: usize,
+    pub oldest_overdue_seconds: Option<i64>,
+    pub highest_risk_queue: Option<SnapshotPreset>,
+    pub breach_severity: BreachSeverity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskRelationshipSummary {
     pub task_id: String,
     pub blocker_count: usize,
@@ -734,6 +755,14 @@ pub struct SnapshotAttentionSummary {
     pub stale_agents: usize,
     pub actionable_tasks: usize,
     pub actionable_handoffs: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotSlaSummary {
+    pub due_soon_count: usize,
+    pub overdue_count: usize,
+    pub oldest_overdue_seconds: Option<i64>,
+    pub breach_severity: BreachSeverity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -805,12 +834,14 @@ pub struct OperatorAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
     pub attention: SnapshotAttentionSummary,
+    pub sla_summary: SnapshotSlaSummary,
     pub agents: Vec<AgentRegistration>,
     pub agent_attention: Vec<AgentAttention>,
     pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
     pub heartbeats: Vec<AgentHeartbeatEvent>,
     pub tasks: Vec<Task>,
     pub task_attention: Vec<TaskAttention>,
+    pub task_sla_summaries: Vec<TaskSlaSummary>,
     pub deadline_summaries: Vec<TaskDeadlineSummary>,
     pub task_heartbeat_summaries: Vec<TaskHeartbeatSummary>,
     pub execution_summaries: Vec<TaskExecutionSummary>,
@@ -826,6 +857,7 @@ pub struct ApiSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskDetail {
     pub attention: TaskAttention,
+    pub sla_summary: TaskSlaSummary,
     pub agent_attention: Vec<AgentAttention>,
     pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
     pub task: Task,
