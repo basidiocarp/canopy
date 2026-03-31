@@ -550,6 +550,7 @@ pub struct CouncilMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvidenceRef {
+    pub schema_version: String,
     pub evidence_id: String,
     pub task_id: String,
     pub source_kind: EvidenceSourceKind,
@@ -561,6 +562,30 @@ pub struct EvidenceRef {
     pub related_memory_query: Option<String>,
     pub related_symbol: Option<String>,
     pub related_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceVerificationStatus {
+    Verified,
+    Stale,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceVerificationResult {
+    pub evidence_id: String,
+    pub task_id: String,
+    pub source_kind: EvidenceSourceKind,
+    pub source_ref: String,
+    pub status: EvidenceVerificationStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceVerificationReport {
+    pub schema_version: String,
+    pub results: Vec<EvidenceVerificationResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -833,6 +858,7 @@ pub struct OperatorAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiSnapshot {
+    pub schema_version: String,
     pub attention: SnapshotAttentionSummary,
     pub sla_summary: SnapshotSlaSummary,
     pub agents: Vec<AgentRegistration>,
@@ -856,6 +882,7 @@ pub struct ApiSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskDetail {
+    pub schema_version: String,
     pub attention: TaskAttention,
     pub sla_summary: TaskSlaSummary,
     pub agent_attention: Vec<AgentAttention>,

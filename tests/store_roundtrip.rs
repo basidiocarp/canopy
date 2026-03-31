@@ -226,6 +226,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             },
         )
         .expect("create evidence");
+    assert_eq!(evidence.schema_version, "1.0");
     assert_eq!(
         evidence.related_session_id.as_deref(),
         Some("session:01KMSCANOPY")
@@ -637,6 +638,7 @@ fn task_creation_actions_create_artifacts_and_record_history() {
 
     let evidence = store.list_evidence(&task.task_id).expect("list evidence");
     assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].schema_version, "1.0");
     assert_eq!(
         evidence[0].related_handoff_id.as_deref(),
         Some(created_handoff.handoff_id.as_str())

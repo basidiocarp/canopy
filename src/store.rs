@@ -14,6 +14,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use ulid::Ulid;
 
+const EVIDENCE_REF_SCHEMA_VERSION: &str = "1.0";
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -214,6 +216,7 @@ const BASE_SCHEMA: &str = r"
     );
 
     CREATE TABLE IF NOT EXISTS evidence_refs (
+        schema_version TEXT NOT NULL DEFAULT '1.0',
         evidence_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
         source_kind TEXT NOT NULL,
@@ -2541,7 +2544,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
-                   related_session_id, related_memory_query, related_symbol, related_file
+                   related_session_id, related_memory_query, related_symbol, related_file, schema_version
             FROM evidence_refs
             WHERE task_id = ?1
             ORDER BY rowid
@@ -2561,7 +2564,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
-                   related_session_id, related_memory_query, related_symbol, related_file
+                   related_session_id, related_memory_query, related_symbol, related_file, schema_version
             FROM evidence_refs
             ORDER BY rowid
             ",
@@ -3104,6 +3107,7 @@ fn add_evidence_in_connection(
     );
 
     let evidence = EvidenceRef {
+        schema_version: EVIDENCE_REF_SCHEMA_VERSION.to_string(),
         evidence_id: Ulid::new().to_string(),
         task_id: task_id.to_string(),
         source_kind,
@@ -3119,11 +3123,12 @@ fn add_evidence_in_connection(
     conn.execute(
         r"
         INSERT INTO evidence_refs (
-            evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
+            schema_version, evidence_id, task_id, source_kind, source_ref, label, summary, related_handoff_id,
             related_session_id, related_memory_query, related_symbol, related_file
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ",
         params![
+            evidence.schema_version,
             evidence.evidence_id,
             evidence.task_id,
             evidence.source_kind.to_string(),
@@ -3336,6 +3341,16 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "evidence_refs", "related_memory_query", "TEXT NULL")?;
     ensure_column(conn, "evidence_refs", "related_symbol", "TEXT NULL")?;
     ensure_column(conn, "evidence_refs", "related_file", "TEXT NULL")?;
+    ensure_column(
+        conn,
+        "evidence_refs",
+        "schema_version",
+        "TEXT NOT NULL DEFAULT '1.0'",
+    )?;
+    conn.execute(
+        "UPDATE evidence_refs SET schema_version = COALESCE(schema_version, '1.0')",
+        [],
+    )?;
     ensure_column(conn, "task_events", "execution_action", "TEXT NULL")?;
     ensure_column(
         conn,
@@ -4396,7 +4411,20 @@ fn map_council_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<CouncilMessa
 }
 
 fn map_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRef> {
+    let schema_version: String = row.get(11)?;
+    if schema_version != EVIDENCE_REF_SCHEMA_VERSION {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            11,
+            Type::Text,
+            format!(
+                "unsupported evidence schema_version: {schema_version} (expected {EVIDENCE_REF_SCHEMA_VERSION})"
+            )
+            .into(),
+        ));
+    }
+
     Ok(EvidenceRef {
+        schema_version,
         evidence_id: row.get(0)?,
         task_id: row.get(1)?,
         source_kind: parse_enum_column(row, 2)?,

@@ -23,6 +23,7 @@ const HANDOFF_AGING_HOURS: i64 = 6;
 const HANDOFF_STALE_HOURS: i64 = 24;
 const HEARTBEAT_AGING_MINUTES: i64 = 15;
 const HEARTBEAT_STALE_MINUTES: i64 = 60;
+const CANOPY_API_SCHEMA_VERSION: &str = "1.0";
 const SQLITE_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
@@ -391,6 +392,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     let sla_summary = summarize_sla(&filtered_task_sla_summaries);
 
     Ok(ApiSnapshot {
+        schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
         attention,
         sla_summary,
         agents,
@@ -678,6 +680,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     );
 
     Ok(TaskDetail {
+        schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
         attention,
         sla_summary,
         agent_attention,

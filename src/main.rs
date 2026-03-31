@@ -4,14 +4,23 @@ use canopy::cli::{
     AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, HandoffCommand,
     TaskCommand,
 };
-use canopy::models::{AgentRegistration, AgentStatus};
+use canopy::models::{
+    AgentRegistration, AgentStatus, EvidenceRef, EvidenceSourceKind, EvidenceVerificationReport,
+    EvidenceVerificationResult, EvidenceVerificationStatus,
+};
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
     TaskStatusUpdate, TaskTriageUpdate,
 };
 use clap::Parser;
 use serde::Serialize;
+use spore::{Tool, discover};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const CANOPY_DB_FILENAME: &str = "canopy.db";
+const CANOPY_DB_ENV_VAR: &str = "CANOPY_DB_PATH";
+const EVIDENCE_VERIFY_SCHEMA_VERSION: &str = "1.0";
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -190,6 +199,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             related_task_id,
             relationship_role,
         } => {
+            let fallback_session_id = runtime_session_id_from_env();
             let task = store.apply_task_operator_action(
                 &task_id,
                 action,
@@ -221,7 +231,9 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                     evidence_label: evidence_label.as_deref(),
                     evidence_summary: evidence_summary.as_deref(),
                     related_handoff_id: related_handoff_id.as_deref(),
-                    related_session_id: related_session_id.as_deref(),
+                    related_session_id: related_session_id
+                        .as_deref()
+                        .or(fallback_session_id.as_deref()),
                     related_memory_query: related_memory_query.as_deref(),
                     related_symbol: related_symbol.as_deref(),
                     related_file: related_file.as_deref(),
@@ -350,6 +362,7 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
             related_symbol,
             related_file,
         } => {
+            let fallback_session_id = runtime_session_id_from_env();
             let evidence = store.add_evidence(
                 &task_id,
                 source_kind,
@@ -358,7 +371,9 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
                 summary.as_deref(),
                 EvidenceLinkRefs {
                     related_handoff_id: related_handoff_id.as_deref(),
-                    session_id: related_session_id.as_deref(),
+                    session_id: related_session_id
+                        .as_deref()
+                        .or(fallback_session_id.as_deref()),
                     memory_query: related_memory_query.as_deref(),
                     symbol: related_symbol.as_deref(),
                     file: related_file.as_deref(),
@@ -369,9 +384,146 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
         EvidenceCommand::List { task_id } => {
             print_json(&store.list_evidence(&task_id)?)?;
         }
+        EvidenceCommand::Verify { task_id } => {
+            print_json(&verify_evidence(store, task_id.as_deref())?)?;
+        }
     }
 
     Ok(())
+}
+
+fn verify_evidence(store: &Store, task_id: Option<&str>) -> Result<EvidenceVerificationReport> {
+    let evidence = if let Some(task_id) = task_id {
+        store.list_evidence(task_id)?
+    } else {
+        store.list_all_evidence()?
+    };
+
+    let results = evidence
+        .iter()
+        .map(|evidence| verify_evidence_ref(evidence, probe_hyphae_session_status))
+        .collect();
+
+    Ok(EvidenceVerificationReport {
+        schema_version: EVIDENCE_VERIFY_SCHEMA_VERSION.to_string(),
+        results,
+    })
+}
+
+fn verify_evidence_ref<F>(evidence: &EvidenceRef, hyphae_probe: F) -> EvidenceVerificationResult
+where
+    F: Fn(&str) -> (EvidenceVerificationStatus, String),
+{
+    let (status, detail) = match evidence.source_kind {
+        EvidenceSourceKind::ManualNote => (
+            EvidenceVerificationStatus::Verified,
+            "manual note is stored directly in canopy".to_string(),
+        ),
+        EvidenceSourceKind::HyphaeSession => {
+            let session_id = evidence
+                .related_session_id
+                .as_deref()
+                .or_else(|| non_empty_value(&evidence.source_ref));
+            match session_id {
+                Some(session_id) => hyphae_probe(session_id),
+                None => (
+                    EvidenceVerificationStatus::Stale,
+                    "hyphae session evidence is missing a session identifier".to_string(),
+                ),
+            }
+        }
+        EvidenceSourceKind::HyphaeRecall
+        | EvidenceSourceKind::HyphaeOutcome
+        | EvidenceSourceKind::CortinaEvent
+        | EvidenceSourceKind::MyceliumCommand
+        | EvidenceSourceKind::MyceliumExplain
+        | EvidenceSourceKind::RhizomeImpact
+        | EvidenceSourceKind::RhizomeExport => (
+            EvidenceVerificationStatus::Unsupported,
+            format!(
+                "{} verification is not implemented yet",
+                evidence.source_kind
+            ),
+        ),
+    };
+
+    EvidenceVerificationResult {
+        evidence_id: evidence.evidence_id.clone(),
+        task_id: evidence.task_id.clone(),
+        source_kind: evidence.source_kind,
+        source_ref: evidence.source_ref.clone(),
+        status,
+        detail,
+    }
+}
+
+fn probe_hyphae_session_status(session_id: &str) -> (EvidenceVerificationStatus, String) {
+    let Some(info) = discover(Tool::Hyphae) else {
+        return (
+            EvidenceVerificationStatus::Unsupported,
+            "hyphae binary is not available for session verification".to_string(),
+        );
+    };
+
+    let output = match Command::new(&info.binary_path)
+        .args(["session", "status", "--id", session_id])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return (
+                EvidenceVerificationStatus::Unsupported,
+                format!("failed to execute hyphae session status: {error}"),
+            );
+        }
+    };
+
+    if output.status.success() {
+        match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+            Ok(json) if json["session_id"].as_str() == Some(session_id) => (
+                EvidenceVerificationStatus::Verified,
+                "hyphae session exists".to_string(),
+            ),
+            Ok(_) => (
+                EvidenceVerificationStatus::Stale,
+                "hyphae returned a mismatched session payload".to_string(),
+            ),
+            Err(error) => (
+                EvidenceVerificationStatus::Unsupported,
+                format!("failed to parse hyphae session status output: {error}"),
+            ),
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if detail.contains("no session with id") {
+            (
+                EvidenceVerificationStatus::Stale,
+                format!("hyphae session '{session_id}' was not found"),
+            )
+        } else {
+            (
+                EvidenceVerificationStatus::Unsupported,
+                if detail.is_empty() {
+                    "hyphae session status failed without stderr output".to_string()
+                } else {
+                    format!("hyphae session status failed: {detail}")
+                },
+            )
+        }
+    }
+}
+
+fn non_empty_value(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn runtime_session_id_from_env() -> Option<String> {
+    std::env::var("CLAUDE_SESSION_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {
@@ -439,7 +591,164 @@ fn resolve_db_path(db: Option<&Path>) -> Result<PathBuf> {
         return Ok(path.to_path_buf());
     }
 
-    let state_dir = PathBuf::from(".canopy");
-    std::fs::create_dir_all(&state_dir).context("create .canopy state directory")?;
-    Ok(state_dir.join("canopy.db"))
+    let target = spore::paths::db_path("canopy", CANOPY_DB_FILENAME, CANOPY_DB_ENV_VAR, None)
+        .context("resolve canopy database path")?;
+    migrate_legacy_db_if_needed(&PathBuf::from(".canopy").join(CANOPY_DB_FILENAME), &target)?;
+    Ok(target)
+}
+
+fn migrate_legacy_db_if_needed(legacy_path: &Path, target_path: &Path) -> Result<()> {
+    if legacy_path == target_path || !legacy_path.exists() || target_path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create canopy data directory {}", parent.display()))?;
+    }
+
+    match std::fs::rename(legacy_path, target_path) {
+        Ok(()) => {}
+        Err(rename_err) => {
+            std::fs::copy(legacy_path, target_path).with_context(|| {
+                format!(
+                    "copy legacy canopy database from {} to {} after rename failed: {rename_err}",
+                    legacy_path.display(),
+                    target_path.display()
+                )
+            })?;
+            std::fs::remove_file(legacy_path).with_context(|| {
+                format!(
+                    "remove migrated legacy canopy database {}",
+                    legacy_path.display()
+                )
+            })?;
+        }
+    }
+
+    if let Some(legacy_dir) = legacy_path.parent() {
+        let _ = std::fs::remove_dir(legacy_dir);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvidenceVerificationStatus, migrate_legacy_db_if_needed, verify_evidence_ref};
+    use canopy::models::{EvidenceRef, EvidenceSourceKind};
+    use tempfile::tempdir;
+
+    #[test]
+    fn migrate_legacy_db_moves_existing_db_to_spore_target() {
+        let temp = tempdir().expect("temp dir");
+        let legacy_dir = temp.path().join(".canopy");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        let legacy_db = legacy_dir.join("canopy.db");
+        let target_db = temp.path().join("state").join("canopy.db");
+
+        std::fs::write(&legacy_db, "legacy").expect("write legacy db");
+
+        migrate_legacy_db_if_needed(&legacy_db, &target_db).expect("migrate legacy db");
+
+        assert!(!legacy_db.exists());
+        assert_eq!(
+            std::fs::read_to_string(&target_db).expect("read target db"),
+            "legacy"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_db_leaves_existing_target_untouched() {
+        let temp = tempdir().expect("temp dir");
+        let legacy_dir = temp.path().join(".canopy");
+        let target_dir = temp.path().join("state");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        std::fs::create_dir_all(&target_dir).expect("target dir");
+
+        let legacy_db = legacy_dir.join("canopy.db");
+        let target_db = target_dir.join("canopy.db");
+        std::fs::write(&legacy_db, "legacy").expect("write legacy db");
+        std::fs::write(&target_db, "current").expect("write target db");
+
+        migrate_legacy_db_if_needed(&legacy_db, &target_db).expect("skip migration");
+
+        assert_eq!(
+            std::fs::read_to_string(&legacy_db).expect("read legacy db"),
+            "legacy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target_db).expect("read target db"),
+            "current"
+        );
+    }
+
+    #[test]
+    fn verify_manual_note_evidence_as_verified() {
+        let evidence = EvidenceRef {
+            schema_version: "1.0".to_string(),
+            evidence_id: "evidence-1".to_string(),
+            task_id: "task-1".to_string(),
+            source_kind: EvidenceSourceKind::ManualNote,
+            source_ref: "manual://note".to_string(),
+            label: "Manual note".to_string(),
+            summary: None,
+            related_handoff_id: None,
+            related_session_id: None,
+            related_memory_query: None,
+            related_symbol: None,
+            related_file: None,
+        };
+
+        let result = verify_evidence_ref(&evidence, |_| unreachable!("manual note probe"));
+        assert_eq!(result.status, EvidenceVerificationStatus::Verified);
+    }
+
+    #[test]
+    fn verify_hyphae_session_without_identifier_is_stale() {
+        let evidence = EvidenceRef {
+            schema_version: "1.0".to_string(),
+            evidence_id: "evidence-1".to_string(),
+            task_id: "task-1".to_string(),
+            source_kind: EvidenceSourceKind::HyphaeSession,
+            source_ref: "   ".to_string(),
+            label: "Hyphae session".to_string(),
+            summary: None,
+            related_handoff_id: None,
+            related_session_id: None,
+            related_memory_query: None,
+            related_symbol: None,
+            related_file: None,
+        };
+
+        let result = verify_evidence_ref(&evidence, |_| unreachable!("missing id probe"));
+        assert_eq!(result.status, EvidenceVerificationStatus::Stale);
+    }
+
+    #[test]
+    fn verify_hyphae_session_uses_probe_result() {
+        let evidence = EvidenceRef {
+            schema_version: "1.0".to_string(),
+            evidence_id: "evidence-1".to_string(),
+            task_id: "task-1".to_string(),
+            source_kind: EvidenceSourceKind::HyphaeSession,
+            source_ref: "session-123".to_string(),
+            label: "Hyphae session".to_string(),
+            summary: None,
+            related_handoff_id: None,
+            related_session_id: Some("session-123".to_string()),
+            related_memory_query: None,
+            related_symbol: None,
+            related_file: None,
+        };
+
+        let result = verify_evidence_ref(&evidence, |_| {
+            (
+                EvidenceVerificationStatus::Unsupported,
+                "hyphae unavailable".to_string(),
+            )
+        });
+        assert_eq!(result.status, EvidenceVerificationStatus::Unsupported);
+        assert!(result.detail.contains("hyphae unavailable"));
+    }
 }

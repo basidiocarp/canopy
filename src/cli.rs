@@ -331,6 +331,10 @@ pub enum EvidenceCommand {
         #[arg(long)]
         task_id: String,
     },
+    Verify {
+        #[arg(long)]
+        task_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

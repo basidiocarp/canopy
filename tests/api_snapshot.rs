@@ -702,6 +702,74 @@ fn api_task_detail_exposes_handoff_resolution_actions_for_open_handoffs() {
 }
 
 #[test]
+fn api_snapshot_evidence_add_uses_env_runtime_session_id_when_flag_is_omitted() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Snapshot task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .env("CLAUDE_SESSION_ID", "claude-session-42")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "evidence",
+            "add",
+            "--task-id",
+            &task_id,
+            "--source-kind",
+            "hyphae_session",
+            "--source-ref",
+            "session:01KMSCANOPY",
+            "--label",
+            "hyphae session",
+        ])
+        .assert()
+        .success();
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse task detail");
+    let evidence = detail["evidence"].as_array().expect("evidence");
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0]["related_session_id"], "claude-session-42");
+}
+
+#[test]
 fn api_task_detail_limits_expired_open_handoffs_to_expire_action() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
