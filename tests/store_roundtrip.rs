@@ -1,12 +1,13 @@
 use canopy::models::{
-    AgentRegistration, AgentStatus, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, OperatorActionKind, TaskEventType, TaskRelationshipRole, TaskStatus,
-    VerificationState,
+    AgentRegistration, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
+    HandoffStatus, HandoffType, OperatorActionKind, TaskEventType, TaskRelationshipRole,
+    TaskStatus, VerificationState,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskDeadlineUpdate,
-    TaskOperatorActionInput, TaskStatusUpdate,
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
+    TaskDeadlineUpdate, TaskOperatorActionInput, TaskStatusUpdate,
 };
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 #[test]
@@ -26,6 +27,8 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         status: AgentStatus::Idle,
         current_task_id: None,
         heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
     };
     let reviewer = AgentRegistration {
         agent_id: "claude-1".to_string(),
@@ -38,6 +41,8 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         status: AgentStatus::Idle,
         current_task_id: None,
         heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
     };
 
     store.register_agent(&agent).expect("register agent");
@@ -59,6 +64,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             Some("trace the scoring attribution"),
             "operator",
             "/tmp/project",
+            None,
         )
         .expect("create task");
     assert_eq!(task.status, TaskStatus::Open);
@@ -120,7 +126,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             .is_err()
     );
     let second_task = store
-        .create_task("Second task", None, "operator", "/tmp/project")
+        .create_task("Second task", None, "operator", "/tmp/project", None)
         .expect("create second task");
     assert!(
         store
@@ -278,6 +284,27 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         Some("waiting on a second opinion")
     );
 
+    let resumed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Assigned,
+            "claude-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("resume task from blocked");
+    assert_eq!(resumed.status, TaskStatus::Assigned);
+    assert!(resumed.blocked_reason.is_none());
+
+    let in_progress = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "claude-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("move task back into progress");
+    assert_eq!(in_progress.status, TaskStatus::InProgress);
+
     let completed = store
         .update_task_status(
             &task.task_id,
@@ -303,7 +330,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let events = store
         .list_task_events(&task.task_id)
         .expect("list task events");
-    assert_eq!(events.len(), 7);
+    assert_eq!(events.len(), 9);
     assert_eq!(events[1].event_type, TaskEventType::Assigned);
     assert_eq!(events[1].to_status, TaskStatus::Assigned);
     assert_eq!(
@@ -333,13 +360,17 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         Some("waiting on a second opinion")
     );
     assert_eq!(events[6].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[6].to_status, TaskStatus::Completed);
+    assert_eq!(events[6].to_status, TaskStatus::Assigned);
+    assert_eq!(events[7].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[7].to_status, TaskStatus::InProgress);
+    assert_eq!(events[8].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[8].to_status, TaskStatus::Completed);
     assert_eq!(
-        events[6].verification_state,
+        events[8].verification_state,
         Some(VerificationState::Passed)
     );
     assert_eq!(
-        events[6].note.as_deref(),
+        events[8].note.as_deref(),
         Some("review completed and accepted")
     );
 
@@ -375,6 +406,658 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
 }
 
 #[test]
+fn store_open_enables_wal_and_busy_timeout() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let _store = Store::open(&db_path).expect("open store");
+
+    let conn = Connection::open(&db_path).expect("open db");
+    let journal_mode: String = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .expect("read journal_mode");
+    let busy_timeout: i64 = conn
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .expect("read busy_timeout");
+
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    assert_eq!(busy_timeout, 5000);
+}
+
+#[test]
+fn update_task_status_rejects_invalid_terminal_transition() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("Cancelled task", None, "operator", "/tmp/project", None)
+        .expect("create task");
+
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Cancelled,
+            "operator",
+            TaskStatusUpdate {
+                closure_summary: Some("cancelled"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("cancel task");
+
+    let error = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect_err("cancelled task should not go directly to in progress");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot transition from cancelled to in_progress")
+    );
+}
+
+#[test]
+fn update_task_status_allows_reopen_from_closed_to_open() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("Closed task", None, "operator", "/tmp/project", None)
+        .expect("create task");
+
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start task");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("done"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("complete task");
+    let closed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Closed,
+            "operator",
+            TaskStatusUpdate {
+                closure_summary: Some("closed"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("close task");
+    assert_eq!(closed.status, TaskStatus::Closed);
+
+    let reopened = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Open,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("reopen task");
+    assert_eq!(reopened.status, TaskStatus::Open);
+}
+
+#[test]
+fn assign_task_enforces_required_role_when_both_task_and_agent_define_it() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Implementer),
+        })
+        .expect("register implementer");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Validator),
+        })
+        .expect("register validator");
+
+    let task = store
+        .create_task(
+            "Validate task role routing",
+            None,
+            "operator",
+            "/tmp/project",
+            Some(AgentRole::Validator),
+        )
+        .expect("create validator task");
+    assert_eq!(task.required_role, Some(AgentRole::Validator));
+
+    let error = store
+        .assign_task(&task.task_id, "codex-1", "operator", None)
+        .expect_err("reject mismatched assignee role");
+    assert!(
+        error
+            .to_string()
+            .contains("task requires validator role, agent has implementer")
+    );
+
+    let assigned = store
+        .assign_task(&task.task_id, "claude-1", "operator", None)
+        .expect("assign validator task");
+    assert_eq!(assigned.owner_agent_id.as_deref(), Some("claude-1"));
+    assert_eq!(assigned.required_role, Some(AgentRole::Validator));
+}
+
+#[test]
+fn assign_task_remains_backward_compatible_when_role_is_missing_on_one_side() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
+        })
+        .expect("register legacy agent");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Validator),
+        })
+        .expect("register validator");
+
+    let legacy_task = store
+        .create_task("Legacy open task", None, "operator", "/tmp/project", None)
+        .expect("create legacy task");
+    let validator_task = store
+        .create_task(
+            "Validator task with legacy assignee",
+            None,
+            "operator",
+            "/tmp/project",
+            Some(AgentRole::Validator),
+        )
+        .expect("create validator task");
+
+    let legacy_agent_target = store
+        .assign_task(&validator_task.task_id, "codex-1", "operator", None)
+        .expect("allow missing agent role");
+    assert_eq!(
+        legacy_agent_target.owner_agent_id.as_deref(),
+        Some("codex-1")
+    );
+
+    let validator_assignment = store
+        .assign_task(&legacy_task.task_id, "claude-1", "operator", None)
+        .expect("allow missing task role");
+    assert_eq!(
+        validator_assignment.owner_agent_id.as_deref(),
+        Some("claude-1")
+    );
+
+    let reloaded_legacy_agent = store
+        .list_agents()
+        .expect("list agents")
+        .into_iter()
+        .find(|agent| agent.agent_id == "codex-1")
+        .expect("legacy agent still present");
+    assert_eq!(reloaded_legacy_agent.role, None);
+
+    let reloaded_legacy_task = store
+        .get_task(&legacy_task.task_id)
+        .expect("reload legacy task");
+    assert_eq!(reloaded_legacy_task.required_role, None);
+}
+
+#[test]
+fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_them() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: vec!["rust".to_string(), "hyphae".to_string()],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register matching agent");
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-2".to_string(),
+            host_id: "codex-remote".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "remote".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: vec!["rust".to_string()],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register incomplete agent");
+
+    let task = store
+        .create_task_with_options(
+            "Capability-gated implementation",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
+                auto_review: false,
+            },
+        )
+        .expect("create capability-gated task");
+
+    let error = store
+        .assign_task(&task.task_id, "codex-2", "operator", None)
+        .expect_err("reject missing capability on assign");
+    assert!(
+        error
+            .to_string()
+            .contains("agent missing capabilities: hyphae")
+    );
+
+    let claimed = store
+        .apply_task_operator_action(
+            &task.task_id,
+            OperatorActionKind::ClaimTask,
+            "operator",
+            TaskOperatorActionInput {
+                acting_agent_id: Some("codex-1"),
+                ..TaskOperatorActionInput::default()
+            },
+        )
+        .expect("claim task with matching capabilities");
+    assert_eq!(claimed.owner_agent_id.as_deref(), Some("codex-1"));
+}
+
+#[test]
+fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_sensitive() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: Vec::new(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register empty-capability agent");
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-2".to_string(),
+            host_id: "codex-remote".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "remote".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: vec!["rust".to_string()],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register rust agent");
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-3".to_string(),
+            host_id: "codex-third".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "remote".to_string(),
+            model: "gpt-5.4-mini".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-3".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: vec!["rust".to_string()],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register second rust agent");
+
+    let no_requirement_task = store
+        .create_task_with_options(
+            "No capability requirement",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create unscoped task");
+    store
+        .assign_task(&no_requirement_task.task_id, "codex-2", "operator", None)
+        .expect("allow empty required capability list");
+
+    let no_agent_capability_task = store
+        .create_task_with_options(
+            "Agent missing capability list",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: vec!["rust".to_string()],
+                auto_review: false,
+            },
+        )
+        .expect("create task with capability requirement");
+    store
+        .assign_task(
+            &no_agent_capability_task.task_id,
+            "codex-1",
+            "operator",
+            None,
+        )
+        .expect("allow empty agent capability list");
+
+    let case_sensitive_task = store
+        .create_task_with_options(
+            "Case-sensitive task",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: vec!["Rust".to_string()],
+                auto_review: false,
+            },
+        )
+        .expect("create case-sensitive task");
+    let error = store
+        .assign_task(&case_sensitive_task.task_id, "codex-3", "operator", None)
+        .expect_err("reject capability mismatch with different casing");
+    assert!(
+        error
+            .to_string()
+            .contains("agent missing capabilities: Rust")
+    );
+}
+
+#[test]
+fn completed_review_handoff_creates_validator_review_siblings_for_auto_review_tasks() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    for agent in [
+        AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Implementer),
+        },
+        AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Validator),
+        },
+    ] {
+        store.register_agent(&agent).expect("register agent");
+    }
+
+    let parent = store
+        .create_task("Parent task", None, "operator", "/tmp/project", None)
+        .expect("create parent");
+    let implementation = store
+        .create_subtask_with_options(
+            &parent.task_id,
+            "Implementation task",
+            Some("Ship the runtime change"),
+            "operator",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
+                auto_review: true,
+            },
+        )
+        .expect("create implementation task");
+    assert!(implementation.auto_review);
+
+    let handoff = store
+        .create_handoff(
+            &implementation.task_id,
+            "codex-1",
+            "claude-1",
+            HandoffType::RequestReview,
+            "ready for structured review",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    let resolved = store
+        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Completed, "operator")
+        .expect("complete handoff");
+    assert_eq!(resolved.status, HandoffStatus::Completed);
+
+    let children = store
+        .get_children(&parent.task_id)
+        .expect("get parent children");
+    assert_eq!(children.len(), 4);
+    assert!(
+        children
+            .iter()
+            .any(|task| task.task_id == implementation.task_id)
+    );
+
+    let review_tasks = store
+        .list_tasks()
+        .expect("list tasks")
+        .into_iter()
+        .filter(|task| {
+            matches!(
+                task.title.as_str(),
+                "Spec review" | "Architecture audit" | "Quality check"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(review_tasks.len(), 3);
+    for review_task in &review_tasks {
+        assert_eq!(review_task.required_role, Some(AgentRole::Validator));
+        assert!(!review_task.auto_review);
+        assert_eq!(
+            store
+                .get_parent_id(&review_task.task_id)
+                .expect("load review parent"),
+            Some(parent.task_id.clone())
+        );
+        assert!(
+            review_task
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains(&implementation.task_id))
+        );
+    }
+
+    let task_events = store
+        .list_task_events(&implementation.task_id)
+        .expect("list implementation task events");
+    assert!(task_events.iter().any(|event| {
+        event.event_type == TaskEventType::RelationshipUpdated
+            && event
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("action=auto_review_subtasks"))
+    }));
+}
+
+#[test]
+fn completed_review_handoff_skips_auto_review_when_task_flag_is_disabled() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    for agent in [
+        AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Implementer),
+        },
+        AgentRegistration {
+            agent_id: "claude-1".to_string(),
+            host_id: "claude-local".to_string(),
+            host_type: "claude".to_string(),
+            host_instance: "local".to_string(),
+            model: "opus".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-2".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: Some(AgentRole::Validator),
+        },
+    ] {
+        store.register_agent(&agent).expect("register agent");
+    }
+
+    let task = store
+        .create_task(
+            "Implementation task",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
+        .expect("create task");
+    assert!(!task.auto_review);
+
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            "codex-1",
+            "claude-1",
+            HandoffType::RequestReview,
+            "review not auto-generated",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+    store
+        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Completed, "operator")
+        .expect("complete handoff");
+
+    let titles = store
+        .list_tasks()
+        .expect("list tasks")
+        .into_iter()
+        .map(|task| task.title)
+        .collect::<Vec<_>>();
+    assert_eq!(titles, vec!["Implementation task".to_string()]);
+}
+
+#[test]
 fn store_requires_prior_execution_before_resume_task() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
@@ -391,11 +1074,13 @@ fn store_requires_prior_execution_before_resume_task() {
         status: AgentStatus::Idle,
         current_task_id: None,
         heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
     };
 
     store.register_agent(&agent).expect("register agent");
     let task = store
-        .create_task("Resume execution", None, "operator", "/tmp/project")
+        .create_task("Resume execution", None, "operator", "/tmp/project", None)
         .expect("create task");
     let assigned = store
         .assign_task(&task.task_id, &agent.agent_id, "operator", None)
@@ -484,6 +1169,8 @@ fn task_creation_actions_create_artifacts_and_record_history() {
             status: AgentStatus::Idle,
             current_task_id: None,
             heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
         },
         AgentRegistration {
             agent_id: "claude-1".to_string(),
@@ -496,13 +1183,21 @@ fn task_creation_actions_create_artifacts_and_record_history() {
             status: AgentStatus::Idle,
             current_task_id: None,
             heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
         },
     ] {
         store.register_agent(&agent).expect("register agent");
     }
 
     let task = store
-        .create_task("Operator coordination", None, "operator", "/tmp/project")
+        .create_task(
+            "Operator coordination",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
         .expect("create task");
     let _ = store
         .assign_task(&task.task_id, "codex-1", "operator", Some("initial owner"))
@@ -587,7 +1282,7 @@ fn task_creation_actions_create_artifacts_and_record_history() {
         .find(|item| item.title == "Close the follow-up queue")
         .expect("follow-up task");
     let blocker_task = store
-        .create_task("Lifecycle blocker", None, "operator", "/tmp/project")
+        .create_task("Lifecycle blocker", None, "operator", "/tmp/project", None)
         .expect("create blocker task");
 
     let _ = store
@@ -698,8 +1393,22 @@ fn task_creation_actions_reject_terminal_tasks() {
     let store = Store::open(&db_path).expect("open store");
 
     let task = store
-        .create_task("Closed coordination task", None, "operator", "/tmp/project")
+        .create_task(
+            "Closed coordination task",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
         .expect("create task");
+    let _ = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start task");
     let _ = store
         .update_task_status(
             &task.task_id,
@@ -733,6 +1442,115 @@ fn task_creation_actions_reject_terminal_tasks() {
 }
 
 #[test]
+fn subtasks_create_parent_relationships_and_enforce_single_parent() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let parent = store
+        .create_task("Parent task", None, "operator", "/tmp/project", None)
+        .expect("create parent");
+    let other_parent = store
+        .create_task("Other parent", None, "operator", "/tmp/project", None)
+        .expect("create other parent");
+
+    let child_a = store
+        .create_subtask(&parent.task_id, "Child A", None, "operator", None)
+        .expect("create child a");
+    let child_b = store
+        .create_subtask(
+            &parent.task_id,
+            "Child B",
+            Some("verify output"),
+            "operator",
+            None,
+        )
+        .expect("create child b");
+
+    let children = store.get_children(&parent.task_id).expect("get children");
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0].task_id, child_a.task_id);
+    assert_eq!(children[0].status, TaskStatus::Open);
+    assert_eq!(children[1].task_id, child_b.task_id);
+    assert_eq!(
+        store
+            .get_parent_id(&child_a.task_id)
+            .expect("get parent id"),
+        Some(parent.task_id.clone())
+    );
+
+    let parent_related = store
+        .list_related_tasks(&parent.task_id)
+        .expect("list parent related tasks");
+    assert!(parent_related.iter().any(|related| {
+        related.related_task_id == child_a.task_id
+            && related.relationship_role == TaskRelationshipRole::Child
+    }));
+
+    let child_related = store
+        .list_related_tasks(&child_a.task_id)
+        .expect("list child related tasks");
+    assert!(child_related.iter().any(|related| {
+        related.related_task_id == parent.task_id
+            && related.relationship_role == TaskRelationshipRole::Parent
+    }));
+
+    let second_parent_error = store
+        .link_parent_task(&child_a.task_id, &other_parent.task_id, "operator")
+        .expect_err("child should reject second parent");
+    assert!(
+        second_parent_error
+            .to_string()
+            .contains("task already has a parent")
+    );
+
+    let self_parent_error = store
+        .link_parent_task(&parent.task_id, &parent.task_id, "operator")
+        .expect_err("task should not parent itself");
+    assert!(
+        self_parent_error
+            .to_string()
+            .contains("task relationships must link two different tasks")
+    );
+}
+
+#[test]
+fn deleting_parent_does_not_delete_children() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let (parent_id, child_id) = {
+        let store = Store::open(&db_path).expect("open store");
+        let parent = store
+            .create_task("Delete parent", None, "operator", "/tmp/project", None)
+            .expect("create parent");
+        let child = store
+            .create_subtask(&parent.task_id, "Keep child", None, "operator", None)
+            .expect("create child");
+        (parent.task_id, child.task_id)
+    };
+
+    let conn = Connection::open(&db_path).expect("open raw connection");
+    conn.execute("PRAGMA foreign_keys = ON", [])
+        .expect("enable foreign keys");
+    conn.execute("DELETE FROM tasks WHERE task_id = ?1", [&parent_id])
+        .expect("delete parent task");
+    drop(conn);
+
+    let store = Store::open(&db_path).expect("reopen store");
+    let child = store
+        .get_task(&child_id)
+        .expect("child survives parent delete");
+    assert_eq!(child.title, "Keep child");
+    assert!(
+        store
+            .get_parent_id(&child_id)
+            .expect("load child parent after delete")
+            .is_none()
+    );
+}
+
+#[test]
 fn review_operator_actions_record_decision_before_closeout() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
@@ -750,11 +1568,19 @@ fn review_operator_actions_record_decision_before_closeout() {
             status: AgentStatus::Idle,
             current_task_id: None,
             heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
         })
         .expect("register reviewer");
 
     let task = store
-        .create_task("Close reviewed task", None, "operator", "/tmp/project")
+        .create_task(
+            "Close reviewed task",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
         .expect("create task");
     store
         .update_task_status(
@@ -863,10 +1689,10 @@ fn graph_operator_actions_update_relationships_and_status() {
     let store = Store::open(&db_path).expect("open store");
 
     let parent = store
-        .create_task("Coordinate release", None, "operator", "/tmp/project")
+        .create_task("Coordinate release", None, "operator", "/tmp/project", None)
         .expect("create parent");
     let blocker = store
-        .create_task("Fix blocker", None, "operator", "/tmp/project")
+        .create_task("Fix blocker", None, "operator", "/tmp/project", None)
         .expect("create blocker");
 
     store
@@ -990,6 +1816,14 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .update_task_status(
             &follow_up_b.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start second follow-up");
+    store
+        .update_task_status(
+            &follow_up_b.task_id,
             TaskStatus::Completed,
             "operator",
             TaskStatusUpdate {
@@ -1065,12 +1899,14 @@ fn handoff_operator_actions_cover_resolution_paths() {
                 status: AgentStatus::Idle,
                 current_task_id: None,
                 heartbeat_at: None,
+                capabilities: Vec::new(),
+                role: None,
             })
             .expect("register agent");
     }
 
     let transfer_task = store
-        .create_task("Transfer owner", None, "operator", "/tmp/project")
+        .create_task("Transfer owner", None, "operator", "/tmp/project", None)
         .expect("create transfer task");
     store
         .assign_task(&transfer_task.task_id, "codex-1", "operator", None)
@@ -1109,7 +1945,7 @@ fn handoff_operator_actions_cover_resolution_paths() {
     );
 
     let rejected_task = store
-        .create_task("Reject help", None, "operator", "/tmp/project")
+        .create_task("Reject help", None, "operator", "/tmp/project", None)
         .expect("create rejected task");
     let rejected_handoff = store
         .create_handoff(
@@ -1144,7 +1980,7 @@ fn handoff_operator_actions_cover_resolution_paths() {
     assert!(rejected_task_after.owner_agent_id.is_none());
 
     let cancelled_task = store
-        .create_task("Cancel request", None, "operator", "/tmp/project")
+        .create_task("Cancel request", None, "operator", "/tmp/project", None)
         .expect("create cancelled task");
     let cancelled_handoff = store
         .create_handoff(
@@ -1176,7 +2012,7 @@ fn handoff_operator_actions_cover_resolution_paths() {
     assert!(cancelled_task_after.owner_agent_id.is_none());
 
     let completed_task = store
-        .create_task("Complete review", None, "operator", "/tmp/project")
+        .create_task("Complete review", None, "operator", "/tmp/project", None)
         .expect("create completed task");
     let completed_handoff = store
         .create_handoff(
@@ -1208,7 +2044,7 @@ fn handoff_operator_actions_cover_resolution_paths() {
     assert!(completed_task_after.owner_agent_id.is_none());
 
     let expired_task = store
-        .create_task("Expire review", None, "operator", "/tmp/project")
+        .create_task("Expire review", None, "operator", "/tmp/project", None)
         .expect("create expired task");
     let expired_handoff = store
         .create_handoff(
@@ -1283,7 +2119,13 @@ fn task_deadline_updates_persist_and_record_history() {
     let store = Store::open(&db_path).expect("open store");
 
     let task = store
-        .create_task("Track deadline semantics", None, "operator", "/tmp/project")
+        .create_task(
+            "Track deadline semantics",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
         .expect("create task");
 
     let with_execution_due = store

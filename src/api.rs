@@ -659,6 +659,7 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&related_agents, &heartbeats, &agent_attention);
     let relationships = store.list_task_relationships(Some(task_id))?;
+    let children = store.get_children(task_id)?;
     let operator_actions = derive_operator_actions(
         std::slice::from_ref(&task),
         std::slice::from_ref(&attention),
@@ -678,6 +679,8 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         &handoff_attention,
         now,
     );
+
+    let children_complete = relationship_summary.children_complete;
 
     Ok(TaskDetail {
         schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
@@ -702,6 +705,9 @@ pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
         relationships,
         relationship_summary,
         related_tasks: store.list_related_tasks(task_id)?,
+        children_complete,
+        children,
+        parent_id: store.get_parent_id(task_id)?,
     })
 }
 
@@ -1218,6 +1224,10 @@ fn derive_task_relationship_summaries(
                     follow_up_parent_count: 0,
                     follow_up_child_count: 0,
                     open_follow_up_child_count: 0,
+                    parent_count: 0,
+                    child_count: 0,
+                    open_child_count: 0,
+                    children_complete: false,
                 },
             )
         })
@@ -1256,13 +1266,24 @@ fn derive_task_relationship_summaries(
                     }
                 }
             }
+            TaskRelationshipKind::Parent => {
+                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+                    summary.parent_count += 1;
+                }
+                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+                    summary.child_count += 1;
+                    if is_open_task_status(source_task.status) {
+                        summary.open_child_count += 1;
+                    }
+                }
+            }
         }
     }
 
     tasks
         .iter()
         .map(|task| {
-            summaries
+            let mut summary = summaries
                 .remove(&task.task_id)
                 .unwrap_or(TaskRelationshipSummary {
                     task_id: task.task_id.clone(),
@@ -1273,7 +1294,13 @@ fn derive_task_relationship_summaries(
                     follow_up_parent_count: 0,
                     follow_up_child_count: 0,
                     open_follow_up_child_count: 0,
-                })
+                    parent_count: 0,
+                    child_count: 0,
+                    open_child_count: 0,
+                    children_complete: false,
+                });
+            summary.children_complete = summary.child_count > 0 && summary.open_child_count == 0;
+            summary
         })
         .collect()
 }
@@ -3328,6 +3355,9 @@ fn derive_task_attention(
             }
             if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
                 reasons.push(TaskAttentionReason::HasOpenFollowUps);
+            }
+            if is_open && relationship_summary.is_some_and(|summary| summary.children_complete) {
+                reasons.push(TaskAttentionReason::AllChildrenComplete);
             }
             if assigned_awaiting_claim_task_ids.contains(&task.task_id) {
                 reasons.push(TaskAttentionReason::AssignedAwaitingClaim);

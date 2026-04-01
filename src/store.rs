@@ -1,9 +1,10 @@
 use crate::models::{
-    AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus, CouncilMessage,
-    CouncilMessageType, EvidenceRef, EvidenceSourceKind, ExecutionActionKind, Handoff,
-    HandoffStatus, HandoffType, OperatorActionKind, RelatedTask, Task, TaskAssignment, TaskEvent,
-    TaskEventType, TaskPriority, TaskRelationship, TaskRelationshipKind, TaskRelationshipRole,
-    TaskSeverity, TaskStatus, VerificationState, derive_review_cycle_context,
+    AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentRole, AgentStatus,
+    CouncilMessage, CouncilMessageType, EvidenceRef, EvidenceSourceKind, ExecutionActionKind,
+    Handoff, HandoffStatus, HandoffType, OperatorActionKind, RelatedTask, Task, TaskAssignment,
+    TaskEvent, TaskEventType, TaskPriority, TaskRelationship, TaskRelationshipKind,
+    TaskRelationshipRole, TaskSeverity, TaskStatus, TaskSummary, VerificationState,
+    capabilities_match, derive_review_cycle_context, parse_capabilities,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::fs;
@@ -32,6 +33,22 @@ pub type StoreResult<T> = Result<T, StoreError>;
 pub struct Store {
     conn: Connection,
 }
+
+const AUTO_REVIEW_MIN_PRIORITY: TaskPriority = TaskPriority::Medium;
+const AUTO_REVIEW_SUBTASKS: [(&str, &str); 3] = [
+    (
+        "Spec review",
+        "Verify implementation matches original task spec",
+    ),
+    (
+        "Architecture audit",
+        "Check for pattern violations: WAL, atomic writes, spore usage, schema_version",
+    ),
+    (
+        "Quality check",
+        "Verify test count, clippy warnings, coverage delta",
+    ),
+];
 
 #[derive(Debug)]
 struct TaskEventWrite<'a> {
@@ -73,6 +90,13 @@ pub struct TaskTriageUpdate<'a> {
     pub owner_note: Option<&'a str>,
     pub clear_owner_note: bool,
     pub event_note: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskCreationOptions {
+    pub required_role: Option<AgentRole>,
+    pub required_capabilities: Vec<String>,
+    pub auto_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -151,6 +175,8 @@ const BASE_SCHEMA: &str = r"
         model TEXT NOT NULL,
         project_root TEXT NOT NULL,
         worktree_id TEXT NOT NULL,
+        role TEXT NULL,
+        capabilities TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         current_task_id TEXT NULL,
         heartbeat_at TEXT NULL
@@ -162,6 +188,9 @@ const BASE_SCHEMA: &str = r"
         description TEXT NULL,
         requested_by TEXT NOT NULL,
         project_root TEXT NOT NULL,
+        required_role TEXT NULL,
+        required_capabilities TEXT NOT NULL DEFAULT '[]',
+        auto_review INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL,
         verification_state TEXT NOT NULL,
         priority TEXT NOT NULL,
@@ -256,6 +285,10 @@ const BASE_SCHEMA: &str = r"
         UNIQUE(source_task_id, target_task_id, kind)
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source
+    ON task_relationships(source_task_id)
+    WHERE kind = 'parent';
+
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
@@ -282,6 +315,8 @@ impl Store {
 
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.execute_batch(BASE_SCHEMA)?;
 
         migrate_schema(&conn)?;
@@ -301,8 +336,8 @@ impl Store {
                 r"
                 INSERT INTO agents (
                     agent_id, host_id, host_type, host_instance, model,
-                    project_root, worktree_id, status, current_task_id, heartbeat_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+                    project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP)
                 ON CONFLICT(agent_id) DO UPDATE SET
                     host_id = excluded.host_id,
                     host_type = excluded.host_type,
@@ -310,6 +345,8 @@ impl Store {
                     model = excluded.model,
                     project_root = excluded.project_root,
                     worktree_id = excluded.worktree_id,
+                    role = excluded.role,
+                    capabilities = excluded.capabilities,
                     status = excluded.status,
                     current_task_id = excluded.current_task_id,
                     heartbeat_at = CURRENT_TIMESTAMP
@@ -322,6 +359,8 @@ impl Store {
                     agent.model,
                     agent.project_root,
                     agent.worktree_id,
+                    agent.role.map(|value| value.to_string()),
+                    serialize_capabilities(&agent.capabilities)?,
                     agent.status.to_string(),
                     agent.current_task_id,
                 ],
@@ -349,7 +388,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT agent_id, host_id, host_type, host_instance, model,
-                   project_root, worktree_id, status, current_task_id, heartbeat_at
+                   project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
             FROM agents
             ORDER BY agent_id
             ",
@@ -408,9 +447,127 @@ impl Store {
         description: Option<&str>,
         requested_by: &str,
         project_root: &str,
+        required_role: Option<AgentRole>,
+    ) -> StoreResult<Task> {
+        self.create_task_with_options(
+            title,
+            description,
+            requested_by,
+            project_root,
+            &TaskCreationOptions {
+                required_role,
+                ..TaskCreationOptions::default()
+            },
+        )
+    }
+
+    /// Creates a new task in the local ledger with explicit option fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task cannot be persisted.
+    pub fn create_task_with_options(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        project_root: &str,
+        options: &TaskCreationOptions,
     ) -> StoreResult<Task> {
         self.in_transaction(|conn| {
-            create_task_in_connection(conn, title, description, requested_by, project_root)
+            create_task_in_connection(
+                conn,
+                title,
+                description,
+                requested_by,
+                project_root,
+                options,
+            )
+        })
+    }
+
+    /// Creates a new task and links it as a child of an existing parent task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent task does not exist, the child task
+    /// cannot be created, or the parent relationship is invalid.
+    pub fn create_subtask(
+        &self,
+        parent_task_id: &str,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        required_role: Option<AgentRole>,
+    ) -> StoreResult<Task> {
+        self.create_subtask_with_options(
+            parent_task_id,
+            title,
+            description,
+            requested_by,
+            &TaskCreationOptions {
+                required_role,
+                ..TaskCreationOptions::default()
+            },
+        )
+    }
+
+    /// Creates a new task and links it as a child of an existing parent task
+    /// with explicit option fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent task does not exist, the child task
+    /// cannot be created, or the parent relationship is invalid.
+    pub fn create_subtask_with_options(
+        &self,
+        parent_task_id: &str,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        options: &TaskCreationOptions,
+    ) -> StoreResult<Task> {
+        self.ensure_task_exists(parent_task_id)?;
+        self.in_transaction(|conn| {
+            let parent_task = get_task_in_connection(conn, parent_task_id)?;
+            let child_task = create_task_in_connection(
+                conn,
+                title,
+                description,
+                requested_by,
+                &parent_task.project_root,
+                options,
+            )?;
+            record_parent_relationship_in_connection(
+                conn,
+                &child_task.task_id,
+                parent_task_id,
+                requested_by,
+            )?;
+            get_task_in_connection(conn, &child_task.task_id)
+        })
+    }
+
+    /// Links an existing task under a parent task in the same project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either task does not exist or the parent link is invalid.
+    pub fn link_parent_task(
+        &self,
+        child_task_id: &str,
+        parent_task_id: &str,
+        created_by: &str,
+    ) -> StoreResult<TaskRelationship> {
+        self.ensure_task_exists(child_task_id)?;
+        self.ensure_task_exists(parent_task_id)?;
+        self.in_transaction(|conn| {
+            record_parent_relationship_in_connection(
+                conn,
+                child_task_id,
+                parent_task_id,
+                created_by,
+            )
         })
     }
 
@@ -443,8 +600,8 @@ impl Store {
     pub fn list_tasks(&self) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT task_id, title, description, requested_by, project_root, status,
-                   verification_state, priority, severity, owner_agent_id, owner_note,
+            SELECT task_id, title, description, requested_by, project_root, required_role,
+                   required_capabilities, auto_review, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    created_at, updated_at
@@ -495,6 +652,12 @@ impl Store {
             let next_verification = update
                 .verification_state
                 .unwrap_or(current.verification_state);
+
+            if from_status != status && !from_status.allowed_transitions().contains(&status) {
+                return Err(StoreError::Validation(format!(
+                    "cannot transition from {from_status} to {status}"
+                )));
+            }
 
             if status == TaskStatus::Blocked && update.blocked_reason.is_none() {
                 return Err(StoreError::Validation(
@@ -873,6 +1036,15 @@ impl Store {
                                     | TaskStatus::ReviewRequired
                             ))
                             || (related.relationship_role == TaskRelationshipRole::FollowUpChild
+                                && matches!(
+                                    related.status,
+                                    TaskStatus::Open
+                                        | TaskStatus::Assigned
+                                        | TaskStatus::InProgress
+                                        | TaskStatus::Blocked
+                                        | TaskStatus::ReviewRequired
+                                ))
+                            || (related.relationship_role == TaskRelationshipRole::Child
                                 && matches!(
                                     related.status,
                                     TaskStatus::Open
@@ -1548,6 +1720,7 @@ impl Store {
                     input.follow_up_description,
                     changed_by,
                     &parent_task.project_root,
+                    &TaskCreationOptions::default(),
                 )?;
                 let note = format!(
                     "follow_up_task_id={}; title={}",
@@ -1632,7 +1805,10 @@ impl Store {
                     TaskRelationshipRole::BlockedBy => {
                         (related_task_id, task_id, TaskRelationshipRole::BlockedBy)
                     }
-                    TaskRelationshipRole::FollowUpParent | TaskRelationshipRole::FollowUpChild => {
+                    TaskRelationshipRole::FollowUpParent
+                    | TaskRelationshipRole::FollowUpChild
+                    | TaskRelationshipRole::Parent
+                    | TaskRelationshipRole::Child => {
                         return Err(StoreError::Validation(
                             "link_task_dependency only supports blocks or blocked_by roles"
                                 .to_string(),
@@ -1673,7 +1849,10 @@ impl Store {
                 let inverse_role = match relationship_role {
                     TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
                     TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
-                    TaskRelationshipRole::FollowUpParent | TaskRelationshipRole::FollowUpChild => {
+                    TaskRelationshipRole::FollowUpParent
+                    | TaskRelationshipRole::FollowUpChild
+                    | TaskRelationshipRole::Parent
+                    | TaskRelationshipRole::Child => {
                         unreachable!("validated above")
                     }
                 };
@@ -2272,6 +2451,8 @@ impl Store {
                 },
             )?;
 
+            maybe_create_auto_review_subtasks_in_connection(conn, &handoff, status, event_actor)?;
+
             get_handoff_in_connection(conn, handoff_id)
         })
     }
@@ -2812,12 +2993,14 @@ impl Store {
                     let role = match relationship.kind {
                         TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpChild,
                         TaskRelationshipKind::Blocks => TaskRelationshipRole::Blocks,
+                        TaskRelationshipKind::Parent => TaskRelationshipRole::Parent,
                     };
                     (relationship.target_task_id.clone(), role)
                 } else {
                     let role = match relationship.kind {
                         TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpParent,
                         TaskRelationshipKind::Blocks => TaskRelationshipRole::BlockedBy,
+                        TaskRelationshipKind::Parent => TaskRelationshipRole::Child,
                     };
                     (relationship.source_task_id.clone(), role)
                 };
@@ -2839,6 +3022,58 @@ impl Store {
                 })
             })
             .collect()
+    }
+
+    /// Lists direct child tasks for a parent task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent task does not exist or the query fails.
+    pub fn get_children(&self, task_id: &str) -> StoreResult<Vec<TaskSummary>> {
+        self.ensure_task_exists(task_id)?;
+        let mut stmt = self.conn.prepare(
+            r"
+            SELECT tasks.task_id, tasks.title, tasks.status
+            FROM task_relationships
+            INNER JOIN tasks ON tasks.task_id = task_relationships.source_task_id
+            WHERE task_relationships.target_task_id = ?1
+              AND task_relationships.kind = 'parent'
+            ORDER BY tasks.created_at ASC, tasks.task_id ASC
+            ",
+        )?;
+        let rows = stmt.query_map([task_id], |row| {
+            Ok(TaskSummary {
+                task_id: row.get(0)?,
+                title: row.get(1)?,
+                status: parse_enum_value::<TaskStatus>(&row.get::<_, String>(2)?, 2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Returns the direct parent task id when one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the query fails.
+    pub fn get_parent_id(&self, task_id: &str) -> StoreResult<Option<String>> {
+        self.ensure_task_exists(task_id)?;
+        self.conn
+            .query_row(
+                r"
+                SELECT target_task_id
+                FROM task_relationships
+                WHERE source_task_id = ?1
+                  AND kind = 'parent'
+                ORDER BY created_at DESC
+                LIMIT 1
+                ",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     fn ensure_task_exists(&self, task_id: &str) -> StoreResult<()> {
@@ -2897,6 +3132,7 @@ fn create_task_in_connection(
     description: Option<&str>,
     requested_by: &str,
     project_root: &str,
+    options: &TaskCreationOptions,
 ) -> StoreResult<Task> {
     let task = Task {
         task_id: Ulid::new().to_string(),
@@ -2904,6 +3140,9 @@ fn create_task_in_connection(
         description: description.map(ToOwned::to_owned),
         requested_by: requested_by.to_string(),
         project_root: project_root.to_string(),
+        required_role: options.required_role,
+        required_capabilities: options.required_capabilities.clone(),
+        auto_review: options.auto_review,
         status: TaskStatus::Open,
         verification_state: VerificationState::Unknown,
         priority: TaskPriority::Medium,
@@ -2926,11 +3165,11 @@ fn create_task_in_connection(
     conn.execute(
         r"
         INSERT INTO tasks (
-            task_id, title, description, requested_by, project_root, status,
+            task_id, title, description, requested_by, project_root, required_role, required_capabilities, auto_review, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -2938,6 +3177,9 @@ fn create_task_in_connection(
             task.description,
             task.requested_by,
             task.project_root,
+            task.required_role.map(|value| value.to_string()),
+            serialize_capabilities(&task.required_capabilities)?,
+            i64::from(task.auto_review),
             task.status.to_string(),
             task.verification_state.to_string(),
             task.priority.to_string(),
@@ -3165,6 +3407,30 @@ fn create_task_relationship_in_connection(
             "task relationships must stay within the same project".to_string(),
         ));
     }
+    if kind == TaskRelationshipKind::Parent {
+        let existing_parent = conn
+            .query_row(
+                r"
+                SELECT target_task_id
+                FROM task_relationships
+                WHERE source_task_id = ?1 AND kind = 'parent'
+                LIMIT 1
+                ",
+                [source_task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if existing_parent.is_some() {
+            return Err(StoreError::Validation(
+                "task already has a parent".to_string(),
+            ));
+        }
+        if parent_chain_contains_task_in_connection(conn, target_task_id, source_task_id)? {
+            return Err(StoreError::Validation(
+                "parent relationship would create a cycle".to_string(),
+            ));
+        }
+    }
     let duplicate = conn
         .query_row(
             r"
@@ -3210,6 +3476,70 @@ fn create_task_relationship_in_connection(
     get_task_relationship_in_connection(conn, &relationship.relationship_id)
 }
 
+fn record_parent_relationship_in_connection(
+    conn: &Connection,
+    child_task_id: &str,
+    parent_task_id: &str,
+    created_by: &str,
+) -> StoreResult<TaskRelationship> {
+    let child_task = get_task_in_connection(conn, child_task_id)?;
+    let parent_task = get_task_in_connection(conn, parent_task_id)?;
+    let relationship = create_task_relationship_in_connection(
+        conn,
+        child_task_id,
+        parent_task_id,
+        TaskRelationshipKind::Parent,
+        created_by,
+    )?;
+    let child_note = format!(
+        "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+        relationship.relationship_id,
+        relationship.kind,
+        TaskRelationshipRole::Parent,
+        parent_task.task_id,
+        parent_task.title
+    );
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: child_task_id,
+            event_type: TaskEventType::RelationshipUpdated,
+            actor: created_by,
+            from_status: Some(child_task.status),
+            to_status: child_task.status,
+            verification_state: Some(child_task.verification_state),
+            owner_agent_id: child_task.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(child_note.as_str()),
+        },
+    )?;
+    let parent_note = format!(
+        "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+        relationship.relationship_id,
+        relationship.kind,
+        TaskRelationshipRole::Child,
+        child_task.task_id,
+        child_task.title
+    );
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: parent_task_id,
+            event_type: TaskEventType::RelationshipUpdated,
+            actor: created_by,
+            from_status: Some(parent_task.status),
+            to_status: parent_task.status,
+            verification_state: Some(parent_task.verification_state),
+            owner_agent_id: parent_task.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(parent_note.as_str()),
+        },
+    )?;
+    Ok(relationship)
+}
+
 fn find_task_relationship_between_in_connection(
     conn: &Connection,
     task_id: &str,
@@ -3253,6 +3583,34 @@ fn list_source_task_relationships_in_connection(
         .map_err(StoreError::from)
 }
 
+fn parent_chain_contains_task_in_connection(
+    conn: &Connection,
+    start_task_id: &str,
+    candidate_ancestor_task_id: &str,
+) -> StoreResult<bool> {
+    let mut stmt = conn.prepare(
+        r"
+        WITH RECURSIVE ancestry(task_id) AS (
+            SELECT target_task_id
+            FROM task_relationships
+            WHERE source_task_id = ?1
+              AND kind = 'parent'
+            UNION
+            SELECT rel.target_task_id
+            FROM task_relationships rel
+            INNER JOIN ancestry ON rel.source_task_id = ancestry.task_id
+            WHERE rel.kind = 'parent'
+        )
+        SELECT 1
+        FROM ancestry
+        WHERE task_id = ?2
+        LIMIT 1
+        ",
+    )?;
+    stmt.exists(params![start_task_id, candidate_ancestor_task_id])
+        .map_err(StoreError::from)
+}
+
 fn delete_task_relationship_in_connection(
     conn: &Connection,
     relationship_id: &str,
@@ -3281,9 +3639,18 @@ fn is_open_task_status(status: TaskStatus) -> bool {
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "priority", "TEXT NULL")?;
     ensure_column(conn, "tasks", "severity", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "required_role", "TEXT NULL")?;
+    ensure_column(
+        conn,
+        "tasks",
+        "required_capabilities",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(conn, "tasks", "auto_review", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(conn, "tasks", "owner_note", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_by", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
@@ -3296,6 +3663,8 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         UPDATE tasks
         SET priority = COALESCE(priority, 'medium'),
             severity = COALESCE(severity, 'none'),
+            required_capabilities = COALESCE(required_capabilities, '[]'),
+            auto_review = COALESCE(auto_review, 0),
             created_at = COALESCE(
                 created_at,
                 (SELECT MIN(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
@@ -3363,6 +3732,19 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         "agent_heartbeat_events",
         "related_task_id",
         "TEXT NULL",
+    )?;
+    ensure_column(conn, "agents", "role", "TEXT NULL")?;
+    ensure_column(conn, "agents", "capabilities", "TEXT NOT NULL DEFAULT '[]'")?;
+    conn.execute(
+        "UPDATE agents SET capabilities = COALESCE(capabilities, '[]')",
+        [],
+    )?;
+    conn.execute_batch(
+        r"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source
+        ON task_relationships(source_task_id)
+        WHERE kind = 'parent'
+        ",
     )?;
 
     Ok(())
@@ -3661,6 +4043,26 @@ fn assign_task_in_connection(
             "assigned agent already owns another active task".to_string(),
         ));
     }
+    let assignee_role_and_capabilities = conn
+        .query_row(
+            "SELECT role, capabilities FROM agents WHERE agent_id = ?1",
+            [assigned_to],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(StoreError::NotFound("agent"))?;
+    let assignee_role = assignee_role_and_capabilities
+        .0
+        .map(|value| parse_enum_value::<AgentRole>(&value, 0))
+        .transpose()?;
+    let assignee_capabilities = assignee_role_and_capabilities
+        .1
+        .map_or_else(Vec::new, |json| parse_capabilities(&json));
     let from_status = conn
         .query_row(
             "SELECT status FROM tasks WHERE task_id = ?1",
@@ -3678,6 +4080,45 @@ fn assign_task_in_connection(
         )
         .optional()?
         .ok_or(StoreError::NotFound("task"))?;
+    let required_role_and_capabilities = conn
+        .query_row(
+            "SELECT required_role, required_capabilities FROM tasks WHERE task_id = ?1",
+            [task_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(StoreError::NotFound("task"))?;
+    let required_role = required_role_and_capabilities
+        .0
+        .map(|value| parse_enum_value::<AgentRole>(&value, 0))
+        .transpose()?;
+    let required_capabilities = required_role_and_capabilities
+        .1
+        .map_or_else(Vec::new, |json| parse_capabilities(&json));
+
+    if let (Some(required_role), Some(assignee_role)) = (required_role, assignee_role)
+        && required_role != assignee_role
+    {
+        return Err(StoreError::Validation(format!(
+            "task requires {required_role} role, agent has {assignee_role}"
+        )));
+    }
+    if !capabilities_match(&assignee_capabilities, &required_capabilities) {
+        let missing = required_capabilities
+            .iter()
+            .filter(|required_capability| !assignee_capabilities.contains(required_capability))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(StoreError::Validation(format!(
+            "agent missing capabilities: {}",
+            missing.join(", ")
+        )));
+    }
 
     conn.execute(
         r"
@@ -4093,11 +4534,158 @@ fn task_operator_status_update<'a>(
     Ok(Some(update))
 }
 
+fn maybe_create_auto_review_subtasks_in_connection(
+    conn: &Connection,
+    handoff: &Handoff,
+    status: HandoffStatus,
+    actor: &str,
+) -> StoreResult<()> {
+    if status != HandoffStatus::Completed {
+        return Ok(());
+    }
+    if !matches!(
+        handoff.handoff_type,
+        HandoffType::TransferOwnership | HandoffType::RequestReview
+    ) {
+        return Ok(());
+    }
+
+    let task = get_task_in_connection(conn, &handoff.task_id)?;
+    if !task.auto_review
+        || task_priority_rank(task.priority) < task_priority_rank(AUTO_REVIEW_MIN_PRIORITY)
+    {
+        return Ok(());
+    }
+
+    let parent_id = get_parent_id_in_connection(conn, &task.task_id)?;
+    let review_task_ids =
+        create_review_subtasks_in_connection(conn, &task, parent_id.as_deref(), actor)?;
+    if review_task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let note = format!(
+        "action=auto_review_subtasks; review_task_ids={}",
+        review_task_ids.join(",")
+    );
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: &task.task_id,
+            event_type: TaskEventType::RelationshipUpdated,
+            actor,
+            from_status: Some(task.status),
+            to_status: task.status,
+            verification_state: Some(task.verification_state),
+            owner_agent_id: task.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(note.as_str()),
+        },
+    )?;
+
+    Ok(())
+}
+
+fn create_review_subtasks_in_connection(
+    conn: &Connection,
+    implementation_task: &Task,
+    parent_id: Option<&str>,
+    actor: &str,
+) -> StoreResult<Vec<String>> {
+    let review_priority = lower_review_priority(implementation_task.priority);
+    let mut review_task_ids = Vec::with_capacity(AUTO_REVIEW_SUBTASKS.len());
+
+    for (title, instruction) in AUTO_REVIEW_SUBTASKS {
+        let description = format!(
+            "{instruction}. Review source task {} ({}) in project {}.",
+            implementation_task.task_id,
+            implementation_task.title,
+            implementation_task.project_root
+        );
+        let review_task = create_task_in_connection(
+            conn,
+            title,
+            Some(description.as_str()),
+            actor,
+            &implementation_task.project_root,
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Validator),
+                required_capabilities: vec!["code-review".to_string()],
+                auto_review: false,
+            },
+        )?;
+        set_task_priority_in_connection(conn, &review_task.task_id, review_priority)?;
+        if let Some(parent_id) = parent_id {
+            record_parent_relationship_in_connection(conn, &review_task.task_id, parent_id, actor)?;
+        }
+        review_task_ids.push(review_task.task_id);
+    }
+
+    Ok(review_task_ids)
+}
+
+fn set_task_priority_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    priority: TaskPriority,
+) -> StoreResult<()> {
+    conn.execute(
+        r"
+        UPDATE tasks
+        SET priority = ?2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?1
+        ",
+        params![task_id, priority.to_string()],
+    )?;
+    Ok(())
+}
+
+fn get_parent_id_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Option<String>> {
+    conn.query_row(
+        r"
+        SELECT target_task_id
+        FROM task_relationships
+        WHERE source_task_id = ?1
+          AND kind = 'parent'
+        ORDER BY created_at DESC
+        LIMIT 1
+        ",
+        [task_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+fn task_priority_rank(priority: TaskPriority) -> u8 {
+    match priority {
+        TaskPriority::Low => 0,
+        TaskPriority::Medium => 1,
+        TaskPriority::High => 2,
+        TaskPriority::Critical => 3,
+    }
+}
+
+fn lower_review_priority(priority: TaskPriority) -> TaskPriority {
+    match priority {
+        TaskPriority::Critical => TaskPriority::High,
+        TaskPriority::High => TaskPriority::Medium,
+        TaskPriority::Medium | TaskPriority::Low => TaskPriority::Low,
+    }
+}
+
+fn serialize_capabilities(capabilities: &[String]) -> StoreResult<String> {
+    serde_json::to_string(capabilities)
+        .map_err(|error| StoreError::Validation(format!("invalid capabilities payload: {error}")))
+}
+
 fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {
     conn.query_row(
         r"
-        SELECT task_id, title, description, requested_by, project_root, status,
-               verification_state, priority, severity, owner_agent_id, owner_note,
+        SELECT task_id, title, description, requested_by, project_root, required_role,
+               required_capabilities, auto_review, status, verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                created_at, updated_at
@@ -4317,7 +4905,7 @@ fn get_agent_in_connection(conn: &Connection, agent_id: &str) -> StoreResult<Age
     conn.query_row(
         r"
         SELECT agent_id, host_id, host_type, host_instance, model,
-               project_root, worktree_id, status, current_task_id, heartbeat_at
+               project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
         FROM agents
         WHERE agent_id = ?1
         ",
@@ -4337,9 +4925,13 @@ fn map_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRegistration> {
         model: row.get(4)?,
         project_root: row.get(5)?,
         worktree_id: row.get(6)?,
-        status: parse_enum_column(row, 7)?,
-        current_task_id: row.get(8)?,
-        heartbeat_at: row.get(9)?,
+        role: parse_optional_enum_column(row, 7)?,
+        capabilities: row
+            .get::<_, Option<String>>(8)?
+            .map_or_else(Vec::new, |json| parse_capabilities(&json)),
+        status: parse_enum_column(row, 9)?,
+        current_task_id: row.get(10)?,
+        heartbeat_at: row.get(11)?,
     })
 }
 
@@ -4350,24 +4942,29 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         description: row.get(2)?,
         requested_by: row.get(3)?,
         project_root: row.get(4)?,
-        status: parse_enum_column(row, 5)?,
-        verification_state: parse_enum_column(row, 6)?,
-        priority: parse_enum_column(row, 7)?,
-        severity: parse_enum_column(row, 8)?,
-        owner_agent_id: row.get(9)?,
-        owner_note: row.get(10)?,
-        acknowledged_by: row.get(11)?,
-        acknowledged_at: row.get(12)?,
-        blocked_reason: row.get(13)?,
-        verified_by: row.get(14)?,
-        verified_at: row.get(15)?,
-        closed_by: row.get(16)?,
-        closure_summary: row.get(17)?,
-        closed_at: row.get(18)?,
-        due_at: row.get(19)?,
-        review_due_at: row.get(20)?,
-        created_at: row.get(21)?,
-        updated_at: row.get(22)?,
+        required_role: parse_optional_enum_column(row, 5)?,
+        required_capabilities: row
+            .get::<_, Option<String>>(6)?
+            .map_or_else(Vec::new, |json| parse_capabilities(&json)),
+        auto_review: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
+        status: parse_enum_column(row, 8)?,
+        verification_state: parse_enum_column(row, 9)?,
+        priority: parse_enum_column(row, 10)?,
+        severity: parse_enum_column(row, 11)?,
+        owner_agent_id: row.get(12)?,
+        owner_note: row.get(13)?,
+        acknowledged_by: row.get(14)?,
+        acknowledged_at: row.get(15)?,
+        blocked_reason: row.get(16)?,
+        verified_by: row.get(17)?,
+        verified_at: row.get(18)?,
+        closed_by: row.get(19)?,
+        closure_summary: row.get(20)?,
+        closed_at: row.get(21)?,
+        due_at: row.get(22)?,
+        review_due_at: row.get(23)?,
+        created_at: row.get(24)?,
+        updated_at: row.get(25)?,
     })
 }
 

@@ -1,10 +1,10 @@
 use assert_cmd::Command;
 use canopy::api::{self, SnapshotOptions};
 use canopy::models::{
-    AgentRegistration, AgentStatus, BreachSeverity, DeadlineState, OperatorActionKind,
+    AgentRegistration, AgentRole, AgentStatus, BreachSeverity, DeadlineState, OperatorActionKind,
     SnapshotPreset, TaskAttentionReason, TaskDeadlineKind, TaskStatus, VerificationState,
 };
-use canopy::store::{Store, TaskDeadlineUpdate, TaskStatusUpdate};
+use canopy::store::{Store, TaskCreationOptions, TaskDeadlineUpdate, TaskStatusUpdate};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use tempfile::tempdir;
@@ -587,6 +587,64 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .expect("related tasks")
             .iter()
             .any(|related| related["relationship_role"] == "blocked_by")
+    );
+}
+
+#[test]
+fn api_snapshot_includes_agent_capabilities_and_task_required_capabilities() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    store
+        .register_agent(&AgentRegistration {
+            agent_id: "codex-1".to_string(),
+            host_id: "codex-local".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: Some(AgentRole::Implementer),
+            capabilities: vec!["rust".to_string(), "hyphae".to_string()],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        })
+        .expect("register agent");
+
+    let task = store
+        .create_task_with_options(
+            "Capability snapshot task",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
+                auto_review: false,
+            },
+        )
+        .expect("create task");
+
+    let snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load snapshot");
+    assert_eq!(snapshot.agents[0].capabilities, vec!["rust", "hyphae"]);
+    assert_eq!(
+        snapshot.tasks[0].required_capabilities,
+        vec!["rust", "hyphae"]
+    );
+
+    let detail = api::task_detail(&store, &task.task_id).expect("load task detail");
+    assert_eq!(
+        detail.task.required_capabilities,
+        vec!["rust".to_string(), "hyphae".to_string()]
     );
 }
 
@@ -4529,11 +4587,13 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             status: AgentStatus::Idle,
             current_task_id: None,
             heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
         })
         .expect("register execution owner");
 
     let due_soon_task = store
-        .create_task("Execution due soon", None, "operator", "/tmp/project")
+        .create_task("Execution due soon", None, "operator", "/tmp/project", None)
         .expect("create due soon task");
     store
         .update_task_deadlines(
@@ -4550,7 +4610,7 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         .expect("set due soon deadline");
 
     let overdue_execution_task = store
-        .create_task("Execution overdue", None, "operator", "/tmp/project")
+        .create_task("Execution overdue", None, "operator", "/tmp/project", None)
         .expect("create overdue execution task");
     store
         .update_task_deadlines(
@@ -4575,6 +4635,7 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             None,
             "operator",
             "/tmp/project",
+            None,
         )
         .expect("create overdue execution unclaimed task");
     store
@@ -4592,7 +4653,7 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         .expect("set overdue execution unclaimed deadline");
 
     let overdue_review_task = store
-        .create_task("Review overdue", None, "operator", "/tmp/project")
+        .create_task("Review overdue", None, "operator", "/tmp/project", None)
         .expect("create overdue review task");
     store
         .update_task_status(
@@ -4620,7 +4681,7 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         .expect("set overdue review deadline");
 
     let due_soon_review_task = store
-        .create_task("Review due soon", None, "operator", "/tmp/project")
+        .create_task("Review due soon", None, "operator", "/tmp/project", None)
         .expect("create due soon review task");
     store
         .update_task_status(
@@ -4835,4 +4896,114 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             .iter()
             .any(|action| action.kind == OperatorActionKind::ClearReviewDueAt)
     );
+}
+
+#[test]
+fn api_exposes_subtask_hierarchy_and_all_children_complete_attention() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let parent = store
+        .create_task(
+            "Parent orchestration task",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
+        .expect("create parent task");
+    let child_a = store
+        .create_subtask(
+            &parent.task_id,
+            "Implementation child",
+            None,
+            "operator",
+            None,
+        )
+        .expect("create child a");
+    let child_b = store
+        .create_subtask(
+            &parent.task_id,
+            "Verification child",
+            None,
+            "operator",
+            None,
+        )
+        .expect("create child b");
+
+    for child_id in [&child_a.task_id, &child_b.task_id] {
+        store
+            .update_task_status(
+                child_id,
+                TaskStatus::InProgress,
+                "operator",
+                TaskStatusUpdate::default(),
+            )
+            .expect("start child task");
+        store
+            .update_task_status(
+                child_id,
+                TaskStatus::Completed,
+                "operator",
+                TaskStatusUpdate {
+                    verification_state: Some(VerificationState::Passed),
+                    closure_summary: Some("done"),
+                    ..TaskStatusUpdate::default()
+                },
+            )
+            .expect("complete child task");
+    }
+
+    let snapshot = api::snapshot(
+        &store,
+        SnapshotOptions {
+            project_root: Some("/tmp/project"),
+            ..SnapshotOptions::default()
+        },
+    )
+    .expect("load snapshot");
+    let parent_attention = snapshot
+        .task_attention
+        .iter()
+        .find(|attention| attention.task_id == parent.task_id)
+        .expect("parent attention");
+    assert!(
+        parent_attention
+            .reasons
+            .contains(&TaskAttentionReason::AllChildrenComplete)
+    );
+    let parent_relationship_summary = snapshot
+        .relationship_summaries
+        .iter()
+        .find(|summary| summary.task_id == parent.task_id)
+        .expect("parent relationship summary");
+    assert_eq!(parent_relationship_summary.child_count, 2);
+    assert_eq!(parent_relationship_summary.open_child_count, 0);
+    assert!(parent_relationship_summary.children_complete);
+
+    let parent_detail = api::task_detail(&store, &parent.task_id).expect("load parent task detail");
+    assert_eq!(parent_detail.children.len(), 2);
+    assert!(parent_detail.children_complete);
+    assert!(parent_detail.parent_id.is_none());
+    assert!(
+        parent_detail
+            .children
+            .iter()
+            .any(|child| child.task_id == child_a.task_id && child.status == TaskStatus::Completed)
+    );
+    assert!(
+        parent_detail
+            .children
+            .iter()
+            .any(|child| child.task_id == child_b.task_id && child.status == TaskStatus::Completed)
+    );
+
+    let child_detail = api::task_detail(&store, &child_a.task_id).expect("load child detail");
+    assert_eq!(
+        child_detail.parent_id.as_deref(),
+        Some(parent.task_id.as_str())
+    );
+    assert!(child_detail.children.is_empty());
+    assert!(!child_detail.children_complete);
 }

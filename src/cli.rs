@@ -1,5 +1,5 @@
 use crate::models::{
-    AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
+    AgentRole, AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
     HandoffType, OperatorActionKind, SnapshotPreset, TaskPriority, TaskRelationshipRole,
     TaskSeverity, TaskSort, TaskView, VerificationState,
 };
@@ -63,6 +63,10 @@ pub enum AgentCommand {
         project_root: String,
         #[arg(long)]
         worktree_id: String,
+        #[arg(long)]
+        role: Option<AgentRole>,
+        #[arg(long, value_delimiter = ',')]
+        capabilities: Vec<String>,
     },
     Heartbeat {
         #[arg(long)]
@@ -143,6 +147,14 @@ pub enum TaskCommand {
         requested_by: String,
         #[arg(long, default_value = ".")]
         project_root: String,
+        #[arg(long)]
+        parent: Option<String>,
+        #[arg(long)]
+        required_role: Option<AgentRole>,
+        #[arg(long, value_delimiter = ',')]
+        required_capabilities: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        auto_review: bool,
     },
     Assign {
         #[arg(long)]

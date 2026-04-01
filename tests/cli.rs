@@ -69,6 +69,76 @@ fn cli_registers_agents_and_lists_them() {
 }
 
 #[test]
+fn cli_agent_register_supports_role_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "codex-1",
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+            "--role",
+            "implementer",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"role\": \"implementer\""));
+}
+
+#[test]
+fn cli_agent_register_supports_capabilities_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            "codex-1",
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+            "--capabilities",
+            "rust,hyphae,sqlite",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"capabilities\": [\n    \"rust\",\n    \"hyphae\",\n    \"sqlite\"",
+        ));
+}
+
+#[test]
 fn cli_creates_and_resolves_handoffs() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
@@ -176,6 +246,24 @@ fn cli_creates_and_resolves_handoffs() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"status\": \"accepted\""));
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "status",
+            "--task-id",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--changed-by",
+            "claude-1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"in_progress\""));
 
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -1102,4 +1190,180 @@ fn cli_sets_and_clears_task_and_review_deadlines() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"review_due_at\": null"));
+}
+
+#[test]
+fn cli_task_create_supports_parent_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let parent_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Parent task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parent: Value = serde_json::from_slice(&parent_output).expect("parse parent task");
+    let parent_id = parent["task_id"].as_str().expect("parent id").to_string();
+
+    let child_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Child task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/ignored",
+            "--parent",
+            &parent_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let child: Value = serde_json::from_slice(&child_output).expect("parse child task");
+    let child_id = child["task_id"].as_str().expect("child id").to_string();
+    assert_eq!(child["project_root"], "/tmp/project");
+
+    let detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &parent_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let detail: Value = serde_json::from_slice(&detail_output).expect("parse task detail");
+    assert_eq!(detail["children_complete"], false);
+    assert!(
+        detail["children"]
+            .as_array()
+            .expect("children array")
+            .iter()
+            .any(|child| child["task_id"] == child_id && child["status"] == "open")
+    );
+
+    let child_detail_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "api",
+            "task",
+            "--task-id",
+            &child_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let child_detail: Value =
+        serde_json::from_slice(&child_detail_output).expect("parse child task detail");
+    assert_eq!(child_detail["parent_id"], parent_id);
+}
+
+#[test]
+fn cli_task_create_supports_required_role_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Validation task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+            "--required-role",
+            "validator",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"required_role\": \"validator\""));
+}
+
+#[test]
+fn cli_task_create_supports_required_capabilities_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Capability task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+            "--required-capabilities",
+            "rust,hyphae",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"required_capabilities\": [\n    \"rust\",\n    \"hyphae\"",
+        ));
+}
+
+#[test]
+fn cli_task_create_supports_auto_review_flag() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Implementation task",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+            "--auto-review",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"auto_review\": true"));
 }

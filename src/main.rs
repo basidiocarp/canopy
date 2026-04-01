@@ -9,8 +9,8 @@ use canopy::models::{
     EvidenceVerificationResult, EvidenceVerificationStatus,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskOperatorActionInput,
-    TaskStatusUpdate, TaskTriageUpdate,
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
+    TaskOperatorActionInput, TaskStatusUpdate, TaskTriageUpdate,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -51,6 +51,8 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
             model,
             project_root,
             worktree_id,
+            role,
+            capabilities,
         } => {
             let agent = AgentRegistration {
                 agent_id,
@@ -60,6 +62,8 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
                 model,
                 project_root,
                 worktree_id,
+                role,
+                capabilities,
                 status: AgentStatus::Idle,
                 current_task_id: None,
                 heartbeat_at: None,
@@ -101,9 +105,33 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             description,
             requested_by,
             project_root,
+            parent,
+            required_role,
+            required_capabilities,
+            auto_review,
         } => {
-            let task =
-                store.create_task(&title, description.as_deref(), &requested_by, &project_root)?;
+            let options = TaskCreationOptions {
+                required_role,
+                required_capabilities,
+                auto_review,
+            };
+            let task = if let Some(parent_task_id) = parent.as_deref() {
+                store.create_subtask_with_options(
+                    parent_task_id,
+                    &title,
+                    description.as_deref(),
+                    &requested_by,
+                    &options,
+                )?
+            } else {
+                store.create_task_with_options(
+                    &title,
+                    description.as_deref(),
+                    &requested_by,
+                    &project_root,
+                    &options,
+                )?
+            };
             print_json(&task)?;
         }
         TaskCommand::Assign {

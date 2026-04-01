@@ -2,6 +2,24 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
+#[must_use]
+pub fn parse_capabilities(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+#[must_use]
+pub fn capabilities_match(agent: &[String], required: &[String]) -> bool {
+    if required.is_empty() || agent.is_empty() {
+        return true;
+    }
+
+    required.iter().all(|required_capability| {
+        agent
+            .iter()
+            .any(|agent_capability| agent_capability == required_capability)
+    })
+}
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
 )]
@@ -14,6 +32,18 @@ pub enum AgentStatus {
     InProgress,
     Blocked,
     ReviewRequired,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum AgentRole {
+    Orchestrator,
+    Implementer,
+    Validator,
 }
 
 #[derive(
@@ -43,6 +73,50 @@ pub enum TaskStatus {
     Completed,
     Closed,
     Cancelled,
+}
+
+impl TaskStatus {
+    #[must_use]
+    pub fn allowed_transitions(self) -> &'static [Self] {
+        match self {
+            Self::Open => &[
+                Self::Assigned,
+                Self::InProgress,
+                Self::Blocked,
+                Self::ReviewRequired,
+                Self::Cancelled,
+            ],
+            Self::Assigned => &[
+                Self::Open,
+                Self::InProgress,
+                Self::Blocked,
+                Self::ReviewRequired,
+                Self::Cancelled,
+            ],
+            Self::InProgress => &[
+                Self::Blocked,
+                Self::ReviewRequired,
+                Self::Completed,
+                Self::Cancelled,
+            ],
+            Self::Blocked => &[
+                Self::Open,
+                Self::Assigned,
+                Self::InProgress,
+                Self::ReviewRequired,
+                Self::Cancelled,
+            ],
+            Self::ReviewRequired => &[
+                Self::Blocked,
+                Self::InProgress,
+                Self::Completed,
+                Self::Closed,
+                Self::Cancelled,
+            ],
+            Self::Completed => &[Self::Closed, Self::Open],
+            Self::Closed | Self::Cancelled => &[Self::Open],
+        }
+    }
 }
 
 #[derive(
@@ -345,6 +419,7 @@ pub enum TaskAttentionReason {
     ReviewReadyForDecision,
     ReviewReadyForCloseout,
     HasOpenFollowUps,
+    AllChildrenComplete,
     AssignedAwaitingClaim,
     ClaimedNotStarted,
     PausedResumable,
@@ -426,6 +501,7 @@ pub enum OperatorActionKind {
 pub enum TaskRelationshipKind {
     FollowUp,
     Blocks,
+    Parent,
 }
 
 #[derive(
@@ -439,6 +515,8 @@ pub enum TaskRelationshipRole {
     FollowUpChild,
     Blocks,
     BlockedBy,
+    Parent,
+    Child,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -469,6 +547,8 @@ pub struct AgentRegistration {
     pub model: String,
     pub project_root: String,
     pub worktree_id: String,
+    pub role: Option<AgentRole>,
+    pub capabilities: Vec<String>,
     pub status: AgentStatus,
     pub current_task_id: Option<String>,
     pub heartbeat_at: Option<String>,
@@ -492,6 +572,9 @@ pub struct Task {
     pub description: Option<String>,
     pub requested_by: String,
     pub project_root: String,
+    pub required_role: Option<AgentRole>,
+    pub required_capabilities: Vec<String>,
+    pub auto_review: bool,
     pub status: TaskStatus,
     pub verification_state: VerificationState,
     pub priority: TaskPriority,
@@ -510,6 +593,13 @@ pub struct Task {
     pub review_due_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskSummary {
+    pub task_id: String,
+    pub title: String,
+    pub status: TaskStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -768,6 +858,10 @@ pub struct TaskRelationshipSummary {
     pub follow_up_parent_count: usize,
     pub follow_up_child_count: usize,
     pub open_follow_up_child_count: usize,
+    pub parent_count: usize,
+    pub child_count: usize,
+    pub open_child_count: usize,
+    pub children_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -904,4 +998,43 @@ pub struct TaskDetail {
     pub relationships: Vec<TaskRelationship>,
     pub relationship_summary: TaskRelationshipSummary,
     pub related_tasks: Vec<RelatedTask>,
+    pub children: Vec<TaskSummary>,
+    pub children_complete: bool,
+    pub parent_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capabilities_match, parse_capabilities};
+
+    #[test]
+    fn parse_capabilities_reads_json_arrays_and_falls_back_to_empty() {
+        assert_eq!(
+            parse_capabilities(r#"["rust","hyphae","sqlite"]"#),
+            vec![
+                "rust".to_string(),
+                "hyphae".to_string(),
+                "sqlite".to_string()
+            ]
+        );
+        assert!(parse_capabilities("not-json").is_empty());
+    }
+
+    #[test]
+    fn capabilities_match_uses_all_required_with_backward_compatible_empty_lists() {
+        assert!(capabilities_match(
+            &["rust".to_string(), "hyphae".to_string()],
+            &["rust".to_string()]
+        ));
+        assert!(!capabilities_match(
+            &["rust".to_string()],
+            &["rust".to_string(), "sqlite".to_string()]
+        ));
+        assert!(capabilities_match(&[], &["rust".to_string()]));
+        assert!(capabilities_match(&["rust".to_string()], &[]));
+        assert!(!capabilities_match(
+            &["rust".to_string()],
+            &["Rust".to_string()]
+        ));
+    }
 }
