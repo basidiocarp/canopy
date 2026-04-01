@@ -24,6 +24,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    ImportHandoff {
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        #[arg(long)]
+        assign: Option<String>,
+    },
     Task {
         #[command(subcommand)]
         command: TaskCommand,
@@ -155,6 +161,8 @@ pub enum TaskCommand {
         required_capabilities: Vec<String>,
         #[arg(long, default_value_t = false)]
         auto_review: bool,
+        #[arg(long, default_value_t = false)]
+        verification_required: bool,
     },
     Assign {
         #[arg(long)]
@@ -271,6 +279,14 @@ pub enum TaskCommand {
         related_task_id: Option<String>,
         #[arg(long)]
         relationship_role: Option<TaskRelationshipRole>,
+    },
+    Verify {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        script: PathBuf,
+        #[arg(long)]
+        step: Option<String>,
     },
     List,
     ListView {

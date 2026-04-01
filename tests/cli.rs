@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
@@ -1366,4 +1367,147 @@ fn cli_task_create_supports_auto_review_flag() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"auto_review\": true"));
+}
+
+#[test]
+fn cli_import_handoff_creates_task_tree_with_verification_metadata() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let handoff_path = temp.path().join("verification-enforcement.md");
+    let verify_script_path = temp.path().join("verify-verification-enforcement.sh");
+
+    fs::write(
+        &handoff_path,
+        "\
+# Handoff: Example Handoff
+
+### Step 1: First step
+Implement the first step.
+
+### Step 2: Second step
+Implement the second step.
+",
+    )
+    .expect("write handoff");
+    fs::write(
+        &verify_script_path,
+        "#!/bin/bash\necho 'Results: 0 passed, 0 failed'\n",
+    )
+    .expect("write verify script");
+
+    let output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "import-handoff",
+            handoff_path.to_str().expect("handoff path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let imported: Value = serde_json::from_slice(&output).expect("parse import output");
+    assert_eq!(imported["parent_task"]["title"], "Example Handoff");
+    assert_eq!(imported["parent_task"]["verification_required"], true);
+    assert_eq!(imported["steps"].as_array().expect("steps array").len(), 2);
+    assert_eq!(imported["steps"][0]["title"], "Step 1: First step");
+
+    let parent_task_id = imported["parent_task"]["task_id"]
+        .as_str()
+        .expect("parent task id");
+    let evidence_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "evidence",
+            "list",
+            "--task-id",
+            parent_task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evidence: Value = serde_json::from_slice(&evidence_output).expect("parse evidence list");
+    assert_eq!(evidence[0]["label"], "Verification command");
+}
+
+#[test]
+fn cli_task_verify_records_script_evidence_and_completes_leaf_task() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Verified step",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+            "--verification-required",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task");
+    let task_id = task["task_id"].as_str().expect("task id").to_string();
+
+    let verify_script_path = temp.path().join("verify-step.sh");
+    fs::write(
+        &verify_script_path,
+        "#!/bin/bash\necho '--- Step 1: Verified step ---'\necho '  PASS: check'\necho 'Results: 1 passed, 0 failed'\n",
+    )
+    .expect("write verify script");
+
+    let verify_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "verify",
+            "--task-id",
+            &task_id,
+            "--script",
+            verify_script_path.to_str().expect("verify script path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let result: Value = serde_json::from_slice(&verify_output).expect("parse verify output");
+    assert_eq!(result["passed"], true);
+    assert_eq!(result["task"]["status"], "completed");
+    assert_eq!(result["task"]["verification_state"], "passed");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "evidence",
+            "verify",
+            "--task-id",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"source_kind\": \"script_verification\"",
+        ))
+        .stdout(predicate::str::contains("\"status\": \"verified\""));
 }

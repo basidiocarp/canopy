@@ -623,6 +623,7 @@ fn api_snapshot_includes_agent_capabilities_and_task_required_capabilities() {
                 required_role: Some(AgentRole::Implementer),
                 required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
                 auto_review: false,
+                ..TaskCreationOptions::default()
             },
         )
         .expect("create task");

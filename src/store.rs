@@ -97,6 +97,7 @@ pub struct TaskCreationOptions {
     pub required_role: Option<AgentRole>,
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,
+    pub verification_required: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -191,6 +192,7 @@ const BASE_SCHEMA: &str = r"
         required_role TEXT NULL,
         required_capabilities TEXT NOT NULL DEFAULT '[]',
         auto_review INTEGER NOT NULL DEFAULT 0,
+        verification_required INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL,
         verification_state TEXT NOT NULL,
         priority TEXT NOT NULL,
@@ -601,7 +603,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT task_id, title, description, requested_by, project_root, required_role,
-                   required_capabilities, auto_review, status, verification_state, priority, severity, owner_agent_id, owner_note,
+                   required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    created_at, updated_at
@@ -638,6 +640,7 @@ impl Store {
     ///
     /// Returns an error if the task does not exist, the requested transition is
     /// invalid, or the update fails.
+    #[allow(clippy::too_many_lines)]
     pub fn update_task_status(
         &self,
         task_id: &str,
@@ -663,6 +666,26 @@ impl Store {
                 return Err(StoreError::Validation(
                     "blocked tasks require a blocked reason".to_string(),
                 ));
+            }
+
+            if status == TaskStatus::Completed {
+                if has_open_child_tasks_in_connection(conn, task_id)? {
+                    return Err(StoreError::Validation(
+                        "tasks cannot complete while child tasks remain open".to_string(),
+                    ));
+                }
+                if current.verification_required {
+                    if next_verification != VerificationState::Passed {
+                        return Err(StoreError::Validation(format!(
+                            "task {task_id} requires passing verification. Run: canopy task verify --task-id {task_id} --script <path>"
+                        )));
+                    }
+                    if !has_passing_script_verification_in_connection(conn, task_id)? {
+                        return Err(StoreError::Validation(format!(
+                            "task {task_id} requires script verification evidence. Run: canopy task verify --task-id {task_id} --script <path>"
+                        )));
+                    }
+                }
             }
 
             let (verified_by, verified_at) = if update.verification_state.is_some() {
@@ -742,7 +765,8 @@ impl Store {
                     note: note.as_deref(),
                 },
             )?;
-            Ok(updated)
+            maybe_auto_complete_task_tree_in_connection(conn, task_id, changed_by)?;
+            get_task_in_connection(conn, task_id)
         })
     }
 
@@ -3143,6 +3167,7 @@ fn create_task_in_connection(
         required_role: options.required_role,
         required_capabilities: options.required_capabilities.clone(),
         auto_review: options.auto_review,
+        verification_required: options.verification_required,
         status: TaskStatus::Open,
         verification_state: VerificationState::Unknown,
         priority: TaskPriority::Medium,
@@ -3165,11 +3190,11 @@ fn create_task_in_connection(
     conn.execute(
         r"
         INSERT INTO tasks (
-            task_id, title, description, requested_by, project_root, required_role, required_capabilities, auto_review, status,
+            task_id, title, description, requested_by, project_root, required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -3180,6 +3205,7 @@ fn create_task_in_connection(
             task.required_role.map(|value| value.to_string()),
             serialize_capabilities(&task.required_capabilities)?,
             i64::from(task.auto_review),
+            i64::from(task.verification_required),
             task.status.to_string(),
             task.verification_state.to_string(),
             task.priority.to_string(),
@@ -3639,6 +3665,165 @@ fn is_open_task_status(status: TaskStatus) -> bool {
     )
 }
 
+fn has_open_child_tasks_in_connection(conn: &Connection, task_id: &str) -> StoreResult<bool> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT tasks.status
+        FROM task_relationships
+        INNER JOIN tasks ON tasks.task_id = task_relationships.source_task_id
+        WHERE task_relationships.target_task_id = ?1
+          AND task_relationships.kind = 'parent'
+        ",
+    )?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let status = parse_enum_value::<TaskStatus>(&row?, 0)?;
+        if is_open_task_status(status) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn has_passing_script_verification_in_connection(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<bool> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT summary
+        FROM evidence_refs
+        WHERE task_id = ?1
+          AND source_kind = ?2
+        ORDER BY rowid DESC
+        ",
+    )?;
+    let rows = stmt.query_map(
+        params![task_id, EvidenceSourceKind::ScriptVerification.to_string()],
+        |row| row.get::<_, Option<String>>(0),
+    )?;
+    for row in rows {
+        let Some(summary) = row? else {
+            continue;
+        };
+        if summary.contains("script verification passed") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn maybe_auto_complete_task_tree_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    changed_by: &str,
+) -> StoreResult<()> {
+    let mut current_task_id = Some(task_id.to_string());
+    while let Some(candidate_task_id) = current_task_id {
+        maybe_auto_complete_task_in_connection(conn, &candidate_task_id, changed_by)?;
+        current_task_id = conn
+            .query_row(
+                r"
+                SELECT target_task_id
+                FROM task_relationships
+                WHERE source_task_id = ?1
+                  AND kind = 'parent'
+                ORDER BY created_at DESC
+                LIMIT 1
+                ",
+                [candidate_task_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+    }
+    Ok(())
+}
+
+fn maybe_auto_complete_task_in_connection(
+    conn: &Connection,
+    task_id: &str,
+    changed_by: &str,
+) -> StoreResult<()> {
+    let task = get_task_in_connection(conn, task_id)?;
+    if matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+    ) {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare(
+        r"
+        SELECT tasks.status
+        FROM task_relationships
+        INNER JOIN tasks ON tasks.task_id = task_relationships.source_task_id
+        WHERE task_relationships.target_task_id = ?1
+          AND task_relationships.kind = 'parent'
+        ",
+    )?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    let mut has_children = false;
+    for row in rows {
+        has_children = true;
+        let status = parse_enum_value::<TaskStatus>(&row?, 0)?;
+        if status != TaskStatus::Completed {
+            return Ok(());
+        }
+    }
+    if !has_children {
+        return Ok(());
+    }
+
+    if !task.verification_required {
+        return Ok(());
+    }
+
+    if task.verification_state != VerificationState::Passed
+        || !has_passing_script_verification_in_connection(conn, task_id)?
+    {
+        return Ok(());
+    }
+
+    conn.execute(
+        r"
+        UPDATE tasks
+        SET status = ?2,
+            blocked_reason = NULL,
+            closed_by = ?3,
+            closure_summary = ?4,
+            closed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?1
+        ",
+        params![
+            task_id,
+            TaskStatus::Completed.to_string(),
+            changed_by,
+            "all child tasks completed",
+        ],
+    )?;
+    sync_owner_for_task_status(conn, task_id, TaskStatus::Completed)?;
+    let updated = get_task_in_connection(conn, task_id)?;
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id,
+            event_type: TaskEventType::StatusChanged,
+            actor: changed_by,
+            from_status: Some(task.status),
+            to_status: TaskStatus::Completed,
+            verification_state: Some(updated.verification_state),
+            owner_agent_id: updated.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(
+                "all child tasks completed; note=auto_parent_completion=all_children_complete",
+            ),
+        },
+    )?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "priority", "TEXT NULL")?;
@@ -3651,6 +3836,12 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     ensure_column(conn, "tasks", "auto_review", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        conn,
+        "tasks",
+        "verification_required",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(conn, "tasks", "owner_note", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_by", "TEXT NULL")?;
     ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
@@ -3665,6 +3856,7 @@ fn migrate_schema(conn: &Connection) -> StoreResult<()> {
             severity = COALESCE(severity, 'none'),
             required_capabilities = COALESCE(required_capabilities, '[]'),
             auto_review = COALESCE(auto_review, 0),
+            verification_required = COALESCE(verification_required, 0),
             created_at = COALESCE(
                 created_at,
                 (SELECT MIN(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
@@ -3892,6 +4084,7 @@ fn normalize_evidence_navigation<'a>(
         | EvidenceSourceKind::ManualNote
         | EvidenceSourceKind::RhizomeImpact
         | EvidenceSourceKind::RhizomeExport
+        | EvidenceSourceKind::ScriptVerification
         | EvidenceSourceKind::MyceliumCommand
         | EvidenceSourceKind::MyceliumExplain => EvidenceNavigation {
             session_id,
@@ -4613,6 +4806,7 @@ fn create_review_subtasks_in_connection(
                 required_role: Some(AgentRole::Validator),
                 required_capabilities: vec!["code-review".to_string()],
                 auto_review: false,
+                verification_required: false,
             },
         )?;
         set_task_priority_in_connection(conn, &review_task.task_id, review_priority)?;
@@ -4685,7 +4879,7 @@ fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task>
     conn.query_row(
         r"
         SELECT task_id, title, description, requested_by, project_root, required_role,
-               required_capabilities, auto_review, status, verification_state, priority, severity, owner_agent_id, owner_note,
+               required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                created_at, updated_at
@@ -4947,24 +5141,25 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .get::<_, Option<String>>(6)?
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
         auto_review: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
-        status: parse_enum_column(row, 8)?,
-        verification_state: parse_enum_column(row, 9)?,
-        priority: parse_enum_column(row, 10)?,
-        severity: parse_enum_column(row, 11)?,
-        owner_agent_id: row.get(12)?,
-        owner_note: row.get(13)?,
-        acknowledged_by: row.get(14)?,
-        acknowledged_at: row.get(15)?,
-        blocked_reason: row.get(16)?,
-        verified_by: row.get(17)?,
-        verified_at: row.get(18)?,
-        closed_by: row.get(19)?,
-        closure_summary: row.get(20)?,
-        closed_at: row.get(21)?,
-        due_at: row.get(22)?,
-        review_due_at: row.get(23)?,
-        created_at: row.get(24)?,
-        updated_at: row.get(25)?,
+        verification_required: row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+        status: parse_enum_column(row, 9)?,
+        verification_state: parse_enum_column(row, 10)?,
+        priority: parse_enum_column(row, 11)?,
+        severity: parse_enum_column(row, 12)?,
+        owner_agent_id: row.get(13)?,
+        owner_note: row.get(14)?,
+        acknowledged_by: row.get(15)?,
+        acknowledged_at: row.get(16)?,
+        blocked_reason: row.get(17)?,
+        verified_by: row.get(18)?,
+        verified_at: row.get(19)?,
+        closed_by: row.get(20)?,
+        closure_summary: row.get(21)?,
+        closed_at: row.get(22)?,
+        due_at: row.get(23)?,
+        review_due_at: row.get(24)?,
+        created_at: row.get(25)?,
+        updated_at: row.get(26)?,
     })
 }
 

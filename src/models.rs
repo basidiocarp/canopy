@@ -329,6 +329,7 @@ pub enum EvidenceSourceKind {
     MyceliumExplain,
     RhizomeImpact,
     RhizomeExport,
+    ScriptVerification,
     ManualNote,
 }
 
@@ -575,6 +576,7 @@ pub struct Task {
     pub required_role: Option<AgentRole>,
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,
+    pub verification_required: bool,
     pub status: TaskStatus,
     pub verification_state: VerificationState,
     pub priority: TaskPriority,
@@ -658,6 +660,7 @@ pub struct EvidenceRef {
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceVerificationStatus {
     Verified,
+    Failed,
     Stale,
     Unsupported,
 }

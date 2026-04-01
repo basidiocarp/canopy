@@ -5,8 +5,9 @@ use canopy::cli::{
     TaskCommand,
 };
 use canopy::models::{
-    AgentRegistration, AgentStatus, EvidenceRef, EvidenceSourceKind, EvidenceVerificationReport,
-    EvidenceVerificationResult, EvidenceVerificationStatus,
+    AgentRegistration, AgentRole, AgentStatus, EvidenceRef, EvidenceSourceKind,
+    EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
+    TaskStatus, VerificationState,
 };
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
@@ -15,6 +16,7 @@ use canopy::store::{
 use clap::Parser;
 use serde::Serialize;
 use spore::{Tool, discover};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -31,6 +33,9 @@ fn main() -> Result<()> {
 fn run_command(store: &Store, command: Commands) -> Result<()> {
     match command {
         Commands::Agent { command } => handle_agent_command(store, command)?,
+        Commands::ImportHandoff { path, assign } => {
+            handle_import_handoff(store, &path, assign.as_deref())?;
+        }
         Commands::Task { command } => handle_task_command(store, command)?,
         Commands::Handoff { command } => handle_handoff_command(store, command)?,
         Commands::Evidence { command } => handle_evidence_command(store, command)?,
@@ -109,11 +114,13 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             required_role,
             required_capabilities,
             auto_review,
+            verification_required,
         } => {
             let options = TaskCreationOptions {
                 required_role,
                 required_capabilities,
                 auto_review,
+                verification_required,
             };
             let task = if let Some(parent_task_id) = parent.as_deref() {
                 store.create_subtask_with_options(
@@ -273,6 +280,18 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             )?;
             print_json(&task)?;
         }
+        TaskCommand::Verify {
+            task_id,
+            script,
+            step,
+        } => {
+            print_json(&run_task_verification(
+                store,
+                &task_id,
+                &script,
+                step.as_deref(),
+            )?)?;
+        }
         TaskCommand::List => {
             print_json(&store.list_tasks()?)?;
         }
@@ -307,6 +326,233 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ImportedHandoffStep {
+    task_id: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ImportedHandoff {
+    path: String,
+    verify_script: Option<String>,
+    assigned_to: Option<String>,
+    parent_task: Task,
+    steps: Vec<ImportedHandoffStep>,
+}
+
+#[derive(Debug)]
+struct ParsedHandoffStep {
+    description: Option<String>,
+    step_marker: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskVerificationRun {
+    task: Task,
+    passed: bool,
+    script: String,
+    step: Option<String>,
+    output: String,
+}
+
+fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Result<()> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("read handoff markdown {}", path.display()))?;
+    let title = extract_handoff_title(&content);
+    let steps = extract_handoff_steps(&content);
+    let verify_script = verification_script_path(path);
+    let verify_script_exists = verify_script.exists();
+    let project_root = infer_handoff_project_root(path)?;
+    let parent_description = Some(format!("Imported from {}", path.display()));
+    let parent_task = store.create_task_with_options(
+        &title,
+        parent_description.as_deref(),
+        "handoff-import",
+        &project_root,
+        &TaskCreationOptions {
+            required_role: Some(AgentRole::Implementer),
+            verification_required: true,
+            ..TaskCreationOptions::default()
+        },
+    )?;
+
+    if verify_script_exists {
+        store.add_evidence(
+            &parent_task.task_id,
+            EvidenceSourceKind::ManualNote,
+            &path.display().to_string(),
+            "Verification command",
+            Some(&format!(
+                "Run: canopy task verify --task-id {} --script {}",
+                parent_task.task_id,
+                verify_script.display()
+            )),
+            EvidenceLinkRefs::default(),
+        )?;
+    }
+
+    let mut imported_steps = Vec::with_capacity(steps.len());
+    for step in steps {
+        let task = store.create_subtask_with_options(
+            &parent_task.task_id,
+            &step.step_marker,
+            step.description.as_deref(),
+            "handoff-import",
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )?;
+        if verify_script_exists {
+            store.add_evidence(
+                &task.task_id,
+                EvidenceSourceKind::ManualNote,
+                &path.display().to_string(),
+                "Verification command",
+                Some(&format!(
+                    "Run: canopy task verify --task-id {} --script {} --step '{}'",
+                    task.task_id,
+                    verify_script.display(),
+                    step.step_marker
+                )),
+                EvidenceLinkRefs::default(),
+            )?;
+        }
+        imported_steps.push(ImportedHandoffStep {
+            task_id: task.task_id,
+            title: task.title,
+        });
+    }
+
+    let parent_task = if let Some(agent_id) = assign {
+        store.assign_task(
+            &parent_task.task_id,
+            agent_id,
+            "handoff-import",
+            Some("assigned during handoff import"),
+        )?
+    } else {
+        parent_task
+    };
+
+    print_json(&ImportedHandoff {
+        path: path.display().to_string(),
+        verify_script: verify_script_exists.then(|| verify_script.display().to_string()),
+        assigned_to: assign.map(ToOwned::to_owned),
+        parent_task,
+        steps: imported_steps,
+    })
+}
+
+fn run_task_verification(
+    store: &Store,
+    task_id: &str,
+    script: &Path,
+    step: Option<&str>,
+) -> Result<TaskVerificationRun> {
+    let script_display = script.display().to_string();
+    let output = Command::new("bash")
+        .arg(script)
+        .output()
+        .with_context(|| format!("run verification script {script_display}"))?;
+    let combined = combine_command_output(&output);
+    let filtered = filter_verification_output(&combined, step)?;
+    let passed = verification_output_passed(&filtered, step.is_some(), output.status.success());
+
+    let label = match step {
+        Some(step) => format!("Verification script ({step})"),
+        None => "Verification script".to_string(),
+    };
+    let summary = format!(
+        "{}\n\n{}",
+        if passed {
+            "script verification passed"
+        } else {
+            "script verification failed"
+        },
+        filtered
+    );
+    store.add_evidence(
+        task_id,
+        EvidenceSourceKind::ScriptVerification,
+        &script_display,
+        &label,
+        Some(&summary),
+        EvidenceLinkRefs::default(),
+    )?;
+
+    let current_task = store.get_task(task_id)?;
+    let verification_state = if passed {
+        VerificationState::Passed
+    } else {
+        VerificationState::Failed
+    };
+    let note = match step {
+        Some(step) => format!("verification_script={script_display}; step={step}; passed={passed}"),
+        None => format!("verification_script={script_display}; passed={passed}"),
+    };
+    let mut task = store.update_task_status(
+        task_id,
+        current_task.status,
+        "canopy",
+        TaskStatusUpdate {
+            verification_state: Some(verification_state),
+            event_note: Some(note.as_str()),
+            ..TaskStatusUpdate::default()
+        },
+    )?;
+
+    if passed && task.status != TaskStatus::Completed && store.get_children(task_id)?.is_empty() {
+        if !matches!(
+            task.status,
+            TaskStatus::InProgress | TaskStatus::ReviewRequired
+        ) {
+            store.update_task_status(
+                task_id,
+                TaskStatus::InProgress,
+                "canopy",
+                TaskStatusUpdate {
+                    verification_state: Some(VerificationState::Passed),
+                    event_note: Some(note.as_str()),
+                    ..TaskStatusUpdate::default()
+                },
+            )?;
+        }
+        let closure_summary = match step {
+            Some(step) => format!("verification passed for {step} via {script_display}"),
+            None => format!("verification passed via {script_display}"),
+        };
+        task = store.update_task_status(
+            task_id,
+            TaskStatus::Completed,
+            "canopy",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some(closure_summary.as_str()),
+                event_note: Some(note.as_str()),
+                ..TaskStatusUpdate::default()
+            },
+        )?;
+    }
+
+    let result = TaskVerificationRun {
+        task,
+        passed,
+        script: script_display,
+        step: step.map(ToOwned::to_owned),
+        output: filtered,
+    };
+
+    if !passed {
+        print_json(&result)?;
+        anyhow::bail!("verification failed for task {task_id}");
+    }
+
+    Ok(result)
 }
 
 fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> {
@@ -420,6 +666,146 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
     Ok(())
 }
 
+fn combine_command_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match (stdout.trim(), stderr.trim()) {
+        ("", "") => String::new(),
+        ("", _) => stderr.into_owned(),
+        (_, "") => stdout.into_owned(),
+        _ => format!("{stdout}\n{stderr}"),
+    }
+}
+
+fn filter_verification_output(output: &str, step: Option<&str>) -> Result<String> {
+    let Some(step) = step else {
+        return Ok(output.trim().to_string());
+    };
+
+    let mut in_section = false;
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        if line.starts_with("--- Step ") {
+            if line.contains(step) {
+                in_section = true;
+                lines.push(line.to_string());
+                continue;
+            }
+            if in_section {
+                break;
+            }
+        }
+        if in_section {
+            lines.push(line.to_string());
+        }
+    }
+
+    if lines.is_empty() {
+        anyhow::bail!("verification output did not contain step '{step}'");
+    }
+
+    Ok(lines.join("\n").trim().to_string())
+}
+
+fn verification_output_passed(output: &str, step_filtered: bool, exit_success: bool) -> bool {
+    match parse_script_verification_status(output) {
+        Some(status) => status,
+        None if step_filtered => output.contains("PASS:") && !output.contains("FAIL:"),
+        None => exit_success && !output.contains("FAIL:"),
+    }
+}
+
+fn parse_script_verification_status(output: &str) -> Option<bool> {
+    for line in output.lines() {
+        if let Some((_, failures)) = line.split_once("Results:") {
+            let tokens = failures.split_whitespace().collect::<Vec<_>>();
+            for window in tokens.windows(2) {
+                if window[1].starts_with("failed") {
+                    let fail_count = window[0].trim_end_matches(',').parse::<usize>().ok()?;
+                    return Some(fail_count == 0);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn verification_script_path(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("handoff");
+    path.with_file_name(format!("verify-{stem}.sh"))
+}
+
+fn infer_handoff_project_root(path: &Path) -> Result<String> {
+    for ancestor in path.ancestors() {
+        if ancestor.file_name().and_then(|value| value.to_str()) == Some(".handoffs") {
+            if let Some(project_root) = ancestor.parent() {
+                return Ok(project_root.display().to_string());
+            }
+        }
+    }
+
+    Ok(std::env::current_dir()
+        .context("resolve current directory for handoff import")?
+        .display()
+        .to_string())
+}
+
+fn extract_handoff_title(content: &str) -> String {
+    content
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("# Handoff:") {
+                Some(trimmed.trim_start_matches("# Handoff:").trim().to_string())
+            } else if trimmed.starts_with("# ") {
+                Some(trimmed.trim_start_matches("# ").trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "Untitled handoff".to_string())
+}
+
+fn extract_handoff_steps(content: &str) -> Vec<ParsedHandoffStep> {
+    let mut steps = Vec::new();
+    let mut current_marker = None;
+    let mut current_body = Vec::new();
+    let mut skip_subsection = false;
+
+    let flush_step = |steps: &mut Vec<ParsedHandoffStep>,
+                      current_marker: &mut Option<String>,
+                      current_body: &mut Vec<String>| {
+        if let Some(step_marker) = current_marker.take() {
+            let description = current_body.join("\n").trim().to_string();
+            steps.push(ParsedHandoffStep {
+                description: (!description.is_empty()).then_some(description),
+                step_marker,
+            });
+            current_body.clear();
+        }
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("### Step ") {
+            flush_step(&mut steps, &mut current_marker, &mut current_body);
+            let step_marker = trimmed.trim_start_matches("### ").trim().to_string();
+            current_marker = Some(step_marker);
+            skip_subsection = false;
+        } else if current_marker.is_some() && trimmed.starts_with("#### ") {
+            skip_subsection = true;
+        } else if current_marker.is_some() && !skip_subsection {
+            current_body.push(line.to_string());
+        }
+    }
+    flush_step(&mut steps, &mut current_marker, &mut current_body);
+
+    steps
+}
+
 fn verify_evidence(store: &Store, task_id: Option<&str>) -> Result<EvidenceVerificationReport> {
     let evidence = if let Some(task_id) = task_id {
         store.list_evidence(task_id)?
@@ -447,6 +833,34 @@ where
             EvidenceVerificationStatus::Verified,
             "manual note is stored directly in canopy".to_string(),
         ),
+        EvidenceSourceKind::ScriptVerification => match evidence.summary.as_deref() {
+            Some(summary) => match parse_script_verification_status(summary) {
+                Some(true) => (
+                    EvidenceVerificationStatus::Verified,
+                    "verification script reported zero failed checks".to_string(),
+                ),
+                Some(false) => (
+                    EvidenceVerificationStatus::Failed,
+                    "verification script reported failing checks".to_string(),
+                ),
+                None if summary.contains("PASS:") && !summary.contains("FAIL:") => (
+                    EvidenceVerificationStatus::Verified,
+                    "verification step excerpt contains only passing checks".to_string(),
+                ),
+                None if summary.contains("FAIL:") => (
+                    EvidenceVerificationStatus::Failed,
+                    "verification step excerpt contains failing checks".to_string(),
+                ),
+                None => (
+                    EvidenceVerificationStatus::Stale,
+                    "verification script evidence is missing parseable results".to_string(),
+                ),
+            },
+            None => (
+                EvidenceVerificationStatus::Stale,
+                "verification script evidence is missing stored output".to_string(),
+            ),
+        },
         EvidenceSourceKind::HyphaeSession => {
             let session_id = evidence
                 .related_session_id
@@ -663,7 +1077,10 @@ fn migrate_legacy_db_if_needed(legacy_path: &Path, target_path: &Path) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{EvidenceVerificationStatus, migrate_legacy_db_if_needed, verify_evidence_ref};
+    use super::{
+        EvidenceVerificationStatus, extract_handoff_steps, filter_verification_output,
+        migrate_legacy_db_if_needed, parse_script_verification_status, verify_evidence_ref,
+    };
     use canopy::models::{EvidenceRef, EvidenceSourceKind};
     use tempfile::tempdir;
 
@@ -778,5 +1195,79 @@ mod tests {
         });
         assert_eq!(result.status, EvidenceVerificationStatus::Unsupported);
         assert!(result.detail.contains("hyphae unavailable"));
+    }
+
+    #[test]
+    fn verify_script_verification_evidence_reports_failures() {
+        let evidence = EvidenceRef {
+            schema_version: "1.0".to_string(),
+            evidence_id: "evidence-2".to_string(),
+            task_id: "task-2".to_string(),
+            source_kind: EvidenceSourceKind::ScriptVerification,
+            source_ref: "/tmp/verify.sh".to_string(),
+            label: "Verification script".to_string(),
+            summary: Some("script verification failed\n\nResults: 3 passed, 1 failed".to_string()),
+            related_handoff_id: None,
+            related_session_id: None,
+            related_memory_query: None,
+            related_symbol: None,
+            related_file: None,
+        };
+
+        let result = verify_evidence_ref(&evidence, |_| unreachable!("script evidence probe"));
+        assert_eq!(result.status, EvidenceVerificationStatus::Failed);
+    }
+
+    #[test]
+    fn filter_verification_output_extracts_one_step_section() {
+        let output = "\
+=== Verify ===
+--- Step 1: Alpha ---
+  PASS: alpha
+--- Step 2: Beta ---
+  FAIL: beta
+Results: 1 passed, 1 failed";
+
+        let filtered =
+            filter_verification_output(output, Some("Step 1")).expect("extract step section");
+        assert!(filtered.contains("PASS: alpha"));
+        assert!(!filtered.contains("FAIL: beta"));
+    }
+
+    #[test]
+    fn parse_script_verification_status_reads_results_line() {
+        assert_eq!(
+            parse_script_verification_status("Results: 4 passed, 0 failed"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_script_verification_status("Results: 4 passed, 2 failed"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn extract_handoff_steps_reads_step_sections() {
+        let content = "\
+# Handoff: Example
+
+### Step 1: First
+Implement the first step.
+
+#### Verification
+ignore this
+
+### Step 2: Second
+Implement the second step.
+";
+
+        let steps = extract_handoff_steps(content);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].step_marker, "Step 1: First");
+        assert_eq!(
+            steps[0].description.as_deref(),
+            Some("Implement the first step.")
+        );
+        assert_eq!(steps[1].step_marker, "Step 2: Second");
     }
 }

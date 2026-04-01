@@ -715,6 +715,7 @@ fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_t
                 required_role: Some(AgentRole::Implementer),
                 required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
                 auto_review: false,
+                ..TaskCreationOptions::default()
             },
         )
         .expect("create capability-gated task");
@@ -823,6 +824,7 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
                 required_role: Some(AgentRole::Implementer),
                 required_capabilities: vec!["rust".to_string()],
                 auto_review: false,
+                ..TaskCreationOptions::default()
             },
         )
         .expect("create task with capability requirement");
@@ -845,6 +847,7 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
                 required_role: Some(AgentRole::Implementer),
                 required_capabilities: vec!["Rust".to_string()],
                 auto_review: false,
+                ..TaskCreationOptions::default()
             },
         )
         .expect("create case-sensitive task");
@@ -910,6 +913,7 @@ fn completed_review_handoff_creates_validator_review_siblings_for_auto_review_ta
                 required_role: Some(AgentRole::Implementer),
                 required_capabilities: vec!["rust".to_string(), "hyphae".to_string()],
                 auto_review: true,
+                ..TaskCreationOptions::default()
             },
         )
         .expect("create implementation task");
@@ -2110,6 +2114,246 @@ fn handoff_operator_actions_cover_resolution_paths() {
         }),
         "expected handoff completion to be recorded in task history"
     );
+}
+
+#[test]
+fn verification_required_tasks_need_script_evidence_before_completion() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task_with_options(
+            "Verified handoff step",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create verification-required task");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start task");
+
+    let error = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("done"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect_err("reject completion without script evidence");
+    assert!(
+        error
+            .to_string()
+            .contains("requires script verification evidence")
+    );
+
+    store
+        .add_evidence(
+            &task.task_id,
+            EvidenceSourceKind::ScriptVerification,
+            "/tmp/verify.sh",
+            "Verification script",
+            Some("script verification passed\n\nResults: 2 passed, 0 failed"),
+            EvidenceLinkRefs::default(),
+        )
+        .expect("attach passing script evidence");
+
+    let completed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("done"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("complete task after verification");
+    assert_eq!(completed.status, TaskStatus::Completed);
+}
+
+#[test]
+fn verified_parent_auto_completes_when_all_children_complete() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let parent = store
+        .create_task_with_options(
+            "Imported handoff",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create parent");
+    store
+        .add_evidence(
+            &parent.task_id,
+            EvidenceSourceKind::ScriptVerification,
+            "/tmp/verify-parent.sh",
+            "Verification script",
+            Some("script verification passed\n\nResults: 1 passed, 0 failed"),
+            EvidenceLinkRefs::default(),
+        )
+        .expect("attach parent evidence");
+    store
+        .update_task_status(
+            &parent.task_id,
+            TaskStatus::Open,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("mark parent as verified");
+
+    let child_a = store
+        .create_subtask_with_options(
+            &parent.task_id,
+            "Step 1: Alpha",
+            None,
+            "operator",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create child a");
+    let child_b = store
+        .create_subtask_with_options(
+            &parent.task_id,
+            "Step 2: Beta",
+            None,
+            "operator",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create child b");
+
+    for child in [&child_a, &child_b] {
+        store
+            .update_task_status(
+                &child.task_id,
+                TaskStatus::InProgress,
+                "operator",
+                TaskStatusUpdate::default(),
+            )
+            .expect("start child");
+        store
+            .add_evidence(
+                &child.task_id,
+                EvidenceSourceKind::ScriptVerification,
+                "/tmp/verify-step.sh",
+                "Verification script",
+                Some("script verification passed\n\nResults: 1 passed, 0 failed"),
+                EvidenceLinkRefs::default(),
+            )
+            .expect("attach child evidence");
+        store
+            .update_task_status(
+                &child.task_id,
+                TaskStatus::Completed,
+                "operator",
+                TaskStatusUpdate {
+                    verification_state: Some(VerificationState::Passed),
+                    closure_summary: Some("step complete"),
+                    ..TaskStatusUpdate::default()
+                },
+            )
+            .expect("complete child");
+    }
+
+    let refreshed_parent = store.get_task(&parent.task_id).expect("reload parent");
+    assert_eq!(refreshed_parent.status, TaskStatus::Completed);
+    assert_eq!(refreshed_parent.closed_by.as_deref(), Some("operator"));
+}
+
+#[test]
+fn unverified_parent_stays_open_after_children_complete() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let parent = store
+        .create_task_with_options(
+            "Imported handoff",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create parent");
+    let child = store
+        .create_subtask_with_options(
+            &parent.task_id,
+            "Step 1: Alpha",
+            None,
+            "operator",
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
+        )
+        .expect("create child");
+
+    store
+        .update_task_status(
+            &child.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start child");
+    store
+        .add_evidence(
+            &child.task_id,
+            EvidenceSourceKind::ScriptVerification,
+            "/tmp/verify-step.sh",
+            "Verification script",
+            Some("script verification passed\n\nResults: 1 passed, 0 failed"),
+            EvidenceLinkRefs::default(),
+        )
+        .expect("attach child evidence");
+    store
+        .update_task_status(
+            &child.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("step complete"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("complete child");
+
+    let refreshed_parent = store.get_task(&parent.task_id).expect("reload parent");
+    assert_eq!(refreshed_parent.status, TaskStatus::Open);
 }
 
 #[test]
