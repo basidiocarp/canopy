@@ -1,11 +1,11 @@
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    HandoffStatus, HandoffType, OperatorActionKind, TaskEventType, TaskRelationshipRole,
-    TaskStatus, VerificationState,
+    HandoffStatus, HandoffType, OperatorActionKind, TaskAction, TaskEventType,
+    TaskRelationshipRole, TaskStatus, VerificationState,
 };
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
-    TaskDeadlineUpdate, TaskOperatorActionInput, TaskStatusUpdate,
+    TaskDeadlineUpdate, TaskStatusUpdate,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -732,12 +732,8 @@ fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_t
     let claimed = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::ClaimTask,
             "operator",
-            TaskOperatorActionInput {
-                acting_agent_id: Some("codex-1"),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Claim { acting_agent_id: "codex-1", note: None },
         )
         .expect("claim task with matching capabilities");
     assert_eq!(claimed.owner_agent_id.as_deref(), Some("codex-1"));
@@ -1095,12 +1091,8 @@ fn store_requires_prior_execution_before_resume_task() {
         store
             .apply_task_operator_action(
                 &task.task_id,
-                OperatorActionKind::ResumeTask,
                 "operator",
-                TaskOperatorActionInput {
-                    acting_agent_id: Some(agent.agent_id.as_str()),
-                    ..TaskOperatorActionInput::default()
-                },
+                TaskAction::Resume { acting_agent_id: &agent.agent_id, note: None },
             )
             .is_err()
     );
@@ -1108,12 +1100,8 @@ fn store_requires_prior_execution_before_resume_task() {
     let in_progress = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::StartTask,
             "operator",
-            TaskOperatorActionInput {
-                acting_agent_id: Some(agent.agent_id.as_str()),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Start { acting_agent_id: &agent.agent_id, note: None },
         )
         .expect("start task");
     assert_eq!(in_progress.status, TaskStatus::InProgress);
@@ -1121,12 +1109,8 @@ fn store_requires_prior_execution_before_resume_task() {
     let paused = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::PauseTask,
             "operator",
-            TaskOperatorActionInput {
-                acting_agent_id: Some(agent.agent_id.as_str()),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Pause { acting_agent_id: &agent.agent_id, note: None },
         )
         .expect("pause task");
     assert_eq!(paused.status, TaskStatus::Assigned);
@@ -1134,12 +1118,8 @@ fn store_requires_prior_execution_before_resume_task() {
     let resumed = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::ResumeTask,
             "operator",
-            TaskOperatorActionInput {
-                acting_agent_id: Some(agent.agent_id.as_str()),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Resume { acting_agent_id: &agent.agent_id, note: None },
         )
         .expect("resume task");
     assert_eq!(resumed.status, TaskStatus::InProgress);
@@ -1210,15 +1190,15 @@ fn task_creation_actions_create_artifacts_and_record_history() {
     let _ = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::CreateHandoff,
             "operator",
-            TaskOperatorActionInput {
-                from_agent_id: Some("codex-1"),
-                to_agent_id: Some("claude-1"),
-                handoff_type: Some(HandoffType::RequestReview),
-                handoff_summary: Some("review the coordination patch"),
+            TaskAction::CreateHandoff {
+                from_agent_id: "codex-1",
+                to_agent_id: "claude-1",
+                handoff_type: HandoffType::RequestReview,
+                handoff_summary: "review the coordination patch",
                 requested_action: Some("confirm the runtime contract"),
-                ..TaskOperatorActionInput::default()
+                due_at: None,
+                expires_at: None,
             },
         )
         .expect("create handoff action");
@@ -1233,13 +1213,11 @@ fn task_creation_actions_create_artifacts_and_record_history() {
     let _ = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::PostCouncilMessage,
             "operator",
-            TaskOperatorActionInput {
-                author_agent_id: Some("codex-1"),
-                message_type: Some(CouncilMessageType::Status),
-                message_body: Some("Ready for operator follow-through."),
-                ..TaskOperatorActionInput::default()
+            TaskAction::PostCouncilMessage {
+                author_agent_id: "codex-1",
+                message_type: CouncilMessageType::Status,
+                message_body: "Ready for operator follow-through.",
             },
         )
         .expect("post council message");
@@ -1247,16 +1225,17 @@ fn task_creation_actions_create_artifacts_and_record_history() {
     let _ = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::AttachEvidence,
             "operator",
-            TaskOperatorActionInput {
-                evidence_source_kind: Some(EvidenceSourceKind::HyphaeSession),
-                evidence_source_ref: Some("ses_456"),
-                evidence_label: Some("Hyphae session"),
-                evidence_summary: Some("Linked implementation session"),
+            TaskAction::AttachEvidence {
+                source_kind: EvidenceSourceKind::HyphaeSession,
+                source_ref: "ses_456",
+                label: "Hyphae session",
+                summary: Some("Linked implementation session"),
                 related_handoff_id: Some(created_handoff.handoff_id.as_str()),
                 related_session_id: Some("ses_456"),
-                ..TaskOperatorActionInput::default()
+                related_memory_query: None,
+                related_symbol: None,
+                related_file: None,
             },
         )
         .expect("attach evidence");
@@ -1264,12 +1243,10 @@ fn task_creation_actions_create_artifacts_and_record_history() {
     let _ = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::CreateFollowUpTask,
             "operator",
-            TaskOperatorActionInput {
-                follow_up_title: Some("Close the follow-up queue"),
-                follow_up_description: Some("Track the remaining operator work."),
-                ..TaskOperatorActionInput::default()
+            TaskAction::CreateFollowUp {
+                title: "Close the follow-up queue",
+                description: Some("Track the remaining operator work."),
             },
         )
         .expect("create follow-up task");
@@ -1292,12 +1269,10 @@ fn task_creation_actions_create_artifacts_and_record_history() {
     let _ = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::LinkTaskDependency,
             "operator",
-            TaskOperatorActionInput {
-                related_task_id: Some(&blocker_task.task_id),
-                relationship_role: Some(TaskRelationshipRole::BlockedBy),
-                ..TaskOperatorActionInput::default()
+            TaskAction::LinkDependency {
+                related_task_id: &blocker_task.task_id,
+                relationship_role: TaskRelationshipRole::BlockedBy,
             },
         )
         .expect("link dependency");
@@ -1429,11 +1404,10 @@ fn task_creation_actions_reject_terminal_tasks() {
     let error = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::CreateFollowUpTask,
             "operator",
-            TaskOperatorActionInput {
-                follow_up_title: Some("Should not be allowed"),
-                ..TaskOperatorActionInput::default()
+            TaskAction::CreateFollowUp {
+                title: "Should not be allowed",
+                description: None,
             },
         )
         .expect_err("reject follow-up creation on terminal task");
@@ -1600,13 +1574,17 @@ fn review_operator_actions_record_decision_before_closeout() {
     store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::AttachEvidence,
             "operator",
-            TaskOperatorActionInput {
-                evidence_label: Some("Operator note"),
-                evidence_source_kind: Some(EvidenceSourceKind::ManualNote),
-                evidence_source_ref: Some("review-note-1"),
-                ..TaskOperatorActionInput::default()
+            TaskAction::AttachEvidence {
+                source_kind: EvidenceSourceKind::ManualNote,
+                source_ref: "review-note-1",
+                label: "Operator note",
+                summary: None,
+                related_handoff_id: None,
+                related_session_id: None,
+                related_memory_query: None,
+                related_symbol: None,
+                related_file: None,
             },
         )
         .expect("attach evidence");
@@ -1614,12 +1592,8 @@ fn review_operator_actions_record_decision_before_closeout() {
     let error = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::CloseTask,
             "operator",
-            TaskOperatorActionInput {
-                closure_summary: Some("premature closeout"),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Close { closure_summary: "premature closeout", note: None },
         )
         .expect_err("reject closeout before a recorded decision");
     assert!(
@@ -1631,12 +1605,10 @@ fn review_operator_actions_record_decision_before_closeout() {
     let review_task = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::RecordDecision,
             "operator",
-            TaskOperatorActionInput {
-                author_agent_id: Some("claude-1"),
-                message_body: Some("Ship the reviewed task."),
-                ..TaskOperatorActionInput::default()
+            TaskAction::RecordDecision {
+                author_agent_id: "claude-1",
+                message_body: "Ship the reviewed task.",
             },
         )
         .expect("record decision");
@@ -1646,11 +1618,10 @@ fn review_operator_actions_record_decision_before_closeout() {
     let completed_task = store
         .apply_task_operator_action(
             &task.task_id,
-            OperatorActionKind::CloseTask,
             "operator",
-            TaskOperatorActionInput {
-                closure_summary: Some("review accepted and closed out"),
-                ..TaskOperatorActionInput::default()
+            TaskAction::Close {
+                closure_summary: "review accepted and closed out",
+                note: None,
             },
         )
         .expect("close task");
@@ -1702,33 +1673,26 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::LinkTaskDependency,
             "operator",
-            TaskOperatorActionInput {
-                related_task_id: Some(&blocker.task_id),
-                relationship_role: Some(TaskRelationshipRole::BlockedBy),
-                ..TaskOperatorActionInput::default()
+            TaskAction::LinkDependency {
+                related_task_id: &blocker.task_id,
+                relationship_role: TaskRelationshipRole::BlockedBy,
             },
         )
         .expect("link dependency");
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::BlockTask,
             "operator",
-            TaskOperatorActionInput {
-                blocked_reason: Some("waiting on dependency"),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::Block { blocked_reason: "waiting on dependency", note: None },
         )
         .expect("block task");
 
     let reopen_error = store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
             "operator",
-            TaskOperatorActionInput::default(),
+            TaskAction::ReopenWhenUnblocked { note: None },
         )
         .expect_err("reject reopen while blockers remain");
     assert!(reopen_error.to_string().contains("no remaining blockers"));
@@ -1736,12 +1700,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::ResolveDependency,
             "operator",
-            TaskOperatorActionInput {
-                related_task_id: Some(&blocker.task_id),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::ResolveDependency { related_task_id: &blocker.task_id },
         )
         .expect("resolve dependency");
     assert!(
@@ -1755,9 +1715,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     let reopened = store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
             "operator",
-            TaskOperatorActionInput::default(),
+            TaskAction::ReopenWhenUnblocked { note: None },
         )
         .expect("reopen blocked task");
     assert_eq!(reopened.status, TaskStatus::Open);
@@ -1766,12 +1725,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::CreateFollowUpTask,
             "operator",
-            TaskOperatorActionInput {
-                follow_up_title: Some("Follow up A"),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::CreateFollowUp { title: "Follow up A", description: None },
         )
         .expect("create first follow-up");
     let follow_up_a = store
@@ -1784,12 +1739,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::PromoteFollowUp,
             "operator",
-            TaskOperatorActionInput {
-                related_task_id: Some(&follow_up_a.task_id),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::PromoteFollowUp { related_task_id: &follow_up_a.task_id },
         )
         .expect("promote follow-up");
     assert!(
@@ -1803,12 +1754,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::CreateFollowUpTask,
             "operator",
-            TaskOperatorActionInput {
-                follow_up_title: Some("Follow up B"),
-                ..TaskOperatorActionInput::default()
-            },
+            TaskAction::CreateFollowUp { title: "Follow up B", description: None },
         )
         .expect("create second follow-up");
     let follow_up_b = store
@@ -1841,9 +1788,8 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(
             &parent.task_id,
-            OperatorActionKind::CloseFollowUpChain,
             "operator",
-            TaskOperatorActionInput::default(),
+            TaskAction::CloseFollowUpChain,
         )
         .expect("close follow-up chain");
     assert!(

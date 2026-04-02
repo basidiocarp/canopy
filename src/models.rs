@@ -493,6 +493,106 @@ pub enum OperatorActionKind {
     ExpireHandoff,
 }
 
+/// Typed task action enum that replaces the `(OperatorActionKind, TaskOperatorActionInput)` pair.
+///
+/// Each variant carries only the fields its action requires, providing compile-time
+/// safety against passing wrong field combinations. The `action_kind` method maps
+/// each variant back to the `OperatorActionKind` used for event recording.
+#[derive(Debug, Clone, Copy)]
+pub enum TaskAction<'a> {
+    Acknowledge { note: Option<&'a str> },
+    Unacknowledge { note: Option<&'a str> },
+    SetPriority { priority: TaskPriority, note: Option<&'a str> },
+    SetSeverity { severity: TaskSeverity, note: Option<&'a str> },
+    UpdateNote { owner_note: Option<&'a str>, clear_owner_note: bool, note: Option<&'a str> },
+    SetDueAt { due_at: &'a str, note: Option<&'a str> },
+    ClearDueAt { note: Option<&'a str> },
+    SetReviewDueAt { review_due_at: &'a str, note: Option<&'a str> },
+    ClearReviewDueAt { note: Option<&'a str> },
+    Verify { verification_state: VerificationState, note: Option<&'a str> },
+    Close { closure_summary: &'a str, note: Option<&'a str> },
+    Block { blocked_reason: &'a str, note: Option<&'a str> },
+    Unblock { note: Option<&'a str> },
+    ReopenWhenUnblocked { note: Option<&'a str> },
+    Claim { acting_agent_id: &'a str, note: Option<&'a str> },
+    Start { acting_agent_id: &'a str, note: Option<&'a str> },
+    Resume { acting_agent_id: &'a str, note: Option<&'a str> },
+    Pause { acting_agent_id: &'a str, note: Option<&'a str> },
+    Yield { acting_agent_id: &'a str, note: Option<&'a str> },
+    Complete { acting_agent_id: &'a str, note: Option<&'a str> },
+    Reassign { assigned_to: &'a str, note: Option<&'a str> },
+    RecordDecision { author_agent_id: &'a str, message_body: &'a str },
+    CreateHandoff {
+        from_agent_id: &'a str,
+        to_agent_id: &'a str,
+        handoff_type: HandoffType,
+        handoff_summary: &'a str,
+        requested_action: Option<&'a str>,
+        due_at: Option<&'a str>,
+        expires_at: Option<&'a str>,
+    },
+    PostCouncilMessage {
+        author_agent_id: &'a str,
+        message_type: CouncilMessageType,
+        message_body: &'a str,
+    },
+    AttachEvidence {
+        source_kind: EvidenceSourceKind,
+        source_ref: &'a str,
+        label: &'a str,
+        summary: Option<&'a str>,
+        related_handoff_id: Option<&'a str>,
+        related_session_id: Option<&'a str>,
+        related_memory_query: Option<&'a str>,
+        related_symbol: Option<&'a str>,
+        related_file: Option<&'a str>,
+    },
+    CreateFollowUp { title: &'a str, description: Option<&'a str> },
+    LinkDependency { related_task_id: &'a str, relationship_role: TaskRelationshipRole },
+    ResolveDependency { related_task_id: &'a str },
+    PromoteFollowUp { related_task_id: &'a str },
+    CloseFollowUpChain,
+}
+
+impl TaskAction<'_> {
+    /// Maps each variant to its corresponding `OperatorActionKind` for event recording.
+    #[must_use]
+    pub fn action_kind(&self) -> OperatorActionKind {
+        match self {
+            Self::Acknowledge { .. } => OperatorActionKind::AcknowledgeTask,
+            Self::Unacknowledge { .. } => OperatorActionKind::UnacknowledgeTask,
+            Self::SetPriority { .. } => OperatorActionKind::SetTaskPriority,
+            Self::SetSeverity { .. } => OperatorActionKind::SetTaskSeverity,
+            Self::UpdateNote { .. } => OperatorActionKind::UpdateTaskNote,
+            Self::SetDueAt { .. } => OperatorActionKind::SetTaskDueAt,
+            Self::ClearDueAt { .. } => OperatorActionKind::ClearTaskDueAt,
+            Self::SetReviewDueAt { .. } => OperatorActionKind::SetReviewDueAt,
+            Self::ClearReviewDueAt { .. } => OperatorActionKind::ClearReviewDueAt,
+            Self::Verify { .. } => OperatorActionKind::VerifyTask,
+            Self::Close { .. } => OperatorActionKind::CloseTask,
+            Self::Block { .. } => OperatorActionKind::BlockTask,
+            Self::Unblock { .. } => OperatorActionKind::UnblockTask,
+            Self::ReopenWhenUnblocked { .. } => OperatorActionKind::ReopenBlockedTaskWhenUnblocked,
+            Self::Claim { .. } => OperatorActionKind::ClaimTask,
+            Self::Start { .. } => OperatorActionKind::StartTask,
+            Self::Resume { .. } => OperatorActionKind::ResumeTask,
+            Self::Pause { .. } => OperatorActionKind::PauseTask,
+            Self::Yield { .. } => OperatorActionKind::YieldTask,
+            Self::Complete { .. } => OperatorActionKind::CompleteTask,
+            Self::Reassign { .. } => OperatorActionKind::ReassignTask,
+            Self::RecordDecision { .. } => OperatorActionKind::RecordDecision,
+            Self::CreateHandoff { .. } => OperatorActionKind::CreateHandoff,
+            Self::PostCouncilMessage { .. } => OperatorActionKind::PostCouncilMessage,
+            Self::AttachEvidence { .. } => OperatorActionKind::AttachEvidence,
+            Self::CreateFollowUp { .. } => OperatorActionKind::CreateFollowUpTask,
+            Self::LinkDependency { .. } => OperatorActionKind::LinkTaskDependency,
+            Self::ResolveDependency { .. } => OperatorActionKind::ResolveDependency,
+            Self::PromoteFollowUp { .. } => OperatorActionKind::PromoteFollowUp,
+            Self::CloseFollowUpChain => OperatorActionKind::CloseFollowUpChain,
+        }
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
 )]
@@ -595,6 +695,17 @@ pub struct Task {
     pub review_due_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileLock {
+    pub lock_id: String,
+    pub task_id: String,
+    pub agent_id: String,
+    pub file_path: String,
+    pub worktree_id: String,
+    pub locked_at: String,
+    pub released_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

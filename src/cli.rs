@@ -50,6 +50,37 @@ pub enum Commands {
         #[command(subcommand)]
         command: ApiCommand,
     },
+    WorkQueue {
+        #[arg(long, required = true)]
+        agent_id: String,
+        #[arg(long, default_value = "5")]
+        limit: i64,
+        #[arg(long)]
+        project_root: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Files {
+        #[command(subcommand)]
+        command: FilesCommand,
+    },
+    Situation {
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        project_root: Option<String>,
+    },
+    Serve {
+        /// Stable identifier for this agent (e.g. claude-implementer-1)
+        #[arg(long, required = true)]
+        agent_id: String,
+        /// Scope to a project root path
+        #[arg(long)]
+        project: Option<String>,
+        /// Git worktree identifier
+        #[arg(long, default_value = "main")]
+        worktree: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -173,6 +204,20 @@ pub enum TaskCommand {
         assigned_by: String,
         #[arg(long)]
         reason: Option<String>,
+    },
+    Claim {
+        #[arg(long, required = true)]
+        agent_id: String,
+        #[arg(value_name = "TASK_ID")]
+        task_id: String,
+    },
+    Complete {
+        #[arg(long, required = true)]
+        agent_id: String,
+        #[arg(value_name = "TASK_ID")]
+        task_id: String,
+        #[arg(long, required = true)]
+        summary: String,
     },
     Status {
         #[arg(long)]
@@ -388,5 +433,37 @@ pub enum ApiCommand {
     Task {
         #[arg(long)]
         task_id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FilesCommand {
+    Lock {
+        #[arg(long, required = true)]
+        agent_id: String,
+        #[arg(long, required = true)]
+        task_id: String,
+        #[arg(long, default_value = "main")]
+        worktree: String,
+        #[arg(trailing_var_arg = true, required = true, value_name = "FILES")]
+        files: Vec<String>,
+    },
+    Unlock {
+        #[arg(long, required = true)]
+        task_id: String,
+    },
+    Check {
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long, default_value = "main")]
+        worktree: String,
+        #[arg(trailing_var_arg = true, required = true, value_name = "FILES")]
+        files: Vec<String>,
+    },
+    List {
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        project_root: Option<String>,
     },
 }

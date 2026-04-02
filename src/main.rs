@@ -1,17 +1,18 @@
 use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
-    AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, HandoffCommand,
-    TaskCommand,
+    AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, FilesCommand,
+    HandoffCommand, TaskCommand,
 };
+use canopy::mcp;
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, EvidenceRef, EvidenceSourceKind,
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
-    TaskStatus, VerificationState,
+    TaskAction, TaskStatus, VerificationState,
 };
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
-    TaskOperatorActionInput, TaskStatusUpdate, TaskTriageUpdate,
+    TaskStatusUpdate, TaskTriageUpdate,
 };
 use clap::Parser;
 use serde::Serialize;
@@ -41,6 +42,28 @@ fn run_command(store: &Store, command: Commands) -> Result<()> {
         Commands::Evidence { command } => handle_evidence_command(store, command)?,
         Commands::Council { command } => handle_council_command(store, command)?,
         Commands::Api { command } => handle_api_command(store, command)?,
+        Commands::WorkQueue {
+            agent_id,
+            limit,
+            project_root,
+            json,
+        } => {
+            handle_work_queue(store, &agent_id, limit, project_root.as_deref(), json)?;
+        }
+        Commands::Files { command } => handle_files_command(store, command)?,
+        Commands::Situation {
+            agent_id,
+            project_root,
+        } => {
+            handle_situation(store, agent_id.as_deref(), project_root.as_deref())?;
+        }
+        Commands::Serve {
+            agent_id,
+            project,
+            worktree,
+        } => {
+            mcp::server::run_server(store, &agent_id, project.as_deref(), Some(&worktree))?;
+        }
     }
 
     Ok(())
@@ -235,48 +258,50 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             relationship_role,
         } => {
             let fallback_session_id = runtime_session_id_from_env();
+            let resolved_session_id = related_session_id
+                .as_deref()
+                .or(fallback_session_id.as_deref());
+            let task_action = cli_action_to_task_action(
+                action,
+                note.as_deref(),
+                acting_agent_id.as_deref(),
+                assigned_to.as_deref(),
+                priority,
+                severity,
+                verification_state,
+                blocked_reason.as_deref(),
+                closure_summary.as_deref(),
+                owner_note.as_deref(),
+                clear_owner_note,
+                from_agent_id.as_deref(),
+                to_agent_id.as_deref(),
+                handoff_type,
+                handoff_summary.as_deref(),
+                requested_action.as_deref(),
+                due_at.as_deref(),
+                review_due_at.as_deref(),
+                expires_at.as_deref(),
+                author_agent_id.as_deref(),
+                message_type,
+                message_body.as_deref(),
+                evidence_source_kind,
+                evidence_source_ref.as_deref(),
+                evidence_label.as_deref(),
+                evidence_summary.as_deref(),
+                related_handoff_id.as_deref(),
+                resolved_session_id,
+                related_memory_query.as_deref(),
+                related_symbol.as_deref(),
+                related_file.as_deref(),
+                follow_up_title.as_deref(),
+                follow_up_description.as_deref(),
+                related_task_id.as_deref(),
+                relationship_role,
+            )?;
             let task = store.apply_task_operator_action(
                 &task_id,
-                action,
                 &changed_by,
-                TaskOperatorActionInput {
-                    acting_agent_id: acting_agent_id.as_deref(),
-                    assigned_to: assigned_to.as_deref(),
-                    priority,
-                    severity,
-                    verification_state,
-                    blocked_reason: blocked_reason.as_deref(),
-                    closure_summary: closure_summary.as_deref(),
-                    owner_note: owner_note.as_deref(),
-                    clear_owner_note,
-                    note: note.as_deref(),
-                    from_agent_id: from_agent_id.as_deref(),
-                    to_agent_id: to_agent_id.as_deref(),
-                    handoff_type,
-                    handoff_summary: handoff_summary.as_deref(),
-                    requested_action: requested_action.as_deref(),
-                    due_at: due_at.as_deref(),
-                    review_due_at: review_due_at.as_deref(),
-                    expires_at: expires_at.as_deref(),
-                    author_agent_id: author_agent_id.as_deref(),
-                    message_type,
-                    message_body: message_body.as_deref(),
-                    evidence_source_kind,
-                    evidence_source_ref: evidence_source_ref.as_deref(),
-                    evidence_label: evidence_label.as_deref(),
-                    evidence_summary: evidence_summary.as_deref(),
-                    related_handoff_id: related_handoff_id.as_deref(),
-                    related_session_id: related_session_id
-                        .as_deref()
-                        .or(fallback_session_id.as_deref()),
-                    related_memory_query: related_memory_query.as_deref(),
-                    related_symbol: related_symbol.as_deref(),
-                    related_file: related_file.as_deref(),
-                    follow_up_title: follow_up_title.as_deref(),
-                    follow_up_description: follow_up_description.as_deref(),
-                    related_task_id: related_task_id.as_deref(),
-                    relationship_role,
-                },
+                task_action,
             )?;
             print_json(&task)?;
         }
@@ -323,6 +348,38 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         TaskCommand::Show { task_id } => {
             print_json(&store.get_task(&task_id)?)?;
         }
+        TaskCommand::Claim { agent_id, task_id } => {
+            let claimed_task = store
+                .atomic_claim_task(&agent_id, &task_id)?
+                .ok_or_else(|| anyhow::anyhow!("task already claimed or not found"))?;
+            print_json(&claimed_task)?;
+        }
+        TaskCommand::Complete {
+            agent_id,
+            task_id,
+            summary,
+        } => {
+            let task = store.update_task_status(
+                &task_id,
+                TaskStatus::Completed,
+                &agent_id,
+                TaskStatusUpdate {
+                    verification_state: None,
+                    blocked_reason: None,
+                    closure_summary: Some(&summary),
+                    event_note: None,
+                },
+            )?;
+            store.add_evidence(
+                &task_id,
+                EvidenceSourceKind::ManualNote,
+                &task_id,
+                "completion_summary",
+                Some(&summary),
+                EvidenceLinkRefs::default(),
+            )?;
+            print_json(&task)?;
+        }
     }
 
     Ok(())
@@ -356,6 +413,174 @@ struct TaskVerificationRun {
     script: String,
     step: Option<String>,
     output: String,
+}
+
+/// Converts CLI `--action` flag and optional fields into a typed `TaskAction`.
+///
+/// The CLI `task action` command uses a single `OperatorActionKind` flag with 33 optional
+/// fields for backward compatibility. This function bridges from that flat representation
+/// to the typed enum at the CLI boundary.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn cli_action_to_task_action<'a>(
+    action: canopy::models::OperatorActionKind,
+    note: Option<&'a str>,
+    acting_agent_id: Option<&'a str>,
+    assigned_to: Option<&'a str>,
+    priority: Option<canopy::models::TaskPriority>,
+    severity: Option<canopy::models::TaskSeverity>,
+    verification_state: Option<canopy::models::VerificationState>,
+    blocked_reason: Option<&'a str>,
+    closure_summary: Option<&'a str>,
+    owner_note: Option<&'a str>,
+    clear_owner_note: bool,
+    from_agent_id: Option<&'a str>,
+    to_agent_id: Option<&'a str>,
+    handoff_type: Option<canopy::models::HandoffType>,
+    handoff_summary: Option<&'a str>,
+    requested_action: Option<&'a str>,
+    due_at: Option<&'a str>,
+    review_due_at: Option<&'a str>,
+    expires_at: Option<&'a str>,
+    author_agent_id: Option<&'a str>,
+    message_type: Option<canopy::models::CouncilMessageType>,
+    message_body: Option<&'a str>,
+    evidence_source_kind: Option<canopy::models::EvidenceSourceKind>,
+    evidence_source_ref: Option<&'a str>,
+    evidence_label: Option<&'a str>,
+    evidence_summary: Option<&'a str>,
+    related_handoff_id: Option<&'a str>,
+    related_session_id: Option<&'a str>,
+    related_memory_query: Option<&'a str>,
+    related_symbol: Option<&'a str>,
+    related_file: Option<&'a str>,
+    follow_up_title: Option<&'a str>,
+    follow_up_description: Option<&'a str>,
+    related_task_id: Option<&'a str>,
+    relationship_role: Option<canopy::models::TaskRelationshipRole>,
+) -> Result<TaskAction<'a>> {
+    use canopy::models::OperatorActionKind as K;
+    let require = |opt: Option<&'a str>, field: &str| -> Result<&'a str> {
+        opt.ok_or_else(|| anyhow::anyhow!("{action} requires --{field}"))
+    };
+    let task_action = match action {
+        K::AcknowledgeTask => TaskAction::Acknowledge { note },
+        K::UnacknowledgeTask => TaskAction::Unacknowledge { note },
+        K::SetTaskPriority => TaskAction::SetPriority {
+            priority: priority.ok_or_else(|| anyhow::anyhow!("{action} requires --priority"))?,
+            note,
+        },
+        K::SetTaskSeverity => TaskAction::SetSeverity {
+            severity: severity.ok_or_else(|| anyhow::anyhow!("{action} requires --severity"))?,
+            note,
+        },
+        K::UpdateTaskNote => TaskAction::UpdateNote { owner_note, clear_owner_note, note },
+        K::SetTaskDueAt => TaskAction::SetDueAt {
+            due_at: require(due_at, "due-at")?,
+            note,
+        },
+        K::ClearTaskDueAt => TaskAction::ClearDueAt { note },
+        K::SetReviewDueAt => TaskAction::SetReviewDueAt {
+            review_due_at: require(review_due_at, "review-due-at")?,
+            note,
+        },
+        K::ClearReviewDueAt => TaskAction::ClearReviewDueAt { note },
+        K::VerifyTask => TaskAction::Verify {
+            verification_state: verification_state
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --verification-state"))?,
+            note,
+        },
+        K::CloseTask => TaskAction::Close {
+            closure_summary: require(closure_summary, "closure-summary")?,
+            note,
+        },
+        K::BlockTask => TaskAction::Block {
+            blocked_reason: require(blocked_reason, "blocked-reason")?,
+            note,
+        },
+        K::UnblockTask => TaskAction::Unblock { note },
+        K::ReopenBlockedTaskWhenUnblocked => TaskAction::ReopenWhenUnblocked { note },
+        K::ClaimTask => TaskAction::Claim {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::StartTask => TaskAction::Start {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::ResumeTask => TaskAction::Resume {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::PauseTask => TaskAction::Pause {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::YieldTask => TaskAction::Yield {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::CompleteTask => TaskAction::Complete {
+            acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
+            note,
+        },
+        K::ReassignTask => TaskAction::Reassign {
+            assigned_to: require(assigned_to, "assigned-to")?,
+            note,
+        },
+        K::RecordDecision => TaskAction::RecordDecision {
+            author_agent_id: require(author_agent_id, "author-agent-id")?,
+            message_body: require(message_body, "message-body")?,
+        },
+        K::CreateHandoff => TaskAction::CreateHandoff {
+            from_agent_id: require(from_agent_id, "from-agent-id")?,
+            to_agent_id: require(to_agent_id, "to-agent-id")?,
+            handoff_type: handoff_type
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --handoff-type"))?,
+            handoff_summary: require(handoff_summary, "handoff-summary")?,
+            requested_action,
+            due_at,
+            expires_at,
+        },
+        K::PostCouncilMessage => TaskAction::PostCouncilMessage {
+            author_agent_id: require(author_agent_id, "author-agent-id")?,
+            message_type: message_type
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --message-type"))?,
+            message_body: require(message_body, "message-body")?,
+        },
+        K::AttachEvidence => TaskAction::AttachEvidence {
+            source_kind: evidence_source_kind
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --evidence-source-kind"))?,
+            source_ref: require(evidence_source_ref, "evidence-source-ref")?,
+            label: require(evidence_label, "evidence-label")?,
+            summary: evidence_summary,
+            related_handoff_id,
+            related_session_id,
+            related_memory_query,
+            related_symbol,
+            related_file,
+        },
+        K::CreateFollowUpTask => TaskAction::CreateFollowUp {
+            title: require(follow_up_title, "follow-up-title")?,
+            description: follow_up_description,
+        },
+        K::LinkTaskDependency => TaskAction::LinkDependency {
+            related_task_id: require(related_task_id, "related-task-id")?,
+            relationship_role: relationship_role
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --relationship-role"))?,
+        },
+        K::ResolveDependency => TaskAction::ResolveDependency {
+            related_task_id: require(related_task_id, "related-task-id")?,
+        },
+        K::PromoteFollowUp => TaskAction::PromoteFollowUp {
+            related_task_id: require(related_task_id, "related-task-id")?,
+        },
+        K::CloseFollowUpChain => TaskAction::CloseFollowUpChain,
+        K::AcceptHandoff | K::RejectHandoff | K::CancelHandoff
+        | K::CompleteHandoff | K::FollowUpHandoff | K::ExpireHandoff => {
+            anyhow::bail!("operator action {action} is not valid for tasks")
+        }
+    };
+    Ok(task_action)
 }
 
 fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Result<()> {
@@ -1018,6 +1243,147 @@ fn handle_api_command(store: &Store, command: ApiCommand) -> Result<()> {
         ApiCommand::Task { task_id } => {
             print_json(&api::task_detail(store, &task_id)?)?;
         }
+    }
+
+    Ok(())
+}
+
+fn handle_work_queue(
+    store: &Store,
+    agent_id: &str,
+    limit: i64,
+    project_root: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let agent = store.get_agent(agent_id)?;
+    let role = agent.role.as_ref().map(ToString::to_string);
+    let capabilities = agent.capabilities.clone();
+
+    let tasks = store.query_available_tasks(
+        role.as_deref(),
+        &capabilities,
+        project_root,
+        limit,
+    )?;
+
+    if json {
+        print_json(&tasks)?;
+    } else {
+        print_work_queue_table(&tasks);
+    }
+
+    Ok(())
+}
+
+fn print_work_queue_table(tasks: &[Task]) {
+    if tasks.is_empty() {
+        println!("No tasks available");
+        return;
+    }
+
+    println!("Available tasks ({}):", tasks.len());
+    for (idx, task) in tasks.iter().enumerate() {
+        let priority_str = task.priority.to_string();
+        println!(
+            "  {:02}. [{}] {}",
+            idx + 1,
+            priority_str,
+            task.title
+        );
+    }
+}
+
+fn handle_files_command(store: &Store, command: FilesCommand) -> Result<()> {
+    match command {
+        FilesCommand::Lock {
+            agent_id,
+            task_id,
+            worktree,
+            files,
+        } => {
+            let conflicts = store.lock_files(&agent_id, &task_id, &files, &worktree)?;
+            if conflicts.is_empty() {
+                println!("Locked {} files", files.len());
+            } else {
+                println!("Lock failed - file conflicts:");
+                for lock in conflicts {
+                    println!("  {} - locked by agent {}", lock.file_path, lock.agent_id);
+                }
+            }
+        }
+        FilesCommand::Unlock { task_id } => {
+            let count = store.unlock_files(&task_id)?;
+            println!("Unlocked {count} files");
+        }
+        FilesCommand::Check {
+            agent_id,
+            worktree,
+            files,
+        } => {
+            let conflicts = store.check_file_conflicts(&files, &worktree, agent_id.as_deref())?;
+            if conflicts.is_empty() {
+                println!("No conflicts - files available");
+            } else {
+                println!("File conflicts ({}):", conflicts.len());
+                for lock in conflicts {
+                    println!("  {} - locked by agent {}", lock.file_path, lock.agent_id);
+                }
+            }
+        }
+        FilesCommand::List {
+            agent_id,
+            project_root,
+        } => {
+            let locks = store.list_file_locks(project_root.as_deref(), agent_id.as_deref())?;
+            if locks.is_empty() {
+                println!("No active file locks");
+            } else {
+                println!("Active file locks ({}):", locks.len());
+                for lock in locks {
+                    println!(
+                        "  {} - task {} (agent {})",
+                        lock.file_path, lock.task_id, lock.agent_id
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_situation(
+    store: &Store,
+    agent_id: Option<&str>,
+    project_root: Option<&str>,
+) -> Result<()> {
+    let agents = if let Some(id) = agent_id {
+        vec![store.get_agent(id)?]
+    } else {
+        store.list_agents()?
+    };
+
+    println!("Active agents: {}", agents.len());
+    for agent in &agents {
+        println!(
+            "  {} - {} (status: {})",
+            agent.agent_id, agent.model, agent.status
+        );
+        if let Some(task_id) = &agent.current_task_id {
+            if let Ok(task) = store.get_task(task_id) {
+                println!("    Current task: {} ({})", task.title, task.status);
+            }
+        }
+    }
+
+    println!();
+    let file_locks = store.list_file_locks(project_root, None)?;
+    println!("File locks: {}", file_locks.len());
+    for lock in &file_locks {
+        println!(
+            "  {} - task {} (agent {})",
+            lock.file_path, lock.task_id, lock.agent_id
+        );
     }
 
     Ok(())

@@ -9,7 +9,7 @@ use crate::models::{
     TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSlaSummary,
     TaskSort, TaskStatus, TaskView, VerificationState, derive_review_cycle_context,
 };
-use crate::store::{Store, StoreError, StoreResult};
+use crate::store::{CanopyStore, StoreError, StoreResult};
 use std::collections::{HashMap, HashSet};
 use time::format_description::well_known::Rfc3339;
 use time::{
@@ -77,50 +77,26 @@ struct OverdueTaskSlaQueues {
 ///
 /// Returns an error if any underlying store query fails.
 #[allow(clippy::too_many_lines)]
-pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiSnapshot> {
+pub fn snapshot(store: &(impl CanopyStore + ?Sized), options: SnapshotOptions<'_>) -> StoreResult<ApiSnapshot> {
     let options = resolve_snapshot_options(options);
-    let mut agents = store.list_agents()?;
-    if let Some(project_root) = options.project_root.as_deref() {
-        agents.retain(|agent| agent.project_root == project_root);
-    }
+    let project_root = options.project_root.as_deref();
 
-    let handoffs = store.list_handoffs(None)?;
-    let mut tasks = store.list_tasks()?;
+    // Load only agents, tasks, handoffs, events, assignments, relationships and
+    // evidence that belong to the requested project. When no project filter is
+    // set each method falls back to loading everything.
+    let agents = store.list_agents_filtered(project_root)?;
+
+    let handoffs = store.list_handoffs_for_project(project_root)?;
+    let mut tasks = store.list_tasks_filtered(project_root, None, None)?;
     let now = OffsetDateTime::now_utc();
 
-    if let Some(project_root) = options.project_root.as_deref() {
-        tasks.retain(|task| task.project_root == project_root);
-    }
-
-    let project_task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
-    let all_task_events = store.list_all_task_events()?;
-    let all_assignments = store.list_task_assignments(None)?;
-    let project_task_events = all_task_events
-        .iter()
-        .filter(|event| project_task_ids.contains(&event.task_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let project_assignments = all_assignments
-        .iter()
-        .filter(|assignment| project_task_ids.contains(&assignment.task_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let relationships = store
-        .list_task_relationships(None)?
-        .into_iter()
-        .filter(|relationship| {
-            project_task_ids.contains(&relationship.source_task_id)
-                && project_task_ids.contains(&relationship.target_task_id)
-        })
-        .collect::<Vec<_>>();
+    let project_task_events = store.list_task_events_for_project(project_root)?;
+    let project_assignments = store.list_task_assignments_for_project(project_root)?;
+    let relationships = store.list_task_relationships_for_project(project_root)?;
     let relationship_summaries = derive_task_relationship_summaries(&tasks, &relationships, now);
     let project_execution_summaries =
         derive_task_execution_summaries(&tasks, &project_task_events, now);
-    let project_evidence = store
-        .list_all_evidence()?
-        .into_iter()
-        .filter(|evidence| project_task_ids.contains(&evidence.task_id))
-        .collect::<Vec<_>>();
+    let project_evidence = store.list_evidence_for_project(project_root)?;
     let accepted_handoff_follow_through_task_ids = derive_accepted_handoff_follow_through_task_ids(
         &tasks,
         &handoffs,
@@ -212,7 +188,9 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
     );
     let project_deadline_summaries = derive_task_deadline_summaries(&tasks, now);
 
-    let all_heartbeats = store.list_all_agent_heartbeats()?;
+    // Heartbeats are pre-scoped to the project's agents; the .take(50) cap is
+    // preserved as an explicit limit parameter.
+    let all_heartbeats = store.list_agent_heartbeats_for_project(project_root, Some(50))?;
     let agent_attention = derive_agent_attention(&agents, now);
     let handoff_attention = derive_handoff_attention(&handoffs, now);
     let task_attention = derive_task_attention(
@@ -314,17 +292,17 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
 
     let task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
     let agent_ids: HashSet<_> = agents.iter().map(|agent| agent.agent_id.clone()).collect();
+    // all_heartbeats is already scoped to project agents; only retain those
+    // associated with the visible (view-filtered) task set.
     let heartbeats = all_heartbeats
         .into_iter()
         .filter(|heartbeat| {
-            agent_ids.contains(&heartbeat.agent_id)
-                && heartbeat_matches_tasks(
-                    heartbeat.current_task_id.as_deref(),
-                    heartbeat.related_task_id.as_deref(),
-                    &task_ids,
-                )
+            heartbeat_matches_tasks(
+                heartbeat.current_task_id.as_deref(),
+                heartbeat.related_task_id.as_deref(),
+                &task_ids,
+            )
         })
-        .take(50)
         .collect::<Vec<_>>();
     let filtered_task_attention = task_attention
         .into_iter()
@@ -425,7 +403,7 @@ pub fn snapshot(store: &Store, options: SnapshotOptions<'_>) -> StoreResult<ApiS
 /// Returns an error if the task does not exist or any underlying store query
 /// fails.
 #[allow(clippy::too_many_lines)]
-pub fn task_detail(store: &Store, task_id: &str) -> StoreResult<TaskDetail> {
+pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreResult<TaskDetail> {
     let task = store.get_task(task_id)?;
     let handoffs = store.list_handoffs(Some(task_id))?;
     let assignments = store.list_task_assignments(Some(task_id))?;
