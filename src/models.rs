@@ -163,6 +163,7 @@ pub enum TaskView {
     Handoffs,
     FollowUpChains,
     Attention,
+    FileConflicts,
 }
 
 #[derive(
@@ -210,6 +211,7 @@ pub enum SnapshotPreset {
     FollowUpChains,
     Critical,
     Unacknowledged,
+    FileConflicts,
 }
 
 #[derive(
@@ -500,28 +502,89 @@ pub enum OperatorActionKind {
 /// each variant back to the `OperatorActionKind` used for event recording.
 #[derive(Debug, Clone, Copy)]
 pub enum TaskAction<'a> {
-    Acknowledge { note: Option<&'a str> },
-    Unacknowledge { note: Option<&'a str> },
-    SetPriority { priority: TaskPriority, note: Option<&'a str> },
-    SetSeverity { severity: TaskSeverity, note: Option<&'a str> },
-    UpdateNote { owner_note: Option<&'a str>, clear_owner_note: bool, note: Option<&'a str> },
-    SetDueAt { due_at: &'a str, note: Option<&'a str> },
-    ClearDueAt { note: Option<&'a str> },
-    SetReviewDueAt { review_due_at: &'a str, note: Option<&'a str> },
-    ClearReviewDueAt { note: Option<&'a str> },
-    Verify { verification_state: VerificationState, note: Option<&'a str> },
-    Close { closure_summary: &'a str, note: Option<&'a str> },
-    Block { blocked_reason: &'a str, note: Option<&'a str> },
-    Unblock { note: Option<&'a str> },
-    ReopenWhenUnblocked { note: Option<&'a str> },
-    Claim { acting_agent_id: &'a str, note: Option<&'a str> },
-    Start { acting_agent_id: &'a str, note: Option<&'a str> },
-    Resume { acting_agent_id: &'a str, note: Option<&'a str> },
-    Pause { acting_agent_id: &'a str, note: Option<&'a str> },
-    Yield { acting_agent_id: &'a str, note: Option<&'a str> },
-    Complete { acting_agent_id: &'a str, note: Option<&'a str> },
-    Reassign { assigned_to: &'a str, note: Option<&'a str> },
-    RecordDecision { author_agent_id: &'a str, message_body: &'a str },
+    Acknowledge {
+        note: Option<&'a str>,
+    },
+    Unacknowledge {
+        note: Option<&'a str>,
+    },
+    SetPriority {
+        priority: TaskPriority,
+        note: Option<&'a str>,
+    },
+    SetSeverity {
+        severity: TaskSeverity,
+        note: Option<&'a str>,
+    },
+    UpdateNote {
+        owner_note: Option<&'a str>,
+        clear_owner_note: bool,
+        note: Option<&'a str>,
+    },
+    SetDueAt {
+        due_at: &'a str,
+        note: Option<&'a str>,
+    },
+    ClearDueAt {
+        note: Option<&'a str>,
+    },
+    SetReviewDueAt {
+        review_due_at: &'a str,
+        note: Option<&'a str>,
+    },
+    ClearReviewDueAt {
+        note: Option<&'a str>,
+    },
+    Verify {
+        verification_state: VerificationState,
+        note: Option<&'a str>,
+    },
+    Close {
+        closure_summary: &'a str,
+        note: Option<&'a str>,
+    },
+    Block {
+        blocked_reason: &'a str,
+        note: Option<&'a str>,
+    },
+    Unblock {
+        note: Option<&'a str>,
+    },
+    ReopenWhenUnblocked {
+        note: Option<&'a str>,
+    },
+    Claim {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Start {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Resume {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Pause {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Yield {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Complete {
+        acting_agent_id: &'a str,
+        note: Option<&'a str>,
+    },
+    Reassign {
+        assigned_to: &'a str,
+        note: Option<&'a str>,
+    },
+    RecordDecision {
+        author_agent_id: &'a str,
+        message_body: &'a str,
+    },
     CreateHandoff {
         from_agent_id: &'a str,
         to_agent_id: &'a str,
@@ -547,10 +610,20 @@ pub enum TaskAction<'a> {
         related_symbol: Option<&'a str>,
         related_file: Option<&'a str>,
     },
-    CreateFollowUp { title: &'a str, description: Option<&'a str> },
-    LinkDependency { related_task_id: &'a str, relationship_role: TaskRelationshipRole },
-    ResolveDependency { related_task_id: &'a str },
-    PromoteFollowUp { related_task_id: &'a str },
+    CreateFollowUp {
+        title: &'a str,
+        description: Option<&'a str>,
+    },
+    LinkDependency {
+        related_task_id: &'a str,
+        relationship_role: TaskRelationshipRole,
+    },
+    ResolveDependency {
+        related_task_id: &'a str,
+    },
+    PromoteFollowUp {
+        related_task_id: &'a str,
+    },
     CloseFollowUpChain,
 }
 
@@ -695,6 +768,17 @@ pub struct Task {
     pub review_due_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// File paths or globs this task will modify
+    pub scope: Vec<String>,
+}
+
+/// Describes a file-scope overlap between two tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeConflict {
+    pub task_id: String,
+    pub task_title: String,
+    pub agent_id: String,
+    pub overlapping_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

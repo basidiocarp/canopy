@@ -5,11 +5,6 @@ use crate::models::{
 use rusqlite::params;
 use time::OffsetDateTime;
 
-use super::{
-    EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult, TaskCreationOptions,
-    TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput, TaskStatusUpdate,
-    TaskTriageUpdate,
-};
 use super::helpers::{
     add_council_message_in_connection, add_evidence_in_connection, assign_task_in_connection,
     build_execution_note, compute_open_execution_duration_seconds, create_handoff_in_connection,
@@ -17,6 +12,11 @@ use super::helpers::{
     has_active_blockers_in_connection, record_task_event_in_connection,
     release_agent_current_task_in_connection, sync_owner_for_task_status,
     task_has_prior_execution_in_connection, touch_task_in_connection, validate_execution_actor,
+};
+use super::{
+    EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult, TaskCreationOptions,
+    TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput, TaskStatusUpdate,
+    TaskTriageUpdate,
 };
 
 impl Store {

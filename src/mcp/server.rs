@@ -41,8 +41,7 @@ pub fn run_server(
             Ok(m) => m,
             Err(e) => {
                 error!("invalid JSON-RPC: {e}");
-                let resp =
-                    JsonRpcResponse::err(Value::Null, -32700, format!("parse error: {e}"));
+                let resp = JsonRpcResponse::err(Value::Null, -32700, format!("parse error: {e}"));
                 write_response(&mut stdout, &resp)?;
                 continue;
             }

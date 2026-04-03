@@ -2,6 +2,7 @@
 // - tool_import_handoff
 
 use crate::models::{AgentRole, EvidenceSourceKind};
+use crate::scope::extract_step_scope;
 use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions};
 use crate::tools::{ToolResult, get_str, validate_required_string};
 use serde::Serialize;
@@ -24,6 +25,7 @@ struct ImportHandoffResult {
 struct ParsedStep {
     step_marker: String,
     description: Option<String>,
+    scope: Vec<String>,
 }
 
 fn extract_title(content: &str) -> String {
@@ -53,9 +55,11 @@ fn extract_steps(content: &str) -> Vec<ParsedStep> {
                  current_body: &mut Vec<String>| {
         if let Some(step_marker) = current_marker.take() {
             let description = current_body.join("\n").trim().to_string();
+            let scope = extract_step_scope(&description);
             steps.push(ParsedStep {
                 description: (!description.is_empty()).then_some(description),
                 step_marker,
+                scope,
             });
             current_body.clear();
         }
@@ -93,12 +97,58 @@ fn infer_project_root(path: &Path) -> String {
             }
         }
     }
-    std::env::current_dir()
-        .map_or_else(|_| ".".to_string(), |d| d.display().to_string())
+    std::env::current_dir().map_or_else(|_| ".".to_string(), |d| d.display().to_string())
+}
+
+fn validate_handoff_path(path: &Path) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Check: file should be in a project subdirectory, not .handoffs/ root
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent_name = parent
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    if parent_name == ".handoffs" {
+        warnings.push(format!(
+            "Handoff is in .handoffs/ root. Move to .handoffs/<project>/{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+        ));
+    }
+
+    // Check: verify script should exist alongside
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let verify_script = path.with_file_name(format!("verify-{stem}.sh"));
+    if !verify_script.exists() {
+        warnings.push(format!(
+            "No verify script found. Expected: {}",
+            verify_script.display()
+        ));
+    }
+
+    // Check: old HANDOFF- prefix
+    if stem.starts_with("HANDOFF-") {
+        warnings.push(format!(
+            "Uses old HANDOFF- prefix. Rename to: {}",
+            stem.strip_prefix("HANDOFF-")
+                .unwrap_or(stem)
+                .to_lowercase()
+        ));
+    }
+
+    warnings
 }
 
 /// Import a .handoffs/ markdown file as a task with subtasks.
-pub fn tool_import_handoff(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+#[allow(clippy::too_many_lines)]
+pub fn tool_import_handoff(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let file_path_str = match validate_required_string(args, "file_path") {
         Ok(v) => v,
         Err(e) => return e,
@@ -106,6 +156,12 @@ pub fn tool_import_handoff(store: &(impl CanopyStore + ?Sized), _agent_id: &str,
     let assign_to = get_str(args, "assign_to");
 
     let path = Path::new(file_path_str);
+
+    let warnings = validate_handoff_path(path);
+    for w in &warnings {
+        eprintln!("WARNING: {w}");
+    }
+
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => return ToolResult::error(format!("failed to read file {file_path_str}: {e}")),
@@ -158,6 +214,7 @@ pub fn tool_import_handoff(store: &(impl CanopyStore + ?Sized), _agent_id: &str,
             &TaskCreationOptions {
                 required_role: Some(AgentRole::Implementer),
                 verification_required: true,
+                scope: step.scope,
                 ..TaskCreationOptions::default()
             },
         ) {

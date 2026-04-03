@@ -77,7 +77,10 @@ struct OverdueTaskSlaQueues {
 ///
 /// Returns an error if any underlying store query fails.
 #[allow(clippy::too_many_lines)]
-pub fn snapshot(store: &(impl CanopyStore + ?Sized), options: SnapshotOptions<'_>) -> StoreResult<ApiSnapshot> {
+pub fn snapshot(
+    store: &(impl CanopyStore + ?Sized),
+    options: SnapshotOptions<'_>,
+) -> StoreResult<ApiSnapshot> {
     let options = resolve_snapshot_options(options);
     let project_root = options.project_root.as_deref();
 
@@ -881,10 +884,14 @@ fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
             options.sort = TaskSort::Attention;
             options.acknowledged = Some(false);
         }
+        SnapshotPreset::FileConflicts => {
+            options.view = TaskView::FileConflicts;
+            options.sort = TaskSort::UpdatedAt;
+        }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn matches_view(
     task: &Task,
     open_handoff_task_ids: &HashSet<String>,
@@ -1008,6 +1015,11 @@ fn matches_view(
         }),
         TaskView::Attention => {
             task_attention.is_some_and(|attention| attention.level != AttentionLevel::Normal)
+        }
+        TaskView::FileConflicts => {
+            // Include tasks that have a non-empty scope and are active
+            !task.scope.is_empty()
+                && matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
         }
     }
 }

@@ -120,7 +120,13 @@ fn snapshot_schema_required_fields_present() {
 
     // These are the fields the contract guarantees.
     // If api.rs changes the snapshot shape, this test catches it.
-    for field in &["schema_version", "attention", "sla_summary", "tasks", "evidence"] {
+    for field in &[
+        "schema_version",
+        "attention",
+        "sla_summary",
+        "tasks",
+        "evidence",
+    ] {
         assert!(
             required_fields.contains(field),
             "canopy-snapshot-v1 schema missing required field '{field}'"
@@ -249,8 +255,8 @@ fn mcp_tool_schemas_match_dispatch() {
 
     assert_eq!(
         schema_names.len(),
-        30,
-        "Expected 30 MCP tools, got {}. If you added/removed tools, update this test.",
+        31,
+        "Expected 31 MCP tools, got {}. If you added/removed tools, update this test.",
         schema_names.len()
     );
 
@@ -260,7 +266,8 @@ fn mcp_tool_schemas_match_dispatch() {
     let store = canopy::store::Store::open(&db_path).unwrap();
 
     for name in &schema_names {
-        let result = canopy::tools::dispatch_tool(&store, "test-agent", name, &serde_json::json!({}));
+        let result =
+            canopy::tools::dispatch_tool(&store, "test-agent", name, &serde_json::json!({}));
         let serialized = serde_json::to_string(&result).unwrap();
         assert!(
             !serialized.contains("unknown tool"),

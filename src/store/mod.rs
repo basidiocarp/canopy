@@ -1,8 +1,8 @@
 mod agents;
 mod assignments;
 mod council;
-mod evidence;
 mod events;
+mod evidence;
 mod files;
 mod handoffs;
 mod helpers;
@@ -15,8 +15,8 @@ mod traits;
 pub use traits::CanopyStore;
 
 use crate::models::{
-    AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, ExecutionActionKind,
-    EvidenceSourceKind, HandoffType, TaskAction, TaskEventType, TaskPriority,
+    AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
+    ExecutionActionKind, HandoffType, TaskAction, TaskEventType, TaskPriority,
     TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
 use rusqlite::Connection;
@@ -109,6 +109,7 @@ pub struct TaskCreationOptions {
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,
     pub verification_required: bool,
+    pub scope: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -183,7 +184,11 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.severity = Some(severity);
                 input.note = note;
             }
-            TaskAction::UpdateNote { owner_note, clear_owner_note, note } => {
+            TaskAction::UpdateNote {
+                owner_note,
+                clear_owner_note,
+                note,
+            } => {
                 input.owner_note = owner_note;
                 input.clear_owner_note = clear_owner_note;
                 input.note = note;
@@ -192,28 +197,58 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.due_at = Some(due_at);
                 input.note = note;
             }
-            TaskAction::SetReviewDueAt { review_due_at, note } => {
+            TaskAction::SetReviewDueAt {
+                review_due_at,
+                note,
+            } => {
                 input.review_due_at = Some(review_due_at);
                 input.note = note;
             }
-            TaskAction::Verify { verification_state, note } => {
+            TaskAction::Verify {
+                verification_state,
+                note,
+            } => {
                 input.verification_state = Some(verification_state);
                 input.note = note;
             }
-            TaskAction::Close { closure_summary, note } => {
+            TaskAction::Close {
+                closure_summary,
+                note,
+            } => {
                 input.closure_summary = Some(closure_summary);
                 input.note = note;
             }
-            TaskAction::Block { blocked_reason, note } => {
+            TaskAction::Block {
+                blocked_reason,
+                note,
+            } => {
                 input.blocked_reason = Some(blocked_reason);
                 input.note = note;
             }
-            TaskAction::Claim { acting_agent_id, note }
-            | TaskAction::Start { acting_agent_id, note }
-            | TaskAction::Resume { acting_agent_id, note }
-            | TaskAction::Pause { acting_agent_id, note }
-            | TaskAction::Yield { acting_agent_id, note }
-            | TaskAction::Complete { acting_agent_id, note } => {
+            TaskAction::Claim {
+                acting_agent_id,
+                note,
+            }
+            | TaskAction::Start {
+                acting_agent_id,
+                note,
+            }
+            | TaskAction::Resume {
+                acting_agent_id,
+                note,
+            }
+            | TaskAction::Pause {
+                acting_agent_id,
+                note,
+            }
+            | TaskAction::Yield {
+                acting_agent_id,
+                note,
+            }
+            | TaskAction::Complete {
+                acting_agent_id,
+                note,
+            } => {
                 input.acting_agent_id = Some(acting_agent_id);
                 input.note = note;
             }
@@ -221,13 +256,21 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.assigned_to = Some(assigned_to);
                 input.note = note;
             }
-            TaskAction::RecordDecision { author_agent_id, message_body } => {
+            TaskAction::RecordDecision {
+                author_agent_id,
+                message_body,
+            } => {
                 input.author_agent_id = Some(author_agent_id);
                 input.message_body = Some(message_body);
             }
             TaskAction::CreateHandoff {
-                from_agent_id, to_agent_id, handoff_type, handoff_summary,
-                requested_action, due_at, expires_at,
+                from_agent_id,
+                to_agent_id,
+                handoff_type,
+                handoff_summary,
+                requested_action,
+                due_at,
+                expires_at,
             } => {
                 input.from_agent_id = Some(from_agent_id);
                 input.to_agent_id = Some(to_agent_id);
@@ -237,15 +280,25 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.due_at = due_at;
                 input.expires_at = expires_at;
             }
-            TaskAction::PostCouncilMessage { author_agent_id, message_type, message_body } => {
+            TaskAction::PostCouncilMessage {
+                author_agent_id,
+                message_type,
+                message_body,
+            } => {
                 input.author_agent_id = Some(author_agent_id);
                 input.message_type = Some(message_type);
                 input.message_body = Some(message_body);
             }
             TaskAction::AttachEvidence {
-                source_kind, source_ref, label, summary,
-                related_handoff_id, related_session_id, related_memory_query,
-                related_symbol, related_file,
+                source_kind,
+                source_ref,
+                label,
+                summary,
+                related_handoff_id,
+                related_session_id,
+                related_memory_query,
+                related_symbol,
+                related_file,
             } => {
                 input.evidence_source_kind = Some(source_kind);
                 input.evidence_source_ref = Some(source_ref);
@@ -261,7 +314,10 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.follow_up_title = Some(title);
                 input.follow_up_description = description;
             }
-            TaskAction::LinkDependency { related_task_id, relationship_role } => {
+            TaskAction::LinkDependency {
+                related_task_id,
+                relationship_role,
+            } => {
                 input.related_task_id = Some(related_task_id);
                 input.relationship_role = Some(relationship_role);
             }
@@ -374,8 +430,7 @@ impl Store {
                 Ok(value) => return Ok(value),
                 Err(ref e) if attempts < max_retries && is_busy_error(e) => {
                     attempts += 1;
-                    let backoff =
-                        std::time::Duration::from_millis(50 * u64::from(attempts));
+                    let backoff = std::time::Duration::from_millis(50 * u64::from(attempts));
                     tracing::debug!(
                         attempt = attempts,
                         backoff_ms = backoff.as_millis(),

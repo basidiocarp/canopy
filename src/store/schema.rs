@@ -44,6 +44,7 @@ pub(crate) const BASE_SCHEMA: &str = r"
         closed_at TEXT NULL,
         due_at TEXT NULL,
         review_due_at TEXT NULL,
+        scope TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -268,6 +269,9 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         WHERE kind = 'parent'
         ",
     )?;
+
+    // File-scope conflict detection
+    ensure_column(conn, "tasks", "scope", "TEXT NOT NULL DEFAULT '[]'")?;
 
     // Track 1 (Foundation) columns
     ensure_column(conn, "tasks", "claimed_at", "TEXT NULL")?;

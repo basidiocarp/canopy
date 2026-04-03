@@ -295,12 +295,12 @@ canopy api task --task-id <parent_id>
 
 ### Usage Patterns
 
-**Pattern 1: Operator-driven (start here)**
+Pattern 1: Operator-driven (start here)
 
 You create tasks, paste handoffs into agents, verify results, update canopy.
 Full control, you're the orchestrator.
 
-**Pattern 2: Agent-driven**
+Pattern 2: Agent-driven
 
 Agents call canopy CLI themselves. Add to each agent's CLAUDE.md:
 
@@ -311,15 +311,16 @@ When assigned a canopy task, update your status:
 - On blocked: `canopy task status <id> --status blocked --reason "..."`
 ```
 
-**Pattern 3: MCP server (future)**
+Pattern 3: MCP server
 
-Canopy exposes tools via MCP (`canopy serve`), like hyphae and rhizome.
+Canopy exposes 30 tools via MCP (`canopy serve`), like hyphae and rhizome.
 Agents call `canopy_create_task`, `canopy_claim_task`, `canopy_update_status`
 as structured tool calls instead of CLI shell-outs. Lower token cost,
-structured responses, no shell parsing.
+structured responses, no shell parsing. The MCP server is registered in
+Claude Code's MCP config after `stipe init`.
 
 ## Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design decisions and data model
-- [docs/MVP.md](docs/MVP.md) — first release specification
-- [ROADMAP.md](ROADMAP.md) — project-level roadmap
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)—design decisions and data model
+- [docs/MVP.md](docs/MVP.md)—first release specification
+- [ROADMAP.md](ROADMAP.md)—project-level roadmap

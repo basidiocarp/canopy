@@ -733,7 +733,10 @@ fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_t
         .apply_task_operator_action(
             &task.task_id,
             "operator",
-            TaskAction::Claim { acting_agent_id: "codex-1", note: None },
+            TaskAction::Claim {
+                acting_agent_id: "codex-1",
+                note: None,
+            },
         )
         .expect("claim task with matching capabilities");
     assert_eq!(claimed.owner_agent_id.as_deref(), Some("codex-1"));
@@ -1092,7 +1095,10 @@ fn store_requires_prior_execution_before_resume_task() {
             .apply_task_operator_action(
                 &task.task_id,
                 "operator",
-                TaskAction::Resume { acting_agent_id: &agent.agent_id, note: None },
+                TaskAction::Resume {
+                    acting_agent_id: &agent.agent_id,
+                    note: None
+                },
             )
             .is_err()
     );
@@ -1101,7 +1107,10 @@ fn store_requires_prior_execution_before_resume_task() {
         .apply_task_operator_action(
             &task.task_id,
             "operator",
-            TaskAction::Start { acting_agent_id: &agent.agent_id, note: None },
+            TaskAction::Start {
+                acting_agent_id: &agent.agent_id,
+                note: None,
+            },
         )
         .expect("start task");
     assert_eq!(in_progress.status, TaskStatus::InProgress);
@@ -1110,7 +1119,10 @@ fn store_requires_prior_execution_before_resume_task() {
         .apply_task_operator_action(
             &task.task_id,
             "operator",
-            TaskAction::Pause { acting_agent_id: &agent.agent_id, note: None },
+            TaskAction::Pause {
+                acting_agent_id: &agent.agent_id,
+                note: None,
+            },
         )
         .expect("pause task");
     assert_eq!(paused.status, TaskStatus::Assigned);
@@ -1119,7 +1131,10 @@ fn store_requires_prior_execution_before_resume_task() {
         .apply_task_operator_action(
             &task.task_id,
             "operator",
-            TaskAction::Resume { acting_agent_id: &agent.agent_id, note: None },
+            TaskAction::Resume {
+                acting_agent_id: &agent.agent_id,
+                note: None,
+            },
         )
         .expect("resume task");
     assert_eq!(resumed.status, TaskStatus::InProgress);
@@ -1593,7 +1608,10 @@ fn review_operator_actions_record_decision_before_closeout() {
         .apply_task_operator_action(
             &task.task_id,
             "operator",
-            TaskAction::Close { closure_summary: "premature closeout", note: None },
+            TaskAction::Close {
+                closure_summary: "premature closeout",
+                note: None,
+            },
         )
         .expect_err("reject closeout before a recorded decision");
     assert!(
@@ -1684,7 +1702,10 @@ fn graph_operator_actions_update_relationships_and_status() {
         .apply_task_operator_action(
             &parent.task_id,
             "operator",
-            TaskAction::Block { blocked_reason: "waiting on dependency", note: None },
+            TaskAction::Block {
+                blocked_reason: "waiting on dependency",
+                note: None,
+            },
         )
         .expect("block task");
 
@@ -1701,7 +1722,9 @@ fn graph_operator_actions_update_relationships_and_status() {
         .apply_task_operator_action(
             &parent.task_id,
             "operator",
-            TaskAction::ResolveDependency { related_task_id: &blocker.task_id },
+            TaskAction::ResolveDependency {
+                related_task_id: &blocker.task_id,
+            },
         )
         .expect("resolve dependency");
     assert!(
@@ -1726,7 +1749,10 @@ fn graph_operator_actions_update_relationships_and_status() {
         .apply_task_operator_action(
             &parent.task_id,
             "operator",
-            TaskAction::CreateFollowUp { title: "Follow up A", description: None },
+            TaskAction::CreateFollowUp {
+                title: "Follow up A",
+                description: None,
+            },
         )
         .expect("create first follow-up");
     let follow_up_a = store
@@ -1740,7 +1766,9 @@ fn graph_operator_actions_update_relationships_and_status() {
         .apply_task_operator_action(
             &parent.task_id,
             "operator",
-            TaskAction::PromoteFollowUp { related_task_id: &follow_up_a.task_id },
+            TaskAction::PromoteFollowUp {
+                related_task_id: &follow_up_a.task_id,
+            },
         )
         .expect("promote follow-up");
     assert!(
@@ -1755,7 +1783,10 @@ fn graph_operator_actions_update_relationships_and_status() {
         .apply_task_operator_action(
             &parent.task_id,
             "operator",
-            TaskAction::CreateFollowUp { title: "Follow up B", description: None },
+            TaskAction::CreateFollowUp {
+                title: "Follow up B",
+                description: None,
+            },
         )
         .expect("create second follow-up");
     let follow_up_b = store
@@ -1786,11 +1817,7 @@ fn graph_operator_actions_update_relationships_and_status() {
         .expect("complete second follow-up");
 
     store
-        .apply_task_operator_action(
-            &parent.task_id,
-            "operator",
-            TaskAction::CloseFollowUpChain,
-        )
+        .apply_task_operator_action(&parent.task_id, "operator", TaskAction::CloseFollowUpChain)
         .expect("close follow-up chain");
     assert!(
         store

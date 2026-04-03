@@ -11,7 +11,11 @@ use serde_json::Value;
 use std::str::FromStr;
 
 /// Attach evidence to a task.
-pub fn tool_evidence_add(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_evidence_add(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -46,7 +50,11 @@ pub fn tool_evidence_add(store: &(impl CanopyStore + ?Sized), _agent_id: &str, a
 }
 
 /// List evidence for a task.
-pub fn tool_evidence_list(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_evidence_list(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -66,7 +74,11 @@ struct EvidenceVerificationReport {
 }
 
 /// Verify evidence references.
-pub fn tool_evidence_verify(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_evidence_verify(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = get_str(args, "task_id");
 
     let evidence = match task_id {

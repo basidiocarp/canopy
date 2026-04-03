@@ -5,7 +5,11 @@ use crate::store::CanopyStore;
 use super::{ToolResult, get_str, get_string_array, validate_required_string};
 
 /// Declare intent to modify files. Returns conflicts if any exist.
-pub fn tool_files_lock(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_files_lock(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(id) => id,
         Err(err) => return err,
@@ -33,7 +37,11 @@ pub fn tool_files_lock(store: &(impl CanopyStore + ?Sized), agent_id: &str, args
 }
 
 /// Release file locks for a task.
-pub fn tool_files_unlock(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_files_unlock(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(id) => id,
         Err(err) => return err,
@@ -46,7 +54,11 @@ pub fn tool_files_unlock(store: &(impl CanopyStore + ?Sized), _agent_id: &str, a
 }
 
 /// Check for conflicts without locking.
-pub fn tool_files_check(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_files_check(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let files = get_string_array(args, "files");
     if files.is_empty() {
         return ToolResult::error("missing required parameter: files".to_string());
@@ -64,7 +76,11 @@ pub fn tool_files_check(store: &(impl CanopyStore + ?Sized), agent_id: &str, arg
 }
 
 /// List all active file locks.
-pub fn tool_files_list_locks(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_files_list_locks(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let project_root = get_str(args, "project_root");
     let filter_agent_id = get_str(args, "agent_id");
 

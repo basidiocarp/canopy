@@ -9,9 +9,7 @@ use super::helpers::{
 use super::{
     HandoffOperatorActionInput, HandoffTiming, Store, StoreError, StoreResult, TaskEventWrite,
 };
-use crate::models::{
-    Handoff, HandoffStatus, HandoffType, OperatorActionKind, TaskEventType,
-};
+use crate::models::{Handoff, HandoffStatus, HandoffType, OperatorActionKind, TaskEventType};
 
 impl Store {
     /// Loads a single handoff by id.
@@ -344,10 +342,7 @@ impl Store {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub fn list_active_handoffs(
-        &self,
-        project_root: Option<&str>,
-    ) -> StoreResult<Vec<Handoff>> {
+    pub fn list_active_handoffs(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>> {
         if let Some(project_root) = project_root {
             let mut stmt = self.conn.prepare(
                 r"
@@ -361,7 +356,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_handoff)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             let mut stmt = self.conn.prepare(
                 r"
@@ -373,7 +369,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([], map_handoff)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         }
     }
 
@@ -401,7 +398,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_handoff)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_handoffs(None)
         }

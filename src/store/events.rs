@@ -46,8 +46,7 @@ impl Store {
         if task_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders: Vec<String> =
-            (1..=task_ids.len()).map(|i| format!("?{i}")).collect();
+        let placeholders: Vec<String> = (1..=task_ids.len()).map(|i| format!("?{i}")).collect();
         let limit_placeholder = task_ids.len() + 1;
         let limit_clause = if limit.is_some() {
             format!("LIMIT ?{limit_placeholder}")
@@ -106,7 +105,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_task_event)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_all_task_events()
         }

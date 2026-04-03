@@ -367,7 +367,7 @@ pub fn tool_definitions() -> Vec<Value> {
 
     tools.push(tool_def(
         "canopy_task_complete",
-        "Mark a task as completed with a structured closure summary and release any file locks.",
+        "Mark a task as completed with a structured closure summary and release any file locks. If handoff_path is provided, validates that all checklist items are checked and paste markers filled before allowing completion.",
         json!({
             "type": "object",
             "properties": {
@@ -387,6 +387,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "type": "string",
                     "enum": ["not_required", "pending", "verified", "failed"],
                     "description": "Verification outcome if verification was required"
+                },
+                "handoff_path": {
+                    "type": "string",
+                    "description": "Optional path to a handoff document. When provided, completion is rejected if checklist items remain unchecked or paste markers are empty."
                 }
             },
             "required": ["task_id", "agent_id", "summary"]
@@ -860,6 +864,25 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             },
             "required": ["path"]
+        }),
+    ));
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Completeness (1)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_check_handoff_completeness",
+        "Check whether a handoff document meets completion criteria. Returns checkbox counts, paste marker status, and optional verify script results. Use before requesting task completion.",
+        json!({
+            "type": "object",
+            "properties": {
+                "handoff_path": {
+                    "type": "string",
+                    "description": "Absolute path to the handoff markdown document"
+                }
+            },
+            "required": ["handoff_path"]
         }),
     ));
 

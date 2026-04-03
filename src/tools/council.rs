@@ -9,7 +9,11 @@ use serde_json::Value;
 use std::str::FromStr;
 
 /// Post a message to a task's council thread.
-pub fn tool_council_post(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_council_post(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -33,7 +37,11 @@ pub fn tool_council_post(store: &(impl CanopyStore + ?Sized), agent_id: &str, ar
 }
 
 /// Read the council thread for a task.
-pub fn tool_council_show(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_council_show(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,

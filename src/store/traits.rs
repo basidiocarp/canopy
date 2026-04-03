@@ -6,9 +6,7 @@ use crate::models::{
     Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship, TaskStatus, TaskSummary,
 };
 
-use super::{
-    EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate,
-};
+use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
 
 /// Trait covering all store operations used by tools, api, and MCP server.
 ///
@@ -33,10 +31,7 @@ pub trait CanopyStore {
 
     fn list_active_agents(&self) -> StoreResult<Vec<AgentRegistration>>;
 
-    fn list_stale_agents(
-        &self,
-        stale_threshold_secs: i64,
-    ) -> StoreResult<Vec<AgentRegistration>>;
+    fn list_stale_agents(&self, stale_threshold_secs: i64) -> StoreResult<Vec<AgentRegistration>>;
 
     fn list_agents_filtered(
         &self,
@@ -141,10 +136,7 @@ pub trait CanopyStore {
 
     // --- Task assignments ---
 
-    fn list_task_assignments(
-        &self,
-        task_id: Option<&str>,
-    ) -> StoreResult<Vec<TaskAssignment>>;
+    fn list_task_assignments(&self, task_id: Option<&str>) -> StoreResult<Vec<TaskAssignment>>;
 
     fn list_task_assignments_for_project(
         &self,
@@ -153,10 +145,7 @@ pub trait CanopyStore {
 
     // --- Task relationships ---
 
-    fn list_task_relationships(
-        &self,
-        task_id: Option<&str>,
-    ) -> StoreResult<Vec<TaskRelationship>>;
+    fn list_task_relationships(&self, task_id: Option<&str>) -> StoreResult<Vec<TaskRelationship>>;
 
     fn list_task_relationships_for_project(
         &self,
@@ -195,15 +184,9 @@ pub trait CanopyStore {
 
     fn list_pending_handoffs_for(&self, agent_id: &str) -> StoreResult<Vec<Handoff>>;
 
-    fn list_handoffs_for_project(
-        &self,
-        project_root: Option<&str>,
-    ) -> StoreResult<Vec<Handoff>>;
+    fn list_handoffs_for_project(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>>;
 
-    fn list_active_handoffs(
-        &self,
-        project_root: Option<&str>,
-    ) -> StoreResult<Vec<Handoff>>;
+    fn list_active_handoffs(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>>;
 
     // --- File lock operations ---
 
@@ -315,10 +298,7 @@ impl CanopyStore for super::Store {
         self.list_active_agents()
     }
 
-    fn list_stale_agents(
-        &self,
-        stale_threshold_secs: i64,
-    ) -> StoreResult<Vec<AgentRegistration>> {
+    fn list_stale_agents(&self, stale_threshold_secs: i64) -> StoreResult<Vec<AgentRegistration>> {
         self.list_stale_agents(stale_threshold_secs)
     }
 
@@ -461,10 +441,7 @@ impl CanopyStore for super::Store {
         self.list_recent_task_events(task_ids, limit)
     }
 
-    fn list_task_assignments(
-        &self,
-        task_id: Option<&str>,
-    ) -> StoreResult<Vec<TaskAssignment>> {
+    fn list_task_assignments(&self, task_id: Option<&str>) -> StoreResult<Vec<TaskAssignment>> {
         self.list_task_assignments(task_id)
     }
 
@@ -475,10 +452,7 @@ impl CanopyStore for super::Store {
         self.list_task_assignments_for_project(project_root)
     }
 
-    fn list_task_relationships(
-        &self,
-        task_id: Option<&str>,
-    ) -> StoreResult<Vec<TaskRelationship>> {
+    fn list_task_relationships(&self, task_id: Option<&str>) -> StoreResult<Vec<TaskRelationship>> {
         self.list_task_relationships(task_id)
     }
 
@@ -499,7 +473,15 @@ impl CanopyStore for super::Store {
         requested_action: Option<&str>,
         timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff> {
-        self.create_handoff(task_id, from_agent_id, to_agent_id, handoff_type, summary, requested_action, timing)
+        self.create_handoff(
+            task_id,
+            from_agent_id,
+            to_agent_id,
+            handoff_type,
+            summary,
+            requested_action,
+            timing,
+        )
     }
 
     fn resolve_handoff(
@@ -529,17 +511,11 @@ impl CanopyStore for super::Store {
         self.list_pending_handoffs_for(agent_id)
     }
 
-    fn list_handoffs_for_project(
-        &self,
-        project_root: Option<&str>,
-    ) -> StoreResult<Vec<Handoff>> {
+    fn list_handoffs_for_project(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>> {
         self.list_handoffs_for_project(project_root)
     }
 
-    fn list_active_handoffs(
-        &self,
-        project_root: Option<&str>,
-    ) -> StoreResult<Vec<Handoff>> {
+    fn list_active_handoffs(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>> {
         self.list_active_handoffs(project_root)
     }
 
@@ -648,7 +624,7 @@ impl CanopyStore for super::Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{TaskStatus, VerificationState, TaskPriority, TaskSeverity};
+    use crate::models::{TaskPriority, TaskSeverity, TaskStatus, VerificationState};
     use crate::store::StoreError;
 
     /// Minimal mock that implements only the methods needed for `tool_task_get`.
@@ -691,6 +667,7 @@ mod tests {
             closed_at: None,
             due_at: None,
             review_due_at: None,
+            scope: Vec::new(),
             created_at: "2025-01-01T00:00:00Z".to_string(),
             updated_at: "2025-01-01T00:00:00Z".to_string(),
         }
@@ -788,10 +765,14 @@ mod tests {
         let result = tools::task::tool_task_get(&store, "agent-1", &json!({"task_id": "task-001"}));
         assert!(!result.is_error, "expected success, got error");
         let text = &result.content[0].text;
-        assert!(text.contains("Fix the widget"), "response should contain task title");
+        assert!(
+            text.contains("Fix the widget"),
+            "response should contain task title"
+        );
 
         // Missing task returns an error result, not a panic
-        let result = tools::task::tool_task_get(&store, "agent-1", &json!({"task_id": "nonexistent"}));
+        let result =
+            tools::task::tool_task_get(&store, "agent-1", &json!({"task_id": "nonexistent"}));
         assert!(result.is_error, "expected error for missing task");
     }
 }

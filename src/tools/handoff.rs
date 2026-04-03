@@ -12,7 +12,11 @@ use serde_json::Value;
 use std::str::FromStr;
 
 /// Create a new handoff for a task.
-pub fn tool_handoff_create(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_handoff_create(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -41,40 +45,70 @@ pub fn tool_handoff_create(store: &(impl CanopyStore + ?Sized), agent_id: &str, 
         expires_at: get_str(args, "expires_at"),
     };
 
-    match store.create_handoff(task_id, agent_id, to_agent_id, handoff_type, summary, requested_action, timing) {
+    match store.create_handoff(
+        task_id,
+        agent_id,
+        to_agent_id,
+        handoff_type,
+        summary,
+        requested_action,
+        timing,
+    ) {
         Ok(handoff) => ToolResult::json(&handoff),
         Err(e) => ToolResult::error(format!("failed to create handoff: {e}")),
     }
 }
 
 /// Accept a pending handoff.
-pub fn tool_handoff_accept(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_handoff_accept(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let handoff_id = match validate_required_string(args, "handoff_id") {
         Ok(v) => v,
         Err(e) => return e,
     };
 
-    match store.resolve_handoff_with_actor(handoff_id, HandoffStatus::Accepted, agent_id, Some(agent_id)) {
+    match store.resolve_handoff_with_actor(
+        handoff_id,
+        HandoffStatus::Accepted,
+        agent_id,
+        Some(agent_id),
+    ) {
         Ok(handoff) => ToolResult::json(&handoff),
         Err(e) => ToolResult::error(format!("failed to accept handoff: {e}")),
     }
 }
 
 /// Reject a pending handoff.
-pub fn tool_handoff_reject(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_handoff_reject(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let handoff_id = match validate_required_string(args, "handoff_id") {
         Ok(v) => v,
         Err(e) => return e,
     };
 
-    match store.resolve_handoff_with_actor(handoff_id, HandoffStatus::Rejected, agent_id, Some(agent_id)) {
+    match store.resolve_handoff_with_actor(
+        handoff_id,
+        HandoffStatus::Rejected,
+        agent_id,
+        Some(agent_id),
+    ) {
         Ok(handoff) => ToolResult::json(&handoff),
         Err(e) => ToolResult::error(format!("failed to reject handoff: {e}")),
     }
 }
 
 /// Complete a handoff after finishing the work.
-pub fn tool_handoff_complete(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_handoff_complete(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let handoff_id = match validate_required_string(args, "handoff_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -89,12 +123,15 @@ pub fn tool_handoff_complete(store: &(impl CanopyStore + ?Sized), agent_id: &str
 /// List handoffs filtered by schema-defined parameters: `task_id`, `to_agent_id`,
 /// `from_agent_id`, `status`. With no filters, defaults to pending handoffs for
 /// this agent.
-pub fn tool_handoff_list(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_handoff_list(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = get_str(args, "task_id");
     let to_agent = get_str(args, "to_agent_id");
     let from_agent = get_str(args, "from_agent_id");
-    let status_filter = get_str(args, "status")
-        .and_then(|s| HandoffStatus::from_str(s).ok());
+    let status_filter = get_str(args, "status").and_then(|s| HandoffStatus::from_str(s).ok());
 
     // If a task_id is provided, scope to that task
     if let Some(tid) = task_id {

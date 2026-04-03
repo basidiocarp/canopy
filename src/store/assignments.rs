@@ -61,7 +61,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_task_assignment)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_task_assignments(None)
         }

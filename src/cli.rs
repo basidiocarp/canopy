@@ -194,6 +194,9 @@ pub enum TaskCommand {
         auto_review: bool,
         #[arg(long, default_value_t = false)]
         verification_required: bool,
+        /// Comma-separated file paths or globs this task will modify
+        #[arg(long, value_delimiter = ',')]
+        scope: Vec<String>,
     },
     Assign {
         #[arg(long)]
@@ -210,6 +213,15 @@ pub enum TaskCommand {
         agent_id: String,
         #[arg(value_name = "TASK_ID")]
         task_id: String,
+        /// Force claim despite file scope conflicts (advisory mode)
+        #[arg(long)]
+        force: bool,
+        /// Add blocking dependency on this task before claiming (sequential mode)
+        #[arg(long)]
+        after: Option<String>,
+        /// Work in isolated git worktree
+        #[arg(long)]
+        worktree: bool,
     },
     Complete {
         #[arg(long, required = true)]

@@ -2,8 +2,7 @@ use crate::models::{
     AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentRole, AgentStatus,
     EvidenceRef, EvidenceSourceKind, ExecutionActionKind, FileLock, Handoff, HandoffStatus,
     HandoffType, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskRelationship,
-    TaskRelationshipKind, TaskStatus, VerificationState, capabilities_match,
-    parse_capabilities,
+    TaskRelationshipKind, TaskStatus, VerificationState, capabilities_match, parse_capabilities,
 };
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::str::FromStr;
@@ -12,8 +11,8 @@ use time::format_description::well_known::Rfc3339;
 use ulid::Ulid;
 
 use super::{
-    EvidenceLinkRefs, HandoffTiming, StoreError, StoreResult, TaskCreationOptions,
-    TaskEventWrite, AgentHeartbeatWrite, EVIDENCE_REF_SCHEMA_VERSION,
+    AgentHeartbeatWrite, EVIDENCE_REF_SCHEMA_VERSION, EvidenceLinkRefs, HandoffTiming, StoreError,
+    StoreResult, TaskCreationOptions, TaskEventWrite,
 };
 
 // --- Row Mappers ---
@@ -66,8 +65,11 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_at: row.get(22)?,
         due_at: row.get(23)?,
         review_due_at: row.get(24)?,
-        created_at: row.get(25)?,
-        updated_at: row.get(26)?,
+        scope: row
+            .get::<_, Option<String>>(25)?
+            .map_or_else(Vec::new, |json| parse_capabilities(&json)),
+        created_at: row.get(26)?,
+        updated_at: row.get(27)?,
     })
 }
 
@@ -141,9 +143,7 @@ pub(crate) fn map_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<Evidence
     })
 }
 
-pub(crate) fn map_task_relationship(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<TaskRelationship> {
+pub(crate) fn map_task_relationship(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRelationship> {
     Ok(TaskRelationship {
         relationship_id: row.get(0)?,
         source_task_id: row.get(1)?,
@@ -240,7 +240,7 @@ pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreR
                required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-               created_at, updated_at
+               scope, created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
         ",
@@ -569,6 +569,7 @@ pub(crate) fn create_task_in_connection(
         closed_at: None,
         due_at: None,
         review_due_at: None,
+        scope: options.scope.clone(),
         created_at: String::new(),
         updated_at: String::new(),
     };
@@ -578,8 +579,8 @@ pub(crate) fn create_task_in_connection(
             task_id, title, description, requested_by, project_root, required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
-            closed_by, closure_summary, closed_at, due_at, review_due_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -607,6 +608,7 @@ pub(crate) fn create_task_in_connection(
             task.closed_at,
             task.due_at,
             task.review_due_at,
+            serialize_capabilities(&task.scope)?,
         ],
     )?;
     record_task_event_in_connection(
@@ -1807,6 +1809,7 @@ fn create_review_subtasks_in_connection(
                 required_capabilities: vec!["code-review".to_string()],
                 auto_review: false,
                 verification_required: false,
+                scope: Vec::new(),
             },
         )?;
         set_task_priority_in_connection(conn, &review_task.task_id, review_priority)?;

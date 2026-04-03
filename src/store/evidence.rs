@@ -95,7 +95,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_evidence)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_all_evidence()
         }

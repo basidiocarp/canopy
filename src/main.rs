@@ -8,7 +8,7 @@ use canopy::mcp;
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, EvidenceRef, EvidenceSourceKind,
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
-    TaskAction, TaskStatus, VerificationState,
+    TaskAction, TaskRelationshipKind, TaskStatus, VerificationState,
 };
 use canopy::store::{
     EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
@@ -138,12 +138,14 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             required_capabilities,
             auto_review,
             verification_required,
+            scope,
         } => {
             let options = TaskCreationOptions {
                 required_role,
                 required_capabilities,
                 auto_review,
                 verification_required,
+                scope,
             };
             let task = if let Some(parent_task_id) = parent.as_deref() {
                 store.create_subtask_with_options(
@@ -298,11 +300,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 related_task_id.as_deref(),
                 relationship_role,
             )?;
-            let task = store.apply_task_operator_action(
-                &task_id,
-                &changed_by,
-                task_action,
-            )?;
+            let task = store.apply_task_operator_action(&task_id, &changed_by, task_action)?;
             print_json(&task)?;
         }
         TaskCommand::Verify {
@@ -348,7 +346,67 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         TaskCommand::Show { task_id } => {
             print_json(&store.get_task(&task_id)?)?;
         }
-        TaskCommand::Claim { agent_id, task_id } => {
+        TaskCommand::Claim {
+            agent_id,
+            task_id,
+            force,
+            after,
+            worktree,
+        } => {
+            // Sequential mode: add BlockedBy relationship before claiming
+            if let Some(ref blocker_id) = after {
+                store.add_task_relationship(
+                    &task_id,
+                    blocker_id,
+                    TaskRelationshipKind::Blocks,
+                    &agent_id,
+                )?;
+                eprintln!("Added dependency: {task_id} blocked by {blocker_id}");
+            }
+
+            // Worktree isolation: record worktree ID in task metadata note
+            if worktree {
+                let worktree_id = format!("canopy-{}", &task_id[..task_id.len().min(8)]);
+                store.update_task_status(
+                    &task_id,
+                    TaskStatus::Open,
+                    &agent_id,
+                    TaskStatusUpdate {
+                        event_note: Some(&format!("worktree_id={worktree_id}")),
+                        ..Default::default()
+                    },
+                )?;
+                eprintln!("Task {task_id} will use worktree: {worktree_id}");
+            }
+
+            // Scope conflict check before claiming
+            if !force {
+                let task = store.get_task(&task_id)?;
+                if !task.scope.is_empty() {
+                    let conflicts = store.find_scope_conflicts(&task_id, &task.scope)?;
+                    if !conflicts.is_empty() {
+                        let detail = conflicts
+                            .iter()
+                            .map(|c| {
+                                format!(
+                                    "  {} (task {}, agent {}): {}",
+                                    c.task_title,
+                                    c.task_id,
+                                    c.agent_id,
+                                    c.overlapping_paths.join(", ")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        anyhow::bail!(
+                            "File scope conflict detected:\n{detail}\n\
+                             Resolve with: --after <task-id> (sequential), \
+                             --worktree (isolated), or --force (advisory)"
+                        );
+                    }
+                }
+            }
+
             let claimed_task = store
                 .atomic_claim_task(&agent_id, &task_id)?
                 .ok_or_else(|| anyhow::anyhow!("task already claimed or not found"))?;
@@ -404,6 +462,7 @@ struct ImportedHandoff {
 struct ParsedHandoffStep {
     description: Option<String>,
     step_marker: String,
+    scope: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -473,7 +532,11 @@ fn cli_action_to_task_action<'a>(
             severity: severity.ok_or_else(|| anyhow::anyhow!("{action} requires --severity"))?,
             note,
         },
-        K::UpdateTaskNote => TaskAction::UpdateNote { owner_note, clear_owner_note, note },
+        K::UpdateTaskNote => TaskAction::UpdateNote {
+            owner_note,
+            clear_owner_note,
+            note,
+        },
         K::SetTaskDueAt => TaskAction::SetDueAt {
             due_at: require(due_at, "due-at")?,
             note,
@@ -575,8 +638,12 @@ fn cli_action_to_task_action<'a>(
             related_task_id: require(related_task_id, "related-task-id")?,
         },
         K::CloseFollowUpChain => TaskAction::CloseFollowUpChain,
-        K::AcceptHandoff | K::RejectHandoff | K::CancelHandoff
-        | K::CompleteHandoff | K::FollowUpHandoff | K::ExpireHandoff => {
+        K::AcceptHandoff
+        | K::RejectHandoff
+        | K::CancelHandoff
+        | K::CompleteHandoff
+        | K::FollowUpHandoff
+        | K::ExpireHandoff => {
             anyhow::bail!("operator action {action} is not valid for tasks")
         }
     };
@@ -629,6 +696,7 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
             &TaskCreationOptions {
                 required_role: Some(AgentRole::Implementer),
                 verification_required: true,
+                scope: step.scope,
                 ..TaskCreationOptions::default()
             },
         )?;
@@ -1005,9 +1073,11 @@ fn extract_handoff_steps(content: &str) -> Vec<ParsedHandoffStep> {
                       current_body: &mut Vec<String>| {
         if let Some(step_marker) = current_marker.take() {
             let description = current_body.join("\n").trim().to_string();
+            let scope = canopy::scope::extract_step_scope(&description);
             steps.push(ParsedHandoffStep {
                 description: (!description.is_empty()).then_some(description),
                 step_marker,
+                scope,
             });
             current_body.clear();
         }
@@ -1259,12 +1329,7 @@ fn handle_work_queue(
     let role = agent.role.as_ref().map(ToString::to_string);
     let capabilities = agent.capabilities.clone();
 
-    let tasks = store.query_available_tasks(
-        role.as_deref(),
-        &capabilities,
-        project_root,
-        limit,
-    )?;
+    let tasks = store.query_available_tasks(role.as_deref(), &capabilities, project_root, limit)?;
 
     if json {
         print_json(&tasks)?;
@@ -1284,12 +1349,7 @@ fn print_work_queue_table(tasks: &[Task]) {
     println!("Available tasks ({}):", tasks.len());
     for (idx, task) in tasks.iter().enumerate() {
         let priority_str = task.priority.to_string();
-        println!(
-            "  {:02}. [{}] {}",
-            idx + 1,
-            priority_str,
-            task.title
-        );
+        println!("  {:02}. [{}] {}", idx + 1, priority_str, task.title);
     }
 }
 

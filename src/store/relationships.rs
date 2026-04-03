@@ -5,8 +5,8 @@ use super::helpers::{
 };
 use super::{Store, StoreError, StoreResult, TaskEventWrite};
 use crate::models::{
-    OperatorActionKind, RelatedTask, Task, TaskEventType, TaskRelationship,
-    TaskRelationshipKind, TaskRelationshipRole,
+    OperatorActionKind, RelatedTask, Task, TaskEventType, TaskRelationship, TaskRelationshipKind,
+    TaskRelationshipRole,
 };
 
 impl Store {
@@ -122,7 +122,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_task_relationship)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_task_relationships(None)
         }
@@ -376,5 +377,76 @@ impl Store {
         };
 
         Ok(Some(task))
+    }
+
+    /// Creates a task relationship between two tasks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either task does not exist, or they belong to
+    /// different projects.
+    pub fn add_task_relationship(
+        &self,
+        source_task_id: &str,
+        target_task_id: &str,
+        kind: TaskRelationshipKind,
+        created_by: &str,
+    ) -> StoreResult<TaskRelationship> {
+        use super::helpers::create_task_relationship_in_connection;
+        self.in_transaction(|conn| {
+            create_task_relationship_in_connection(
+                conn,
+                source_task_id,
+                target_task_id,
+                kind,
+                created_by,
+            )
+        })
+    }
+
+    /// Finds in-progress tasks whose scope overlaps with the given scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn find_scope_conflicts(
+        &self,
+        excluding_task_id: &str,
+        scope: &[String],
+    ) -> StoreResult<Vec<crate::models::ScopeConflict>> {
+        use crate::scope::scope_overlaps;
+
+        let mut stmt = self.conn.prepare(
+            r"
+            SELECT task_id, title, owner_agent_id, scope
+            FROM tasks
+            WHERE status IN ('assigned', 'in_progress')
+              AND task_id != ?1
+              AND scope != '[]'
+            ",
+        )?;
+        let rows = stmt.query_map([excluding_task_id], |row| {
+            let task_id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let agent_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+            let scope_json: String = row.get(3)?;
+            let other_scope: Vec<String> = serde_json::from_str(&scope_json).unwrap_or_default();
+            Ok((task_id, title, agent_id, other_scope))
+        })?;
+
+        let mut conflicts = Vec::new();
+        for row in rows {
+            let (task_id, title, agent_id, other_scope) = row?;
+            let overlaps = scope_overlaps(scope, &other_scope);
+            if !overlaps.is_empty() {
+                conflicts.push(crate::models::ScopeConflict {
+                    task_id,
+                    task_title: title,
+                    agent_id,
+                    overlapping_paths: overlaps,
+                });
+            }
+        }
+        Ok(conflicts)
     }
 }

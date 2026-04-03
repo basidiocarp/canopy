@@ -19,8 +19,8 @@ use super::{
 };
 use crate::models::{
     AgentRole, HandoffStatus, HandoffType, OperatorActionKind, Task, TaskAction, TaskEventType,
-    TaskRelationship, TaskRelationshipRole, TaskStatus, TaskSummary,
-    VerificationState, capabilities_match, derive_review_cycle_context,
+    TaskRelationship, TaskRelationshipRole, TaskStatus, TaskSummary, VerificationState,
+    capabilities_match, derive_review_cycle_context,
 };
 
 use super::helpers::{handoff_is_expired, parse_enum_value};
@@ -194,7 +194,7 @@ impl Store {
                    required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             ORDER BY rowid
             ",
@@ -782,7 +782,7 @@ impl Store {
                    required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
         ";
 
@@ -791,7 +791,11 @@ impl Store {
             conditions.push("project_root = ?1".to_string());
         }
 
-        let status_placeholder_start = if project_root.is_some() { 2usize } else { 1usize };
+        let status_placeholder_start = if project_root.is_some() {
+            2usize
+        } else {
+            1usize
+        };
         let status_count = status.map_or(0, <[TaskStatus]>::len);
         if status_count > 0 {
             let placeholders: Vec<String> = (status_placeholder_start
@@ -964,7 +968,7 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1018,7 +1022,7 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC

@@ -5,7 +5,11 @@ use crate::store::CanopyStore;
 use super::{ToolResult, get_bounded_i64, get_str, validate_required_string};
 
 /// List available tasks matching agent capabilities.
-pub fn tool_work_queue(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_work_queue(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let limit = get_bounded_i64(args, "limit", 5, 1, 20);
     let project_root = get_str(args, "project_root");
 
@@ -36,7 +40,11 @@ pub fn tool_work_queue(store: &(impl CanopyStore + ?Sized), agent_id: &str, args
 }
 
 /// Atomically claim a task.
-pub fn tool_task_claim(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_claim(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(id) => id,
         Err(err) => return err,
@@ -52,7 +60,11 @@ pub fn tool_task_claim(store: &(impl CanopyStore + ?Sized), agent_id: &str, args
 }
 
 /// Release a claimed task back to the open pool.
-pub fn tool_task_yield(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_yield(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(id) => id,
         Err(err) => return err,
@@ -86,7 +98,9 @@ pub fn tool_task_yield(store: &(impl CanopyStore + ?Sized), agent_id: &str, args
             // remain invisible to query_available_tasks (which filters on
             // owner_agent_id IS NULL). Clear the assignment explicitly.
             if let Err(err) = store.clear_task_assignment(task_id) {
-                return ToolResult::error(format!("yield status updated but failed to clear assignment: {err}"));
+                return ToolResult::error(format!(
+                    "yield status updated but failed to clear assignment: {err}"
+                ));
             }
             ToolResult::json(&json!({
                 "ack": true,

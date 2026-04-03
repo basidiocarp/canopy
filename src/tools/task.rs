@@ -9,7 +9,10 @@
 // - tool_task_snapshot
 
 use crate::api::{self, SnapshotOptions};
-use crate::models::{AgentRole, SnapshotPreset, TaskAction, TaskPriority, TaskRelationshipRole, TaskSeverity, TaskStatus};
+use crate::models::{
+    AgentRole, SnapshotPreset, TaskAction, TaskPriority, TaskRelationshipRole, TaskSeverity,
+    TaskStatus,
+};
 use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions, TaskStatusUpdate};
 use crate::tools::{ToolResult, get_str, get_string_array, validate_required_string};
 use serde::Serialize;
@@ -17,15 +20,18 @@ use serde_json::Value;
 use std::str::FromStr;
 
 /// Create a new task.
-pub fn tool_task_create(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_create(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let title = match validate_required_string(args, "title") {
         Ok(v) => v,
         Err(e) => return e,
     };
     let description = get_str(args, "description");
     let project_root = get_str(args, "project_root").unwrap_or(".");
-    let required_role = get_str(args, "required_role")
-        .and_then(|s| AgentRole::from_str(s).ok());
+    let required_role = get_str(args, "required_role").and_then(|s| AgentRole::from_str(s).ok());
     let required_capabilities = get_string_array(args, "required_capabilities");
     let verification_required = args
         .get("verification_required")
@@ -59,7 +65,11 @@ struct DecomposeResult {
 }
 
 /// Create subtasks from a parent task.
-pub fn tool_task_decompose(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_decompose(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let parent_task_id = match validate_required_string(args, "parent_task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -97,11 +107,16 @@ pub fn tool_task_decompose(store: &(impl CanopyStore + ?Sized), agent_id: &str, 
             ..TaskCreationOptions::default()
         };
 
-        let task =
-            match store.create_subtask_with_options(parent_task_id, title, description, agent_id, &options) {
-                Ok(t) => t,
-                Err(e) => return ToolResult::error(format!("failed to create subtask: {e}")),
-            };
+        let task = match store.create_subtask_with_options(
+            parent_task_id,
+            title,
+            description,
+            agent_id,
+            &options,
+        ) {
+            Ok(t) => t,
+            Err(e) => return ToolResult::error(format!("failed to create subtask: {e}")),
+        };
 
         // Resolve blocked_by based on depends_on_index
         let mut blocked_by = Vec::new();
@@ -126,7 +141,11 @@ pub fn tool_task_decompose(store: &(impl CanopyStore + ?Sized), agent_id: &str, 
 }
 
 /// Get task detail by ID.
-pub fn tool_task_get(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_get(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -139,7 +158,11 @@ pub fn tool_task_get(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args:
 }
 
 /// List tasks with optional filters.
-pub fn tool_task_list(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_list(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let assigned_to = get_str(args, "assigned_to");
     let project_root = get_str(args, "project_root");
 
@@ -182,7 +205,11 @@ pub fn tool_task_list(store: &(impl CanopyStore + ?Sized), agent_id: &str, args:
 }
 
 /// Transition task status.
-pub fn tool_task_update_status(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_update_status(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -197,7 +224,11 @@ pub fn tool_task_update_status(store: &(impl CanopyStore + ?Sized), agent_id: &s
     let reason = get_str(args, "reason");
 
     let update = TaskStatusUpdate {
-        blocked_reason: if status == TaskStatus::Blocked { reason } else { None },
+        blocked_reason: if status == TaskStatus::Blocked {
+            reason
+        } else {
+            None
+        },
         event_note: reason,
         ..TaskStatusUpdate::default()
     };
@@ -209,7 +240,15 @@ pub fn tool_task_update_status(store: &(impl CanopyStore + ?Sized), agent_id: &s
 }
 
 /// Mark task complete with evidence.
-pub fn tool_task_complete(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+///
+/// If `handoff_path` is provided, validates that the handoff document meets
+/// completion criteria before allowing the transition. Tasks without a
+/// handoff path bypass the check for backward compatibility.
+pub fn tool_task_complete(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -218,6 +257,26 @@ pub fn tool_task_complete(store: &(impl CanopyStore + ?Sized), agent_id: &str, a
         Ok(v) => v,
         Err(e) => return e,
     };
+
+    // Gate: if a handoff path is provided, check completeness first
+    if let Some(handoff_path_str) = get_str(args, "handoff_path") {
+        let handoff_path = std::path::Path::new(handoff_path_str);
+        match crate::handoff_check::check_completeness(handoff_path) {
+            Ok(report) => {
+                if !report.is_complete {
+                    return ToolResult::error(format!(
+                        "completion rejected: {}",
+                        crate::handoff_check::format_incomplete_report(&report)
+                    ));
+                }
+            }
+            Err(e) => {
+                return ToolResult::error(format!(
+                    "failed to check handoff completeness: {e}"
+                ));
+            }
+        }
+    }
 
     let update = TaskStatusUpdate {
         closure_summary: Some(summary),
@@ -243,7 +302,11 @@ pub fn tool_task_complete(store: &(impl CanopyStore + ?Sized), agent_id: &str, a
 }
 
 /// Mark task as blocked.
-pub fn tool_task_block(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_task_block(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let task_id = match validate_required_string(args, "task_id") {
         Ok(v) => v,
         Err(e) => return e,
@@ -281,14 +344,15 @@ pub fn tool_task_block(store: &(impl CanopyStore + ?Sized), agent_id: &str, args
 }
 
 /// Operator dashboard snapshot view.
-pub fn tool_task_snapshot(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
-    let preset = get_str(args, "preset")
-        .and_then(|s| SnapshotPreset::from_str(s).ok());
+pub fn tool_task_snapshot(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
+    let preset = get_str(args, "preset").and_then(|s| SnapshotPreset::from_str(s).ok());
     let project_root = get_str(args, "project_root");
-    let priority_at_least = get_str(args, "priority")
-        .and_then(|s| TaskPriority::from_str(s).ok());
-    let severity_at_least = get_str(args, "severity")
-        .and_then(|s| TaskSeverity::from_str(s).ok());
+    let priority_at_least = get_str(args, "priority").and_then(|s| TaskPriority::from_str(s).ok());
+    let severity_at_least = get_str(args, "severity").and_then(|s| TaskSeverity::from_str(s).ok());
 
     let options = SnapshotOptions {
         project_root,

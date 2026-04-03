@@ -1,3 +1,4 @@
+pub mod completeness;
 pub mod council;
 pub mod evidence;
 pub mod files;
@@ -78,7 +79,8 @@ pub fn get_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 ///
 /// Returns a `ToolResult` error if the key is missing or not a string.
 pub fn validate_required_string<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolResult> {
-    get_str(args, key).ok_or_else(|| ToolResult::error(format!("missing required parameter: {key}")))
+    get_str(args, key)
+        .ok_or_else(|| ToolResult::error(format!("missing required parameter: {key}")))
 }
 
 /// Extract an integer parameter with bounds clamping.
@@ -106,7 +108,12 @@ pub fn get_string_array(args: &Value, key: &str) -> Vec<String> {
 
 /// Dispatch a tool call to the appropriate handler.
 #[must_use]
-pub fn dispatch_tool(store: &(impl CanopyStore + ?Sized), agent_id: &str, name: &str, args: &Value) -> ToolResult {
+pub fn dispatch_tool(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    name: &str,
+    args: &Value,
+) -> ToolResult {
     match name {
         "canopy_register" => identity::tool_register(store, agent_id, args),
         "canopy_heartbeat" => identity::tool_heartbeat(store, agent_id, args),
@@ -138,6 +145,9 @@ pub fn dispatch_tool(store: &(impl CanopyStore + ?Sized), agent_id: &str, name: 
         "canopy_council_post" => council::tool_council_post(store, agent_id, args),
         "canopy_council_show" => council::tool_council_show(store, agent_id, args),
         "canopy_import_handoff" => import::tool_import_handoff(store, agent_id, args),
+        "canopy_check_handoff_completeness" => {
+            completeness::tool_check_handoff_completeness(store, agent_id, args)
+        }
         _ => ToolResult::error(format!("unknown tool: {name}")),
     }
 }

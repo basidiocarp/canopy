@@ -6,7 +6,11 @@ use crate::store::CanopyStore;
 use super::{ToolResult, get_str, get_string_array};
 
 /// Register or update this agent.
-pub fn tool_register(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_register(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let role = get_str(args, "role").and_then(|r| r.parse::<AgentRole>().ok());
     let capabilities = get_string_array(args, "capabilities");
     let model = get_str(args, "model").unwrap_or("unknown").to_string();
@@ -14,8 +18,12 @@ pub fn tool_register(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: 
     let worktree_id = get_str(args, "worktree_id").unwrap_or("main").to_string();
 
     let host_id = get_str(args, "host_id").unwrap_or(agent_id).to_string();
-    let host_type = get_str(args, "host_type").unwrap_or("claude-code").to_string();
-    let host_instance = get_str(args, "host_instance").unwrap_or(agent_id).to_string();
+    let host_type = get_str(args, "host_type")
+        .unwrap_or("claude-code")
+        .to_string();
+    let host_instance = get_str(args, "host_instance")
+        .unwrap_or(agent_id)
+        .to_string();
 
     let registration = AgentRegistration {
         agent_id: agent_id.to_string(),
@@ -39,7 +47,11 @@ pub fn tool_register(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: 
 }
 
 /// Send heartbeat, get notifications.
-pub fn tool_heartbeat(store: &(impl CanopyStore + ?Sized), agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_heartbeat(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let status = get_str(args, "status")
         .and_then(|s| s.parse::<AgentStatus>().ok())
         .unwrap_or(AgentStatus::Idle);
@@ -68,7 +80,11 @@ pub fn tool_heartbeat(store: &(impl CanopyStore + ?Sized), agent_id: &str, args:
 }
 
 /// Return full agent state.
-pub fn tool_whoami(store: &(impl CanopyStore + ?Sized), agent_id: &str, _args: &Value) -> ToolResult {
+pub fn tool_whoami(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    _args: &Value,
+) -> ToolResult {
     let agent = match store.get_agent(agent_id) {
         Ok(a) => a,
         Err(err) => return ToolResult::error(format!("agent not found: {err}")),
@@ -98,7 +114,11 @@ pub fn tool_whoami(store: &(impl CanopyStore + ?Sized), agent_id: &str, _args: &
 }
 
 /// Situational awareness across all agents.
-pub fn tool_situation(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args: &Value) -> ToolResult {
+pub fn tool_situation(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
     let project_root = get_str(args, "project_root");
 
     let agents = match store.list_active_agents() {
@@ -112,7 +132,10 @@ pub fn tool_situation(store: &(impl CanopyStore + ?Sized), _agent_id: &str, args
     };
 
     let open_handoffs = match store.list_handoffs(None) {
-        Ok(h) => h.into_iter().filter(|h| h.status == crate::models::HandoffStatus::Open).count(),
+        Ok(h) => h
+            .into_iter()
+            .filter(|h| h.status == crate::models::HandoffStatus::Open)
+            .count(),
         Err(err) => return ToolResult::error(format!("failed to list handoffs: {err}")),
     };
 

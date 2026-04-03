@@ -104,7 +104,7 @@ fn test_dispatch_tools_are_in_schema() {
 fn test_tool_count_matches() {
     let schema_count = canopy::mcp::schema::tool_definitions().len();
     assert_eq!(
-        schema_count, 30,
-        "Expected 30 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
+        schema_count, 31,
+        "Expected 31 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
     );
 }

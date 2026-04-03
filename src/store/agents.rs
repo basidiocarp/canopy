@@ -5,9 +5,7 @@ use super::helpers::{
     serialize_capabilities, validate_agent_registration, validate_agent_task_link,
 };
 use super::{AgentHeartbeatWrite, Store, StoreError, StoreResult};
-use crate::models::{
-    AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus,
-};
+use crate::models::{AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus};
 
 impl Store {
     /// Registers or refreshes an agent entry in the local registry.
@@ -154,7 +152,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([project_root], map_agent)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             self.list_agents()
         }
@@ -165,7 +164,10 @@ impl Store {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub fn list_stale_agents(&self, stale_threshold_secs: i64) -> StoreResult<Vec<AgentRegistration>> {
+    pub fn list_stale_agents(
+        &self,
+        stale_threshold_secs: i64,
+    ) -> StoreResult<Vec<AgentRegistration>> {
         let mut stmt = self.conn.prepare(
             r"
             SELECT agent_id, host_id, host_type, host_instance, model,
@@ -381,7 +383,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map(params![project_root, lim], map_agent_heartbeat)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         } else {
             let mut stmt = self.conn.prepare(
                 r"
@@ -392,7 +395,8 @@ impl Store {
                 ",
             )?;
             let rows = stmt.query_map([lim], map_agent_heartbeat)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         }
     }
 
