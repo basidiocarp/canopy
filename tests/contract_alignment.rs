@@ -1,5 +1,5 @@
 //! Machine-checkable tests that verify Canopy's Rust types stay aligned
-//! with the ecosystem contract schemas in `../contracts/*.schema.json`.
+//! with the ecosystem contract schemas in `../septa/*.schema.json`.
 //!
 //! These tests prevent the class of bug where a Rust enum gets a new variant
 //! but the corresponding contract schema is not updated (or vice versa).
