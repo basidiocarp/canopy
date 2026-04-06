@@ -75,6 +75,7 @@ fn test_dispatch_tools_are_in_schema() {
         "canopy_handoff_reject",
         "canopy_handoff_complete",
         "canopy_handoff_list",
+        "canopy_attach_evidence",
         "canopy_evidence_add",
         "canopy_evidence_list",
         "canopy_evidence_verify",
@@ -106,7 +107,7 @@ fn test_dispatch_tools_are_in_schema() {
 fn test_tool_count_matches() {
     let schema_count = canopy::mcp::schema::tool_definitions().len();
     assert_eq!(
-        schema_count, 33,
-        "Expected 33 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
+        schema_count, 34,
+        "Expected 34 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
     );
 }

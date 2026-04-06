@@ -142,6 +142,7 @@ pub fn dispatch_tool(
         "canopy_handoff_reject" => handoff::tool_handoff_reject(store, agent_id, args),
         "canopy_handoff_complete" => handoff::tool_handoff_complete(store, agent_id, args),
         "canopy_handoff_list" => handoff::tool_handoff_list(store, agent_id, args),
+        "canopy_attach_evidence" => evidence::tool_attach_evidence(store, agent_id, args),
         "canopy_evidence_add" => evidence::tool_evidence_add(store, agent_id, args),
         "canopy_evidence_list" => evidence::tool_evidence_list(store, agent_id, args),
         "canopy_evidence_verify" => evidence::tool_evidence_verify(store, agent_id, args),

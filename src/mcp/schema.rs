@@ -752,8 +752,43 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Evidence (3)
+    // Evidence (4)
     // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_attach_evidence",
+        "Attach evidence to a task using the compact agent-facing form. The tool generates a label and returns the updated task evidence summary.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ULID of the task to attach evidence to"
+                },
+                "evidence_type": {
+                    "type": "string",
+                    "enum": [
+                        "hyphae_session", "hyphae_recall", "hyphae_outcome",
+                        "cortina_event",
+                        "mycelium_command", "mycelium_explain",
+                        "rhizome_impact", "rhizome_export",
+                        "script_verification",
+                        "manual_note"
+                    ],
+                    "description": "Which ecosystem tool the evidence comes from"
+                },
+                "ref_id": {
+                    "type": "string",
+                    "description": "ID or reference in the source tool (for example a session ID or event URI)"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional human-readable context for the evidence"
+                }
+            },
+            "required": ["task_id", "evidence_type", "ref_id"]
+        }),
+    ));
 
     tools.push(tool_def(
         "canopy_evidence_add",
