@@ -43,6 +43,7 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         description: row.get(2)?,
         requested_by: row.get(3)?,
         project_root: row.get(4)?,
+        parent_task_id: row.get(25)?,
         required_role: parse_optional_enum_column(row, 5)?,
         required_capabilities: row
             .get::<_, Option<String>>(6)?
@@ -66,10 +67,10 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         due_at: row.get(23)?,
         review_due_at: row.get(24)?,
         scope: row
-            .get::<_, Option<String>>(25)?
+            .get::<_, Option<String>>(26)?
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
-        created_at: row.get(26)?,
-        updated_at: row.get(27)?,
+        created_at: row.get(27)?,
+        updated_at: row.get(28)?,
     })
 }
 
@@ -240,7 +241,7 @@ pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreR
                required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-               scope, created_at, updated_at
+               parent_task_id, scope, created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
         ",
@@ -569,6 +570,7 @@ pub(crate) fn create_task_in_connection(
         closed_at: None,
         due_at: None,
         review_due_at: None,
+        parent_task_id: None,
         scope: options.scope.clone(),
         created_at: String::new(),
         updated_at: String::new(),
@@ -579,8 +581,8 @@ pub(crate) fn create_task_in_connection(
             task_id, title, description, requested_by, project_root, required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
-            closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            closed_by, closure_summary, closed_at, due_at, review_due_at, parent_task_id, scope, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -608,6 +610,7 @@ pub(crate) fn create_task_in_connection(
             task.closed_at,
             task.due_at,
             task.review_due_at,
+            task.parent_task_id,
             serialize_capabilities(&task.scope)?,
         ],
     )?;
@@ -824,15 +827,16 @@ pub(crate) fn create_task_relationship_in_connection(
         let existing_parent = conn
             .query_row(
                 r"
-                SELECT target_task_id
-                FROM task_relationships
-                WHERE source_task_id = ?1 AND kind = 'parent'
+                SELECT parent_task_id
+                FROM tasks
+                WHERE task_id = ?1
                 LIMIT 1
                 ",
                 [source_task_id],
-                |row| row.get::<_, String>(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
         if existing_parent.is_some() {
             return Err(StoreError::Validation(
                 "task already has a parent".to_string(),
@@ -884,6 +888,17 @@ pub(crate) fn create_task_relationship_in_connection(
             relationship.created_by,
         ],
     )?;
+    if kind == TaskRelationshipKind::Parent {
+        conn.execute(
+            r"
+            UPDATE tasks
+            SET parent_task_id = ?2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE task_id = ?1
+            ",
+            params![source_task_id, target_task_id],
+        )?;
+    }
     touch_task_in_connection(conn, source_task_id)?;
     touch_task_in_connection(conn, target_task_id)?;
     get_task_relationship_in_connection(conn, &relationship.relationship_id)
@@ -1036,6 +1051,20 @@ pub(crate) fn delete_task_relationship_in_connection(
     if deleted == 0 {
         return Err(StoreError::NotFound("task relationship"));
     }
+    if let Some(child_task_id) = match relationship.kind {
+        TaskRelationshipKind::Parent => Some(relationship.source_task_id.as_str()),
+        TaskRelationshipKind::FollowUp | TaskRelationshipKind::Blocks => None,
+    } {
+        conn.execute(
+            r"
+            UPDATE tasks
+            SET parent_task_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE task_id = ?1
+            ",
+            [child_task_id],
+        )?;
+    }
     touch_task_in_connection(conn, &relationship.source_task_id)?;
     touch_task_in_connection(conn, &relationship.target_task_id)?;
     Ok(())
@@ -1048,10 +1077,8 @@ pub(crate) fn has_open_child_tasks_in_connection(
     let mut stmt = conn.prepare(
         r"
         SELECT tasks.status
-        FROM task_relationships
-        INNER JOIN tasks ON tasks.task_id = task_relationships.source_task_id
-        WHERE task_relationships.target_task_id = ?1
-          AND task_relationships.kind = 'parent'
+        FROM tasks
+        WHERE tasks.parent_task_id = ?1
         ",
     )?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
@@ -1103,17 +1130,17 @@ pub(crate) fn maybe_auto_complete_task_tree_in_connection(
         current_task_id = conn
             .query_row(
                 r"
-                SELECT target_task_id
-                FROM task_relationships
-                WHERE source_task_id = ?1
-                  AND kind = 'parent'
+                SELECT parent_task_id
+                FROM tasks
+                WHERE task_id = ?1
                 ORDER BY created_at DESC
                 LIMIT 1
                 ",
                 [candidate_task_id.as_str()],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
     }
     Ok(())
 }
@@ -1134,10 +1161,8 @@ fn maybe_auto_complete_task_in_connection(
     let mut stmt = conn.prepare(
         r"
         SELECT tasks.status
-        FROM task_relationships
-        INNER JOIN tasks ON tasks.task_id = task_relationships.source_task_id
-        WHERE task_relationships.target_task_id = ?1
-          AND task_relationships.kind = 'parent'
+        FROM tasks
+        WHERE tasks.parent_task_id = ?1
         ",
     )?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
@@ -1842,17 +1867,15 @@ fn set_task_priority_in_connection(
 fn get_parent_id_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Option<String>> {
     conn.query_row(
         r"
-        SELECT target_task_id
-        FROM task_relationships
-        WHERE source_task_id = ?1
-          AND kind = 'parent'
-        ORDER BY created_at DESC
-        LIMIT 1
+        SELECT parent_task_id
+        FROM tasks
+        WHERE task_id = ?1
         ",
         [task_id],
-        |row| row.get(0),
+        |row| row.get::<_, Option<String>>(0),
     )
     .optional()
+    .map(|value| value.flatten())
     .map_err(StoreError::from)
 }
 

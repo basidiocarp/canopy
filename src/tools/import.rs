@@ -105,10 +105,7 @@ fn validate_handoff_path(path: &Path) -> Vec<String> {
 
     // Check: file should be in a project subdirectory, not .handoffs/ root
     let parent = path.parent().unwrap_or(Path::new("."));
-    let parent_name = parent
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let parent_name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     if parent_name == ".handoffs" {
         warnings.push(format!(
@@ -133,9 +130,7 @@ fn validate_handoff_path(path: &Path) -> Vec<String> {
     if stem.starts_with("HANDOFF-") {
         warnings.push(format!(
             "Uses old HANDOFF- prefix. Rename to: {}",
-            stem.strip_prefix("HANDOFF-")
-                .unwrap_or(stem)
-                .to_lowercase()
+            stem.strip_prefix("HANDOFF-").unwrap_or(stem).to_lowercase()
         ));
     }
 

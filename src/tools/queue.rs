@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::store::CanopyStore;
+use crate::store::{CLAIM_STALE_THRESHOLD_SECS, CanopyStore};
 
 use super::{ToolResult, get_bounded_i64, get_str, validate_required_string};
 
@@ -49,6 +49,18 @@ pub fn tool_task_claim(
         Ok(id) => id,
         Err(err) => return err,
     };
+    let force_claim = args
+        .get("force_claim")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    if !force_claim {
+        if let Err(err) =
+            crate::store::ensure_agent_fresh_for_claim(store, agent_id, CLAIM_STALE_THRESHOLD_SECS)
+        {
+            return ToolResult::error(format!("claim failed: {err}"));
+        }
+    }
 
     match store.atomic_claim_task(agent_id, task_id) {
         Ok(Some(task)) => ToolResult::json(&task),

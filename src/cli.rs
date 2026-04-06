@@ -213,9 +213,9 @@ pub enum TaskCommand {
         agent_id: String,
         #[arg(value_name = "TASK_ID")]
         task_id: String,
-        /// Force claim despite file scope conflicts (advisory mode)
-        #[arg(long)]
-        force: bool,
+        /// Force claim despite liveness or file scope conflicts (advisory mode)
+        #[arg(long = "force-claim", alias = "force")]
+        force_claim: bool,
         /// Add blocking dependency on this task before claiming (sequential mode)
         #[arg(long)]
         after: Option<String>,

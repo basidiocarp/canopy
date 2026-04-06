@@ -255,8 +255,8 @@ fn mcp_tool_schemas_match_dispatch() {
 
     assert_eq!(
         schema_names.len(),
-        31,
-        "Expected 31 MCP tools, got {}. If you added/removed tools, update this test.",
+        33,
+        "Expected 33 MCP tools, got {}. If you added/removed tools, update this test.",
         schema_names.len()
     );
 

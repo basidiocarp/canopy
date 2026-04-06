@@ -271,9 +271,7 @@ pub fn tool_task_complete(
                 }
             }
             Err(e) => {
-                return ToolResult::error(format!(
-                    "failed to check handoff completeness: {e}"
-                ));
+                return ToolResult::error(format!("failed to check handoff completeness: {e}"));
             }
         }
     }

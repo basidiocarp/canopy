@@ -647,6 +647,7 @@ mod tests {
             description: None,
             requested_by: "test".to_string(),
             project_root: ".".to_string(),
+            parent_task_id: None,
             required_role: None,
             required_capabilities: Vec::new(),
             auto_review: false,

@@ -1,7 +1,9 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 #[test]
@@ -51,6 +53,7 @@ fn cli_registers_agents_and_lists_them() {
     assert_eq!(first["host_type"], "codex");
     assert_eq!(first["status"], "idle");
     assert!(first["heartbeat_at"].is_string());
+    assert_eq!(first["freshness"], "fresh");
 
     Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -1510,4 +1513,134 @@ fn cli_task_verify_records_script_evidence_and_completes_leaf_task() {
             "\"source_kind\": \"script_verification\"",
         ))
         .stdout(predicate::str::contains("\"status\": \"verified\""));
+}
+
+#[test]
+fn cli_task_claim_rejects_stale_agent_without_force() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    register_agent(&db_path, "codex-1");
+    let task_id = create_task(&db_path, "Stale claim task");
+    age_agent_heartbeat(&db_path, "codex-1", 10);
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "claim",
+            "--agent-id",
+            "codex-1",
+            &task_id,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("last heartbeat was"))
+        .stderr(predicate::str::contains("threshold: 300s"));
+}
+
+#[test]
+fn cli_task_claim_force_claim_bypasses_freshness_check() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    register_agent(&db_path, "codex-1");
+    let task_id = create_task(&db_path, "Forced claim task");
+    age_agent_heartbeat(&db_path, "codex-1", 10);
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "claim",
+            "--agent-id",
+            "codex-1",
+            "--force-claim",
+            &task_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"owner_agent_id\": \"codex-1\""));
+}
+
+#[test]
+fn cli_agent_list_reports_aging_before_stale() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    register_agent(&db_path, "codex-1");
+    age_agent_heartbeat(&db_path, "codex-1", 20);
+
+    let output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args(["--db", db_path.to_str().expect("db path"), "agent", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let agents: Value = serde_json::from_slice(&output).expect("parse agent list");
+    assert_eq!(agents[0]["freshness"], "aging");
+}
+
+fn register_agent(db_path: &Path, agent_id: &str) {
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "agent",
+            "register",
+            "--agent-id",
+            agent_id,
+            "--host-id",
+            "codex-local",
+            "--host-type",
+            "codex",
+            "--host-instance",
+            "local",
+            "--model",
+            "gpt-5.4",
+            "--project-root",
+            "/tmp/project",
+            "--worktree-id",
+            "wt-1",
+        ])
+        .assert()
+        .success();
+}
+
+fn create_task(db_path: &Path, title: &str) -> String {
+    let output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            title,
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&output).expect("parse task");
+    task["task_id"].as_str().expect("task id").to_string()
+}
+
+fn age_agent_heartbeat(db_path: &Path, agent_id: &str, minutes_ago: i64) {
+    let conn = Connection::open(db_path).expect("open db");
+    conn.execute(
+        "UPDATE agents SET heartbeat_at = datetime('now', ?1) WHERE agent_id = ?2",
+        [format!("-{minutes_ago} minutes"), agent_id.to_string()],
+    )
+    .expect("age agent heartbeat");
 }

@@ -1,4 +1,5 @@
 use glob::Pattern;
+use serde::{Deserialize, Serialize};
 
 /// Check if two scope lists have overlapping paths.
 ///
@@ -16,6 +17,34 @@ pub fn scope_overlaps(scope_a: &[String], scope_b: &[String]) -> Vec<String> {
     }
 
     overlaps
+}
+
+/// Describes a scope gap detected between the active work item and declared scope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeGap {
+    Blocking { description: String },
+    NonBlocking { description: String },
+}
+
+/// Classify a work item against the handoff scope.
+///
+/// Returns `None` when the work item is in scope or does not reference any
+/// concrete out-of-scope files. Returns a blocking gap when the out-of-scope
+/// work is required to proceed, and non-blocking when the work is additive.
+#[must_use]
+pub fn classify_scope_gap(work_item: &str, handoff_scope: &[String]) -> Option<ScopeGap> {
+    let gap_paths = scope_gap_paths(work_item, handoff_scope);
+    if gap_paths.is_empty() {
+        return None;
+    }
+
+    let description = format_scope_gap_description(work_item, &gap_paths);
+    if is_non_blocking_scope_gap(work_item) && !is_blocking_scope_gap(work_item) {
+        Some(ScopeGap::NonBlocking { description })
+    } else {
+        Some(ScopeGap::Blocking { description })
+    }
 }
 
 /// Determines whether two path specifications overlap.
@@ -55,6 +84,64 @@ fn paths_overlap(a: &str, b: &str) -> bool {
     }
 
     false
+}
+
+fn scope_gap_paths(work_item: &str, handoff_scope: &[String]) -> Vec<String> {
+    extract_step_scope(work_item)
+        .into_iter()
+        .filter(|path| !is_path_covered_by_scope(path, handoff_scope))
+        .collect()
+}
+
+fn is_path_covered_by_scope(path: &str, handoff_scope: &[String]) -> bool {
+    handoff_scope
+        .iter()
+        .any(|scope_path| paths_overlap(path, scope_path))
+}
+
+fn format_scope_gap_description(work_item: &str, gap_paths: &[String]) -> String {
+    let summary = work_item.lines().next().unwrap_or(work_item).trim();
+    if gap_paths.is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary} [gap: {}]", gap_paths.join(", "))
+    }
+}
+
+fn is_non_blocking_scope_gap(work_item: &str) -> bool {
+    let lower = work_item.to_ascii_lowercase();
+    [
+        "optional",
+        "follow-up",
+        "follow up",
+        "nice to have",
+        "stretch",
+        "if time",
+        "later",
+        "deferred",
+        "additive",
+        "bonus",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue))
+}
+
+fn is_blocking_scope_gap(work_item: &str) -> bool {
+    let lower = work_item.to_ascii_lowercase();
+    [
+        "blocked",
+        "cannot proceed",
+        "can't proceed",
+        "can't continue",
+        "need",
+        "required",
+        "must",
+        "depends on",
+        "before continuing",
+        "out of scope",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue))
 }
 
 /// Heuristic: a path is a directory if it ends with `/` or has no file extension.
@@ -204,5 +291,36 @@ pub scope: Vec<String>,
         let line = "Modify `src/auth.rs` and `src/middleware.rs` for this change";
         let paths = extract_backtick_paths(line);
         assert_eq!(paths, vec!["src/auth.rs", "src/middleware.rs"]);
+    }
+
+    #[test]
+    fn classify_scope_gap_returns_none_when_in_scope() {
+        let scope = vec!["canopy/src/models.rs".to_string()];
+        let work_item = "Update `canopy/src/models.rs` and keep the API aligned";
+        assert!(classify_scope_gap(work_item, &scope).is_none());
+    }
+
+    #[test]
+    fn classify_scope_gap_marks_blocking_out_of_scope_paths() {
+        let scope = vec!["canopy/src/models.rs".to_string()];
+        let work_item = "Need to update `canopy/src/runtime.rs` before continuing";
+        match classify_scope_gap(work_item, &scope) {
+            Some(ScopeGap::Blocking { description }) => {
+                assert!(description.contains("canopy/src/runtime.rs"));
+            }
+            other => panic!("expected blocking scope gap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_scope_gap_marks_non_blocking_additive_paths() {
+        let scope = vec!["canopy/src/models.rs".to_string()];
+        let work_item = "Optional follow-up: draft `canopy/docs/scope-gap.md` later";
+        match classify_scope_gap(work_item, &scope) {
+            Some(ScopeGap::NonBlocking { description }) => {
+                assert!(description.contains("canopy/docs/scope-gap.md"));
+            }
+            other => panic!("expected non-blocking scope gap, got {other:?}"),
+        }
     }
 }

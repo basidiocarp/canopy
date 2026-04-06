@@ -24,6 +24,7 @@ pub(crate) const BASE_SCHEMA: &str = r"
         description TEXT NULL,
         requested_by TEXT NOT NULL,
         project_root TEXT NOT NULL,
+        parent_task_id TEXT NULL REFERENCES tasks(task_id) ON DELETE SET NULL,
         required_role TEXT NULL,
         required_capabilities TEXT NOT NULL DEFAULT '[]',
         auto_review INTEGER NOT NULL DEFAULT 0,
@@ -127,6 +128,9 @@ pub(crate) const BASE_SCHEMA: &str = r"
     ON task_relationships(source_task_id)
     WHERE kind = 'parent';
 
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id
+    ON tasks(parent_task_id);
+
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
@@ -178,6 +182,7 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "due_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "review_due_at", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "parent_task_id", "TEXT NULL")?;
     ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
     conn.execute(
@@ -200,6 +205,23 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
                 verified_at,
                 created_at,
                 CURRENT_TIMESTAMP
+            )
+        ",
+        [],
+    )?;
+    conn.execute(
+        r"
+        UPDATE tasks
+        SET parent_task_id = COALESCE(
+                parent_task_id,
+                (
+                    SELECT target_task_id
+                    FROM task_relationships
+                    WHERE task_relationships.source_task_id = tasks.task_id
+                      AND task_relationships.kind = 'parent'
+                    ORDER BY task_relationships.created_at DESC
+                    LIMIT 1
+                )
             )
         ",
         [],
@@ -266,7 +288,9 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         r"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source
         ON task_relationships(source_task_id)
-        WHERE kind = 'parent'
+        WHERE kind = 'parent';
+        CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id
+        ON tasks(parent_task_id)
         ",
     )?;
 

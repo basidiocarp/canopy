@@ -14,9 +14,9 @@ use super::helpers::{
     task_has_prior_execution_in_connection, touch_task_in_connection, validate_execution_actor,
 };
 use super::{
-    EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult, TaskCreationOptions,
-    TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput, TaskStatusUpdate,
-    TaskTriageUpdate,
+    CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult,
+    TaskCreationOptions, TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput,
+    TaskStatusUpdate, TaskTriageUpdate,
 };
 
 impl Store {
@@ -498,6 +498,11 @@ impl Store {
                 let acting_agent_id = input.acting_agent_id.ok_or_else(|| {
                     StoreError::Validation("claim_task requires an acting_agent_id".to_string())
                 })?;
+                super::ensure_agent_fresh_for_claim(
+                    self,
+                    acting_agent_id,
+                    CLAIM_STALE_THRESHOLD_SECS,
+                )?;
                 assign_task_in_connection(
                     conn,
                     task_id,

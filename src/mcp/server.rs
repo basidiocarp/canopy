@@ -106,6 +106,8 @@ Use canopy tools to:
 - Claim a task atomically: canopy_task_claim (fails if another agent got it first)
 - Lock files before editing: canopy_files_lock
 - Send heartbeats: canopy_heartbeat (every ~10 tool calls)
+- Report scope gaps: canopy_report_scope_gap
+- Read declared scope: canopy_get_handoff_scope
 - Hand off work: canopy_handoff_create
 - Complete tasks: canopy_task_complete
 

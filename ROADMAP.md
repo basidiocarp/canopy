@@ -1,106 +1,64 @@
 # Canopy Roadmap
 
-This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../ROADMAP.md) keeps the ecosystem sequencing, and [MASTER-ROADMAP.md](../MASTER-ROADMAP.md) keeps the cross-repo summary.
+This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../docs/ROADMAP.md) keeps the ecosystem sequencing and cross-repo priorities.
 
 ## Recently Shipped
 
-- Initial repo and spec scaffold.
-- Naming split:
-  - `Canopy` as the repo and runtime
-  - `Council` as the orchestration model
-- First concrete architecture boundary for orchestration state, evidence refs, and integration ownership.
-- First Rust crate with:
-  - local SQLite ledger
-  - agent registry
-  - latest heartbeat tracking
-  - heartbeat history
-  - tasks
-    - verification state
-    - blocked reason
-    - closure metadata
-    - persisted task-event history
-    - created/updated timestamps
-  - handoffs
-    - created/updated/resolved timestamps
-  - council messages
-  - evidence refs
-    - typed navigation fields for sessions, memories, and code
-  - typed protocol enums and validation
-  - explicit snapshot and task-detail read models
-  - snapshot filtering and sorting for saved-view support
-  - first-class snapshot presets and server-side triage filters
-  - runtime attention/freshness summaries for tasks, handoffs, and agents
-  - server-side `attention` view and aggregate attention counts
-  - task triage metadata:
-    - priority
-    - severity
-    - acknowledgment state
-    - operator note
-  - handoff due/expiry semantics with validation
-  - assignment-history-backed ownership summaries
-  - task and agent heartbeat summaries
-  - operator action hints for task acknowledgment, review, reassignment, and handoff follow-up/expiry
-  - stronger registration/heartbeat linkage invariants
-  - CLI coverage and tests
+- Canopy now has a real local orchestration foundation instead of a repo stub. The first pass covers the ledger, agent registry, task and handoff records, council messages, evidence references, and the read models needed for operator views.
+- The naming split is settled. `Canopy` is the runtime and repository, while `Council` names the orchestration model that sits inside it.
+- Task state is no longer just a queue. The current schema tracks verification state, blocking reason, closure metadata, triage fields, due and expiry semantics, ownership history, heartbeat summaries, and operator action hints.
+- The first CLI and test surface is in place. That gives the project a stable base for operator queries and workflow mutations instead of forcing everything through direct database inspection.
 
 ## Next
 
-### Ledger and registry foundation
+### Ledger and registry hardening
 
-Complete the first local orchestration store beyond the current foundation with:
+The next step is making the current store boring. Canopy needs stronger protocol validation, richer task timelines, and cleaner operator mutations so the read models and the write path stay aligned as the orchestration surface grows.
 
-- stronger typed protocol/state validation
-- richer task timeline metadata beyond the current event rows
-- richer task/operator action metadata beyond the current triage foundation
-- operator mutations that consume the new action hints cleanly
+### Operator workflow commands
 
-### MVP CLI
+The CLI needs to move past basic scaffolding. The immediate priority is deeper task and handoff queries plus the mutation commands that let an operator acknowledge, reassign, review, and close work without touching internal tables.
 
-Finish the first CLI surface with:
+### Read transport for Cap
 
-- richer task/detail queries on read surfaces
-- more task and handoff mutation commands around operator workflows
-
-### Read API transport
-
-Keep the explicit read boundary but decide whether the next operator-facing transport should stay CLI-backed or add a local HTTP surface for `cap`.
-
-### `Cap` operator integration
-
-Expose active agents, active tasks, blocked tasks, pending handoffs, and council summaries to `cap`.
+Canopy already has an explicit read boundary. The open product question is whether the next operator surface stays CLI-backed for a while or graduates to a local HTTP layer that `cap` can consume directly.
 
 ### Evidence integration
 
-Attach `hyphae`, `cortina`, `mycelium`, and `rhizome` references as task evidence without duplicating their full payloads.
+Canopy should attach evidence from Hyphae, Cortina, Mycelium, and Rhizome without copying their payloads into its own store. This keeps the orchestration layer small while still giving tasks enough context to prove what happened.
+
+### Cap operator integration
+
+Canopy becomes useful when operators can see it. The near-term goal is to expose active agents, active tasks, blocked work, pending handoffs, and council summaries in `cap` without building a second orchestration model in the UI.
 
 ## Later
 
 ### Arbitration and review flows
 
-Add judge, dispute, and multi-review workflows when agents disagree.
+Canopy will eventually need judge, dispute, and multi-review workflows. That work can wait until the basic task and handoff path is solid and evidence-backed.
 
 ### Capability routing
 
-Route work by host and model strengths instead of static host preference.
+Task assignment should eventually follow host and model strengths instead of a fixed preference order. The right model depends on whether the job is orchestration, implementation, or narrow validation.
 
 ### Task claiming and de-duplication
 
-Prevent duplicate work when multiple agents target the same project or queue.
+Canopy should prevent two agents from quietly doing the same work. That becomes more important once the local single-operator path is stable and parallel task claims become common.
 
 ### Fleet coordination
 
-Expand from local coordination into broader host and worker fleets once the single-machine path is boring.
+The long-term direction is broader host and worker coordination. It should not move ahead of the single-machine path, because the local operator loop still needs to become routine first.
 
 ## Research
 
 ### Transport boundary
 
-Decide whether the first runtime should be CLI-only, API-first, or dual-surface from the start.
+The first runtime could stay CLI-first, become API-first, or support both from the start. The right answer depends on how quickly `cap` needs direct read access and whether local automation also wants a stable API.
 
 ### Heartbeat model
 
-Decide whether heartbeats should be pushed by adapters, pulled by `Canopy`, or derived from event streams.
+Canopy still needs to decide whether heartbeats are pushed by adapters, pulled by the runtime, or inferred from event streams. That choice affects both correctness and how much runtime state the system has to own.
 
 ### Shared-state boundary
 
-Keep deciding how much orchestration state belongs in `Canopy` versus references into `hyphae`.
+The open architectural question is how much state belongs inside Canopy versus how much should remain references into Hyphae and the rest of the ecosystem. The answer needs to keep orchestration useful without duplicating every lower-level store.

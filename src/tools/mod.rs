@@ -6,6 +6,7 @@ pub mod handoff;
 pub mod identity;
 pub mod import;
 pub mod queue;
+pub mod scope;
 pub mod task;
 
 use serde::Serialize;
@@ -134,6 +135,8 @@ pub fn dispatch_tool(
         "canopy_task_complete" => task::tool_task_complete(store, agent_id, args),
         "canopy_task_block" => task::tool_task_block(store, agent_id, args),
         "canopy_task_snapshot" => task::tool_task_snapshot(store, agent_id, args),
+        "canopy_report_scope_gap" => scope::tool_report_scope_gap(store, agent_id, args),
+        "canopy_get_handoff_scope" => scope::tool_get_handoff_scope(store, agent_id, args),
         "canopy_handoff_create" => handoff::tool_handoff_create(store, agent_id, args),
         "canopy_handoff_accept" => handoff::tool_handoff_accept(store, agent_id, args),
         "canopy_handoff_reject" => handoff::tool_handoff_reject(store, agent_id, args),

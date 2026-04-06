@@ -3,6 +3,7 @@ pub mod cli;
 pub mod handoff_check;
 pub mod mcp;
 pub mod models;
+pub mod runtime;
 pub mod scope;
 pub mod store;
 pub mod tools;

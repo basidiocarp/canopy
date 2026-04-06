@@ -1,394 +1,218 @@
 # Canopy Architecture
 
-`Canopy` is a task-scoped coordination runtime. `Council` is the interaction model inside it.
+Canopy is a single-crate Rust binary with CLI, MCP, and SQLite store layers.
+Its core job is to make multi-agent coordination explicit: ownership,
+handoffs, evidence, and operator attention live in a ledger instead of being
+reconstructed from chat history. This document covers the system boundary,
+request flow, and storage model.
 
-The first implementation target is local-first coordination across multiple host adapters or instances on one machine. Cross-machine fleet coordination is later work.
+---
 
 ## Design Principles
 
-- task-first, not chat-first
-- evidence-first, not opinion-first
-- explicit ownership and handoff
-- durable state for operator visibility
-- narrow boundaries with the rest of the ecosystem
+- **Task-first, not chat-first** — durable work state is stored as tasks,
+  assignments, handoffs, and events, not inferred from free-form threads.
+- **Evidence before conclusion** — decisions attach to `EvidenceRef` rows so
+  operator views can explain why a task moved or closed.
+- **One owner at a time** — tasks may have many participants, but the active
+  owner stays explicit in the ledger.
+- **Read models over raw tables** — operator surfaces consume snapshots and
+  summaries, not ad hoc SQL across event history.
+- **Local-first orchestration** — the first release assumes one machine, a
+  local SQLite database, and sibling tools reached by reference.
+
+---
 
 ## System Boundary
 
-### `Canopy` owns
+### Canopy owns
 
-- agent registry
-- host references attached to agents
-- task ledger
-- task assignment and ownership
-- handoff protocol
-- `Council` message model
-- evidence references
-- task replay and audit history
+- Agent registration and heartbeat state
+- Task lifecycle, assignment history, and review state
+- Structured handoffs between agents and operators
+- Task-scoped Council threads
+- Evidence references to sibling tools
+- Read models for operator attention and queue views
 
-### `Hyphae` owns
+### Hyphae owns
 
-- memory
-- recall logging
-- outcome signals
-- session history
-- retrieval and ranking
+- Memory, recall logging, and outcome signals
+- Session history and long-lived project context
+- Retrieval and ranking across stored memories
 
-### `Cortina` owns
+### Cortina owns
 
-- host adapter lifecycle capture
-- structured host events
-- session bridge signals
+- Host adapter lifecycle capture
+- Structured runtime events and validation signals
+- Session bridge metadata
 
-### `Cap` owns
+### Cap owns
 
-- operator-facing visibility
-- dashboards, timelines, and drilldown
-- repair entry points
+- Operator-facing dashboards, timelines, and drilldown views
+- Repair and intervention entry points
 
-### `Stipe` owns
+### Stipe owns
 
-- install, setup, repair, and host registration
+- Installation, setup, repair, and host registration
 
-`Canopy` should reference host identity from `stipe` and runtime health from `cortina`. It should not become the source of truth for installation or adapter repair.
+Canopy should reference Hyphae, Cortina, Mycelium, and Rhizome as evidence
+sources. It should not absorb their storage or become the system of record for
+installation, memory, or host repair.
 
-## Core Entities
+---
 
-### AgentRegistration
+## Workspace Structure
 
-Current foundation fields:
+```text
+src/
+├── main.rs          # CLI entry point, DB path resolution, command routing
+├── cli.rs           # Clap command surface
+├── models.rs        # Ledger entities, enums, read-model structs
+├── api.rs           # Snapshot and API-facing projection helpers
+├── mcp/             # MCP protocol, schema, and server wiring
+├── store/           # SQLite schema, migrations, and table-specific mutations
+└── tools/           # MCP tool handlers layered over the store
+```
 
-- `agent_id`
-- `host_id`
-- `host_type`
-- `host_instance`
-- `model`
-- `project_root`
-- `worktree_id`
-- `status`
-- `current_task_id`
-- `heartbeat_at`
+Canopy compiles into a single binary.
 
-Planned additions after the foundation slice:
+- **`main.rs`**: Opens the store, parses CLI input, and routes to CLI or MCP
+  entry points.
+- **`models.rs`**: Defines the contract for tasks, handoffs, evidence, and
+  read-model summaries. This is the shape the rest of the tool protects.
+- **`store/`**: Owns schema migration and all durable mutations. Business rules
+  around ownership, timing, and cascades belong here.
+- **`tools/`**: Exposes the ledger over MCP without letting transport concerns
+  leak into storage code.
+- **`api.rs`**: Builds operator-friendly views such as snapshots and attention
+  summaries from raw ledger data.
 
-- `capabilities`
-- `registered_at`
-- `last_error`
+---
 
-Current read-model additions:
+## Request Flow
 
-- derived attention level
-- heartbeat freshness summary
+When a CLI command or MCP tool call arrives:
 
-Notes:
+1. **Open the ledger** (`main::main`)
+   Parses CLI arguments, resolves the SQLite path, and opens `Store`.
+   Example: `canopy task create ...` opens `.canopy/canopy.db` unless
+   overridden.
 
-- `host_id` is the stable external reference for the host or adapter context the agent is running on.
-- `host_instance` distinguishes multiple active hosts on one machine.
-- `worktree_id` should be stable enough to separate parallel workers in one repo.
+2. **Route the command** (`main::run_command` or `mcp::server::run_server`)
+   Chooses the task, handoff, evidence, API, or MCP path.
+   Example: `Commands::Task` goes to `handle_task_command`; `serve` starts the
+   MCP server.
+
+3. **Apply domain rules** (`Store::*` in `store/tasks.rs`, `store/handoffs.rs`,
+   `store/evidence.rs`)
+   Validates allowed state transitions, ownership rules, due and expiry timing,
+   and foreign-key references.
+   Example: accepting a handoff updates the handoff row without silently
+   changing task ownership.
+
+4. **Record history** (`store/events.rs`, `store/assignments.rs`,
+   `store/council.rs`)
+   Writes task events, assignment history, Council messages, and heartbeat
+   records so the ledger stays replayable.
+   Example: a status change writes both the updated task row and a
+   `task_events` entry.
+
+5. **Project a response** (`api.rs`, `tools/*.rs`, JSON serialization)
+   Returns the updated entity, a task detail projection, or an operator
+   snapshot.
+   Example: `canopy api snapshot --preset attention` returns a read model, not
+   raw table dumps.
+
+---
+
+## Data Model
 
 ### Task
 
-Current foundation fields:
-
-- `task_id`
-- `title`
-- `description`
-- `requested_by`
-- `owner_agent_id`
-- `project_root`
-- `status`
-- `verification_state`
-- `priority`
-- `severity`
-- `owner_note`
-- `acknowledged_by`
-- `acknowledged_at`
-- `blocked_reason`
-- `verified_by`
-- `verified_at`
-- `closed_by`
-- `closure_summary`
-- `closed_at`
-
-Current read-model additions:
-
-- derived task attention level
-- task freshness summary
-- owner heartbeat freshness summary
-- open-handoff freshness summary
-- ownership summary from assignment history
-- operator action hints derived from attention and due/expiry state
-
-### TaskEvent
-
-Current foundation fields:
-
-- `event_id`
-- `task_id`
-- `event_type`
-- `actor`
-- `from_status`
-- `to_status`
-- `verification_state`
-- `owner_agent_id`
-- `note`
-- `created_at`
-
-Supported `event_type` values for the current ledger:
-
-- `created`
-- `assigned`
-- `ownership_transferred`
-- `status_changed`
-
-### TaskAssignment
-
-Current foundation fields:
-
-- `task_id`
-- `assigned_to`
-- `assigned_by`
-- `reason`
-- `assigned_at`
-
-Current read-model additions:
-
-- assignment count
-- reassignment count
-- latest assignment actor/reason/timestamp
+```rust
+pub struct Task {
+    pub task_id: String,
+    pub title: String,
+    pub project_root: String,
+    pub owner_agent_id: Option<String>,   // at most one active owner
+    pub status: TaskStatus,               // execution lifecycle
+    pub verification_state: VerificationState,
+    pub due_at: Option<String>,           // RFC3339 when present
+    pub review_due_at: Option<String>,    // RFC3339 when present
+    pub scope: Vec<String>,               // file paths or globs touched by work
+}
+```
 
 ### Handoff
 
-Current foundation fields:
-
-- `handoff_id`
-- `task_id`
-- `from_agent_id`
-- `to_agent_id`
-- `handoff_type`
-- `summary`
-- `requested_action`
-- `due_at`
-- `expires_at`
-- `status`
-
-Current read-model additions:
-
-- derived handoff attention level
-- handoff freshness summary
-- `resolved_at`
-
-### Heartbeat summaries
-
-Current read-model additions:
-
-- task-scoped heartbeat summaries:
-  - related agent count
-  - heartbeat count
-  - freshness bucket counts
-  - latest heartbeat timestamp
-- agent-scoped heartbeat summaries:
-  - heartbeat count
-  - latest heartbeat timestamp and status
-  - derived freshness
-
-### OperatorAction
-
-Current read-model additions:
-
-- explicit operator action hints with a primary target kind:
-  - `task`
-  - `handoff`
-- current action kinds:
-  - `acknowledge_task`
-  - `verify_task`
-  - `reassign_task`
-  - `follow_up_handoff`
-  - `expire_handoff`
-
-### CouncilMessage
-
-Current foundation fields:
-
-- `message_id`
-- `task_id`
-- `author_agent_id`
-- `message_type`
-- `body`
-
-Planned additions after the foundation slice:
-
-- `related_handoff_id`
-- `created_at`
-
-Supported `message_type` values for the MVP:
-
-- `proposal`
-- `objection`
-- `evidence`
-- `decision`
-- `handoff`
-- `status`
-
-### EvidenceRef
-
-Current foundation fields:
-
-- `evidence_id`
-- `task_id`
-- `source_kind`
-- `source_ref`
-- `label`
-- `summary`
-- `related_handoff_id`
-
-Planned additions after the foundation slice:
-
-- `created_at`
-
-Expected `source_kind` values:
-
-- `hyphae_session`
-- `hyphae_recall`
-- `hyphae_outcome`
-- `cortina_event`
-- `mycelium_command`
-- `mycelium_explain`
-- `rhizome_impact`
-- `rhizome_export`
-- `manual_note`
-
-## Task State Model
-
-Recommended MVP task states:
-
-- `open`
-- `assigned`
-- `in_progress`
-- `blocked`
-- `review_required`
-- `completed`
-- `closed`
-- `cancelled`
-
-Ownership invariant for the first ledger:
-
-- a task has at most one active owner at a time via `owner_agent_id`
-- creating a handoff does not change ownership by itself
-- ownership changes only when an explicit assignment or transfer is recorded
-- blocked and review-required tasks still preserve their current owner until reassigned or closed
-
-Recommended verification states:
-
-- `unknown`
-- `pending`
-- `passed`
-- `failed`
-
-Recommended handoff statuses:
-
-- `open`
-- `accepted`
-- `rejected`
-- `expired`
-- `cancelled`
-- `completed`
-
-Handoff timing rules in the current runtime:
-
-- `due_at` and `expires_at` must be valid RFC3339 timestamps when present
-- `due_at` must not be later than `expires_at`
-- expired handoffs cannot be accepted or otherwise resolved into a non-`expired` state
-
-## Handoff Types
-
-The first protocol should support:
-
-- `request_help`
-- `request_review`
-- `transfer_ownership`
-- `request_verification`
-- `record_decision`
-- `close_task`
-
-Each handoff should be explicit about:
-
-- who owns the task before and after
-- what evidence supports the request
-- what outcome would count as completion
-
-## Storage Model
-
-The MVP should use a dedicated local SQLite store:
-
-- `.canopy/canopy.db`
-
-Rationale:
-
-- orchestration data has different lifecycle and query patterns than `hyphae` memory
-- task ownership should not be inferred from memory recall or host events
-- local durability is enough for the first release
-
-The store should contain:
-
-- agent registrations
-- tasks
-- assignments
-- task events
-- handoffs
-- council messages
-- evidence refs
-- heartbeat state
-
-Likely next schema additions after the current foundation:
-
-- heartbeat history beyond the latest heartbeat
-- richer task timeline metadata beyond the current event rows
-
-It should not duplicate:
-
-- full memory payloads
-- full event payloads from `cortina`
-- long command outputs from `mycelium`
-
-Instead, store references and small summaries.
-
-## First Integration Points
-
-### `Hyphae`
-
-- attach `session_id`, `recall_event_id`, and `outcome_signal_id` to task evidence
-- optionally create a task-scoped memory topic later, but do not require it for the MVP
-
-### `Cortina`
-
-- attach structured outcome and validation events as task evidence
-- use host/session metadata to improve attribution, not to own tasks
-
-### `Cap`
-
-- show active agents
-- show task ledger and task state
-- show task lifecycle history and ownership changes
-- show pending handoffs and blocked tasks
-- show `Council` thread summaries per task
-- consume `Canopy` through an API or CLI surface, not by reading `canopy.db` directly
-- the current foundation exposes this boundary through task and snapshot read models
-
-### `Stipe`
-
-- register which hosts are available locally
-- verify required adapters before an agent is considered healthy
-
-## Non-Goals For The MVP
-
-- free-form multi-agent forum behavior
-- autonomous planning without explicit task ownership
-- fleet autoscaling
-- hidden reasoning capture
-- chain-of-thought storage
-
-## Open Questions
-
-- whether agent heartbeats should be pushed by adapters or polled by `Canopy`
-- whether `Canopy` should expose CLI only first, or CLI plus an HTTP API
-- how the first API surface should authenticate or stay local-only before remote fleet work exists
+```rust
+pub struct Handoff {
+    pub handoff_id: String,
+    pub task_id: String,
+    pub from_agent_id: String,
+    pub to_agent_id: String,
+    pub handoff_type: HandoffType,
+    pub due_at: Option<String>,           // cannot be later than expires_at
+    pub expires_at: Option<String>,
+    pub status: HandoffStatus,
+    pub resolved_at: Option<String>,
+}
+```
+
+### TaskStatus
+
+```rust
+pub enum TaskStatus {
+    Open,             // exists but not yet claimed
+    Assigned,         // owner selected, execution not started
+    InProgress,       // active implementation work
+    Blocked,          // waiting on dependency or operator action
+    ReviewRequired,   // ready for review or verification
+    Completed,        // work finished, not yet closed
+    Closed,           // terminal success state
+    Cancelled,        // terminal abandoned state
+}
+```
+
+### Schema
+
+10 tables. Key invariants:
+
+- Deleting a task cascades to assignments, handoffs, Council messages,
+  evidence refs, task events, and relationships.
+- Task relationships are unique per `(source_task_id, target_task_id, kind)`.
+- Active file locks are unique per `(file_path, worktree_id)` while
+  `released_at` is null.
+- Handoffs keep timing explicit; expired handoffs are not reopened into
+  non-expired states.
+
+---
+
+## Testing
+
+```bash
+cargo test
+cargo build --release
+```
+
+| Category | Count | What's Tested |
+|----------|-------|---------------|
+| Store and model tests | 80+ | Task transitions, ownership rules, evidence linking, relationship rules, heartbeat behavior |
+| CLI and integration | 20+ | Command routing, JSON output, API snapshots, MCP-adjacent flows |
+| Edge cases | 10+ | Timing validation, duplicate relationships, file-lock conflicts, cascade behavior |
+
+Fixtures are mostly synthetic rows assembled in Rust tests. The important thing
+to preserve is behavioral coverage around ledger invariants, not a snapshot of
+every JSON payload.
+
+---
+
+## Key Dependencies
+
+- **`rusqlite`** — local ledger storage, migrations, and relational constraints
+  that keep Canopy honest.
+- **`clap`** — the CLI contract. Many operator workflows still enter through the
+  terminal even when the same behavior exists over MCP.
+- **`spore`** — shared ecosystem transport and tool primitives.
+- **`time`** — timestamp parsing and formatting for due dates, expiry windows,
+  and read-model freshness.

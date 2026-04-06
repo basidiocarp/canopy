@@ -16,17 +16,76 @@ pub use traits::CanopyStore;
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    ExecutionActionKind, HandoffType, TaskAction, TaskEventType, TaskPriority,
+    ExecutionActionKind, Freshness, HandoffType, TaskAction, TaskEventType, TaskPriority,
     TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
 use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use schema::{BASE_SCHEMA, migrate_schema};
 
 pub(crate) const EVIDENCE_REF_SCHEMA_VERSION: &str = "1.0";
+pub const CLAIM_STALE_THRESHOLD_SECS: i64 = 300;
+pub const HEARTBEAT_AGING_THRESHOLD_SECS: i64 = 15 * 60;
+pub const HEARTBEAT_STALE_THRESHOLD_SECS: i64 = 60 * 60;
+
+/// Returns the age in seconds of an agent's last heartbeat.
+///
+/// `None` means the agent has no recorded heartbeat.
+///
+/// # Errors
+///
+/// Returns an error if the agent does not exist or the heartbeat timestamp is invalid.
+pub fn agent_last_heartbeat_age_secs(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+) -> StoreResult<Option<i64>> {
+    let agent = store.get_agent(agent_id)?;
+    let Some(heartbeat_at) = agent.heartbeat_at.as_deref() else {
+        return Ok(None);
+    };
+
+    let heartbeat_at = helpers::parse_database_timestamp(heartbeat_at)?;
+    let age_secs = (OffsetDateTime::now_utc() - heartbeat_at)
+        .whole_seconds()
+        .max(0);
+    Ok(Some(age_secs))
+}
+
+/// Ensure an agent's last heartbeat is fresh enough to claim work.
+///
+/// # Errors
+///
+/// Returns a validation error when the agent is stale or missing a heartbeat.
+pub fn ensure_agent_fresh_for_claim(
+    store: &(impl CanopyStore + ?Sized),
+    agent_id: &str,
+    threshold_secs: i64,
+) -> StoreResult<()> {
+    let age_secs = agent_last_heartbeat_age_secs(store, agent_id)?;
+    match age_secs {
+        Some(age_secs) if age_secs > threshold_secs => Err(StoreError::Validation(format!(
+            "agent {agent_id} last heartbeat was {age_secs}s ago (threshold: {threshold_secs}s) — send a heartbeat before claiming"
+        ))),
+        Some(_) => Ok(()),
+        None => Err(StoreError::Validation(format!(
+            "agent {agent_id} has no recorded heartbeat (age: missing, threshold: {threshold_secs}s) — send a heartbeat before claiming"
+        ))),
+    }
+}
+
+#[must_use]
+pub fn classify_agent_freshness(age_secs: Option<i64>) -> Freshness {
+    match age_secs {
+        Some(age_secs) if age_secs >= HEARTBEAT_STALE_THRESHOLD_SECS => Freshness::Stale,
+        Some(age_secs) if age_secs >= HEARTBEAT_AGING_THRESHOLD_SECS => Freshness::Aging,
+        Some(_) => Freshness::Fresh,
+        None => Freshness::Missing,
+    }
+}
 
 const AUTO_REVIEW_MIN_PRIORITY: TaskPriority = TaskPriority::Medium;
 const AUTO_REVIEW_SUBTASKS: [(&str, &str); 3] = [

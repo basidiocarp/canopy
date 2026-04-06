@@ -11,11 +11,13 @@ use canopy::models::{
     TaskAction, TaskRelationshipKind, TaskStatus, VerificationState,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
-    TaskStatusUpdate, TaskTriageUpdate,
+    CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store,
+    TaskCreationOptions, TaskStatusUpdate, TaskTriageUpdate, agent_last_heartbeat_age_secs,
+    classify_agent_freshness,
 };
 use clap::Parser;
 use serde::Serialize;
+use serde_json::Value;
 use spore::{Tool, discover};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -107,7 +109,20 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
             print_json(&agent)?;
         }
         AgentCommand::List => {
-            print_json(&store.list_agents()?)?;
+            let agents = store.list_agents()?;
+            let mut output = Vec::with_capacity(agents.len());
+            for agent in agents {
+                let freshness = classify_agent_freshness(agent_last_heartbeat_age_secs(
+                    store,
+                    &agent.agent_id,
+                )?);
+                let mut value = serde_json::to_value(&agent)?;
+                if let Value::Object(ref mut object) = value {
+                    object.insert("freshness".to_string(), serde_json::to_value(freshness)?);
+                }
+                output.push(value);
+            }
+            print_json(&output)?;
         }
         AgentCommand::History {
             agent_id,
@@ -349,10 +364,18 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         TaskCommand::Claim {
             agent_id,
             task_id,
-            force,
+            force_claim,
             after,
             worktree,
         } => {
+            if !force_claim {
+                canopy::store::ensure_agent_fresh_for_claim(
+                    store,
+                    &agent_id,
+                    CLAIM_STALE_THRESHOLD_SECS,
+                )?;
+            }
+
             // Sequential mode: add BlockedBy relationship before claiming
             if let Some(ref blocker_id) = after {
                 store.add_task_relationship(
@@ -380,7 +403,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             }
 
             // Scope conflict check before claiming
-            if !force {
+            if !force_claim {
                 let task = store.get_task(&task_id)?;
                 if !task.scope.is_empty() {
                     let conflicts = store.find_scope_conflicts(&task_id, &task.scope)?;
@@ -401,7 +424,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                         anyhow::bail!(
                             "File scope conflict detected:\n{detail}\n\
                              Resolve with: --after <task-id> (sequential), \
-                             --worktree (isolated), or --force (advisory)"
+                             --worktree (isolated), or --force-claim (advisory)"
                         );
                     }
                 }

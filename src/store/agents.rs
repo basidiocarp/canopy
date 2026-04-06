@@ -1,8 +1,10 @@
 use rusqlite::{OptionalExtension, params};
+use time::OffsetDateTime;
 
 use super::helpers::{
-    get_agent_in_connection, map_agent, map_agent_heartbeat, record_agent_heartbeat_in_connection,
-    serialize_capabilities, validate_agent_registration, validate_agent_task_link,
+    get_agent_in_connection, map_agent, map_agent_heartbeat, parse_database_timestamp,
+    record_agent_heartbeat_in_connection, serialize_capabilities, validate_agent_registration,
+    validate_agent_task_link,
 };
 use super::{AgentHeartbeatWrite, Store, StoreError, StoreResult};
 use crate::models::{AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus};
@@ -127,6 +129,48 @@ impl Store {
     /// Returns an error if the agent does not exist or the query fails.
     pub fn get_agent(&self, agent_id: &str) -> StoreResult<AgentRegistration> {
         get_agent_in_connection(&self.conn, agent_id)
+    }
+
+    /// Returns the age in seconds of the agent's last heartbeat.
+    ///
+    /// `None` means the agent has no recorded heartbeat yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent does not exist or the heartbeat timestamp is invalid.
+    pub fn agent_last_heartbeat_age_secs(&self, agent_id: &str) -> StoreResult<Option<i64>> {
+        let agent = self.get_agent(agent_id)?;
+        let Some(heartbeat_at) = agent.heartbeat_at.as_deref() else {
+            return Ok(None);
+        };
+
+        let heartbeat_at = parse_database_timestamp(heartbeat_at)?;
+        let age_secs = (OffsetDateTime::now_utc() - heartbeat_at)
+            .whole_seconds()
+            .max(0);
+        Ok(Some(age_secs))
+    }
+
+    /// Ensure an agent's last heartbeat is fresh enough to claim work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the agent is stale or missing a heartbeat.
+    pub fn ensure_agent_fresh_for_claim(
+        &self,
+        agent_id: &str,
+        threshold_secs: i64,
+    ) -> StoreResult<()> {
+        let age_secs = self.agent_last_heartbeat_age_secs(agent_id)?;
+        match age_secs {
+            Some(age_secs) if age_secs > threshold_secs => Err(StoreError::Validation(format!(
+                "agent {agent_id} last heartbeat was {age_secs}s ago (threshold: {threshold_secs}s) — send a heartbeat before claiming"
+            ))),
+            Some(_) => Ok(()),
+            None => Err(StoreError::Validation(format!(
+                "agent {agent_id} has no recorded heartbeat (age: missing, threshold: {threshold_secs}s) — send a heartbeat before claiming"
+            ))),
+        }
     }
 
     /// Lists agents filtered by project root.

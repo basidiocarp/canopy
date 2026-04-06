@@ -43,8 +43,9 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
     let has_verify_script = verify_script.exists();
     let verify_script_path = has_verify_script.then_some(verify_script);
 
-    let is_complete =
-        total_checkboxes > 0 && total_checkboxes == checked_checkboxes && empty_paste_markers.is_empty();
+    let is_complete = total_checkboxes > 0
+        && total_checkboxes == checked_checkboxes
+        && empty_paste_markers.is_empty();
 
     Ok(CompletenessReport {
         is_complete,
@@ -280,7 +281,11 @@ some output here
 
         // Create the verify script
         let verify_path = dir.path().join("verify-test-handoff.sh");
-        fs::write(&verify_path, "#!/bin/bash\necho 'Results: 1 passed, 0 failed'").unwrap();
+        fs::write(
+            &verify_path,
+            "#!/bin/bash\necho 'Results: 1 passed, 0 failed'",
+        )
+        .unwrap();
 
         let report = check_completeness(&handoff_path).unwrap();
         assert!(report.is_complete);
@@ -378,11 +383,7 @@ filled output
     fn verify_script_execution() {
         let dir = TempDir::new().unwrap();
         let script = dir.path().join("verify.sh");
-        fs::write(
-            &script,
-            "#!/bin/bash\necho 'Results: 5 passed, 0 failed'\n",
-        )
-        .unwrap();
+        fs::write(&script, "#!/bin/bash\necho 'Results: 5 passed, 0 failed'\n").unwrap();
 
         #[cfg(unix)]
         {

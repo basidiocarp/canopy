@@ -69,6 +69,7 @@ pub enum TaskStatus {
     Assigned,
     InProgress,
     Blocked,
+    // blocked_reason and child_task_id are surfaced on the task record.
     ReviewRequired,
     Completed,
     Closed,
@@ -746,6 +747,7 @@ pub struct Task {
     pub description: Option<String>,
     pub requested_by: String,
     pub project_root: String,
+    pub parent_task_id: Option<String>,
     pub required_role: Option<AgentRole>,
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,

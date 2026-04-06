@@ -64,6 +64,8 @@ fn test_dispatch_tools_are_in_schema() {
         "canopy_task_complete",
         "canopy_task_block",
         "canopy_task_snapshot",
+        "canopy_report_scope_gap",
+        "canopy_get_handoff_scope",
         "canopy_files_lock",
         "canopy_files_unlock",
         "canopy_files_check",
@@ -104,7 +106,7 @@ fn test_dispatch_tools_are_in_schema() {
 fn test_tool_count_matches() {
     let schema_count = canopy::mcp::schema::tool_definitions().len();
     assert_eq!(
-        schema_count, 31,
-        "Expected 31 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
+        schema_count, 33,
+        "Expected 33 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
     );
 }

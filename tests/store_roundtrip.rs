@@ -1277,6 +1277,20 @@ fn task_creation_actions_create_artifacts_and_record_history() {
         .iter()
         .find(|item| item.title == "Close the follow-up queue")
         .expect("follow-up task");
+    assert!(
+        store
+            .get_parent_id(&follow_up_task.task_id)
+            .expect("follow-up parent id")
+            .is_none(),
+        "follow-up relationships should not become structural parent links"
+    );
+    assert!(
+        store
+            .get_children(&task.task_id)
+            .expect("structural children")
+            .is_empty(),
+        "follow-up tasks should not count as structural children"
+    );
     let blocker_task = store
         .create_task("Lifecycle blocker", None, "operator", "/tmp/project", None)
         .expect("create blocker task");
@@ -1467,6 +1481,14 @@ fn subtasks_create_parent_relationships_and_enforce_single_parent() {
     assert_eq!(children[1].task_id, child_b.task_id);
     assert_eq!(
         store
+            .get_task(&child_a.task_id)
+            .expect("reload child a")
+            .parent_task_id
+            .as_deref(),
+        Some(parent.task_id.as_str())
+    );
+    assert_eq!(
+        store
             .get_parent_id(&child_a.task_id)
             .expect("get parent id"),
         Some(parent.task_id.clone())
@@ -1535,6 +1557,7 @@ fn deleting_parent_does_not_delete_children() {
         .get_task(&child_id)
         .expect("child survives parent delete");
     assert_eq!(child.title, "Keep child");
+    assert!(child.parent_task_id.is_none());
     assert!(
         store
             .get_parent_id(&child_id)

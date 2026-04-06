@@ -159,6 +159,10 @@ pub fn tool_definitions() -> Vec<Value> {
                 "agent_id": {
                     "type": "string",
                     "description": "Agent claiming the task"
+                },
+                "force_claim": {
+                    "type": "boolean",
+                    "description": "Bypass heartbeat freshness checks for manual operator intervention"
                 }
             },
             "required": ["task_id", "agent_id"]
@@ -460,6 +464,48 @@ pub fn tool_definitions() -> Vec<Value> {
                     "description": "Minimum priority to include"
                 }
             }
+        }),
+    ));
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Scope (2)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_report_scope_gap",
+        "Report a scope gap for the active task. The runtime classifies the gap and either logs it as non-blocking or blocks the task and creates a child follow-up task.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ULID of the task being worked"
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent reporting the scope gap"
+                },
+                "work_item": {
+                    "type": "string",
+                    "description": "Description of the out-of-scope work item"
+                }
+            },
+            "required": ["task_id", "agent_id", "work_item"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_get_handoff_scope",
+        "Retrieve the declared scope for a task so the agent can compare a candidate work item against it.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ULID of the task"
+                }
+            },
+            "required": ["task_id"]
         }),
     ));
 
