@@ -1,5 +1,5 @@
 use rusqlite::{OptionalExtension, params};
-use time::OffsetDateTime;
+use chrono::Utc;
 
 use super::helpers::{
     get_agent_in_connection, map_agent, map_agent_heartbeat, parse_database_timestamp,
@@ -145,9 +145,7 @@ impl Store {
         };
 
         let heartbeat_at = parse_database_timestamp(heartbeat_at)?;
-        let age_secs = (OffsetDateTime::now_utc() - heartbeat_at)
-            .whole_seconds()
-            .max(0);
+        let age_secs = (Utc::now() - heartbeat_at).num_seconds().max(0);
         Ok(Some(age_secs))
     }
 

@@ -10,11 +10,10 @@ use crate::models::{
     TaskSort, TaskStatus, TaskView, VerificationState, derive_review_cycle_context,
 };
 use crate::store::{CanopyStore, StoreError, StoreResult};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use std::collections::{HashMap, HashSet};
-use time::format_description::well_known::Rfc3339;
-use time::{
-    OffsetDateTime, PrimitiveDateTime, format_description::FormatItem, macros::format_description,
-};
+
+type OffsetDateTime = DateTime<Utc>;
 
 const TASK_AGING_HOURS: i64 = 6;
 const TASK_STALE_HOURS: i64 = 24;
@@ -24,8 +23,6 @@ const HANDOFF_STALE_HOURS: i64 = 24;
 const HEARTBEAT_AGING_MINUTES: i64 = 15;
 const HEARTBEAT_STALE_MINUTES: i64 = 60;
 const CANOPY_API_SCHEMA_VERSION: &str = "1.0";
-const SQLITE_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
-    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SnapshotOptions<'a> {
@@ -91,7 +88,7 @@ pub fn snapshot(
 
     let handoffs = store.list_handoffs_for_project(project_root)?;
     let mut tasks = store.list_tasks_filtered(project_root, None, None)?;
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
 
     let project_task_events = store.list_task_events_for_project(project_root)?;
     let project_assignments = store.list_task_assignments_for_project(project_root)?;
@@ -415,7 +412,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     let evidence = store.list_evidence(task_id)?;
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     let execution_summary =
         derive_task_execution_summaries(std::slice::from_ref(&task), &events, now)
             .into_iter()
@@ -1543,7 +1540,7 @@ fn derive_task_execution_summaries(
 
             let active_execution_seconds = if task.status == TaskStatus::InProgress {
                 active_start_at.as_deref().and_then(|raw| {
-                    parse_timestamp(raw).map(|started_at| (now - started_at).whole_seconds().max(0))
+                    parse_timestamp(raw).map(|started_at| (now - started_at).num_seconds().max(0))
                 })
             } else {
                 None
@@ -2617,7 +2614,7 @@ fn derive_accepted_handoff_follow_through_task_ids(
         handoffs,
         execution_summaries,
         None,
-        OffsetDateTime::now_utc(),
+        Utc::now(),
     )
 }
 
@@ -3049,7 +3046,7 @@ fn deadline_state(deadline_at: Option<&str>, now: OffsetDateTime) -> DeadlineSta
     };
     if deadline_at <= now {
         DeadlineState::Overdue
-    } else if deadline_at <= now + time::Duration::hours(DEADLINE_SOON_HOURS) {
+    } else if deadline_at <= now + Duration::hours(DEADLINE_SOON_HOURS) {
         DeadlineState::DueSoon
     } else {
         DeadlineState::Scheduled
@@ -3099,10 +3096,10 @@ fn derive_task_deadline_summaries(tasks: &[Task], now: OffsetDateTime) -> Vec<Ta
                 .and_then(parse_timestamp)
                 .map_or((None, None), |deadline_at| {
                     let diff = deadline_at - now;
-                    if diff.is_negative() {
-                        (None, Some((-diff).whole_seconds()))
+                    if diff < Duration::zero() {
+                        (None, Some((-diff).num_seconds()))
                     } else {
-                        (Some(diff.whole_seconds()), None)
+                        (Some(diff.num_seconds()), None)
                     }
                 });
 
@@ -3744,7 +3741,7 @@ fn overdue_handoff_age_seconds(
         && handoff.status == crate::models::HandoffStatus::Open
         && !handoff_has_expired(handoff, now);
 
-    ((is_follow_through || is_acceptance) && due_at < now).then_some((now - due_at).whole_seconds())
+    ((is_follow_through || is_acceptance) && due_at < now).then_some((now - due_at).num_seconds())
 }
 
 fn classify_breach_severity(due_soon_count: usize, overdue_count: usize) -> BreachSeverity {
@@ -3794,7 +3791,7 @@ fn handoff_freshness(handoff: &Handoff, now: OffsetDateTime) -> Freshness {
         let Some(due_at) = parse_timestamp(due_at) else {
             return Freshness::Missing;
         };
-        let minutes_until_due = (due_at - now).whole_minutes();
+        let minutes_until_due = (due_at - now).num_minutes();
         if minutes_until_due <= 0 {
             return Freshness::Stale;
         }
@@ -3821,7 +3818,7 @@ fn timestamp_freshness(
     let Some(parsed) = parse_timestamp(timestamp) else {
         return Freshness::Missing;
     };
-    let elapsed_hours = (now - parsed).whole_hours();
+    let elapsed_hours = (now - parsed).num_hours();
     if elapsed_hours >= stale_hours {
         Freshness::Stale
     } else if elapsed_hours >= aging_hours {
@@ -3838,7 +3835,7 @@ fn heartbeat_freshness(timestamp: Option<&str>, now: OffsetDateTime) -> Freshnes
     let Some(parsed) = parse_timestamp(timestamp) else {
         return Freshness::Missing;
     };
-    let elapsed_minutes = (now - parsed).whole_minutes();
+    let elapsed_minutes = (now - parsed).num_minutes();
     if elapsed_minutes >= HEARTBEAT_STALE_MINUTES {
         Freshness::Stale
     } else if elapsed_minutes >= HEARTBEAT_AGING_MINUTES {
@@ -3849,11 +3846,14 @@ fn heartbeat_freshness(timestamp: Option<&str>, now: OffsetDateTime) -> Freshnes
 }
 
 fn parse_timestamp(raw: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(raw, &Rfc3339).ok().or_else(|| {
-        PrimitiveDateTime::parse(raw, SQLITE_TIMESTAMP_FORMAT)
-            .ok()
-            .map(PrimitiveDateTime::assume_utc)
-    })
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
+                .map(|dt| dt.and_utc())
+                .ok()
+        })
 }
 
 fn max_freshness(left: Freshness, right: Freshness) -> Freshness {

@@ -5,10 +5,10 @@ use canopy::models::{
     SnapshotPreset, TaskAttentionReason, TaskDeadlineKind, TaskStatus, VerificationState,
 };
 use canopy::store::{Store, TaskCreationOptions, TaskDeadlineUpdate, TaskStatusUpdate};
+use chrono::{Duration, Utc};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use tempfile::tempdir;
-use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[test]
 fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
@@ -2110,16 +2110,10 @@ fn api_snapshot_review_handoff_follow_through_tracks_open_and_accepted_review_ha
 fn api_snapshot_review_handoff_follow_through_splits_due_soon_and_overdue() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
-    let now = OffsetDateTime::now_utc();
-    let due_soon_review_due_at = (now + Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format due soon review handoff deadline");
-    let overdue_review_due_at = (now - Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format overdue review handoff deadline");
-    let review_handoff_expires_at = (now + Duration::hours(2))
-        .format(&Rfc3339)
-        .expect("format review handoff expiry");
+    let now = Utc::now();
+    let due_soon_review_due_at = (now + Duration::hours(1)).to_rfc3339();
+    let overdue_review_due_at = (now - Duration::hours(1)).to_rfc3339();
+    let review_handoff_expires_at = (now + Duration::hours(2)).to_rfc3339();
 
     for agent_id in ["agent-a", "agent-b"] {
         Command::cargo_bin("canopy")
@@ -2710,16 +2704,10 @@ fn api_snapshot_review_decision_follow_through_tracks_open_decision_and_closeout
 fn api_snapshot_review_decision_follow_through_splits_due_soon_and_overdue() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
-    let now = OffsetDateTime::now_utc();
-    let due_soon_due_at = (now + Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format due soon decision handoff deadline");
-    let overdue_due_at = (now - Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format overdue decision handoff deadline");
-    let decision_handoff_expires_at = (now + Duration::hours(2))
-        .format(&Rfc3339)
-        .expect("format decision handoff expiry");
+    let now = Utc::now();
+    let due_soon_due_at = (now + Duration::hours(1)).to_rfc3339();
+    let overdue_due_at = (now - Duration::hours(1)).to_rfc3339();
+    let decision_handoff_expires_at = (now + Duration::hours(2)).to_rfc3339();
 
     for agent_id in ["agent-a", "agent-b"] {
         Command::cargo_bin("canopy")
@@ -3552,16 +3540,10 @@ fn api_snapshot_review_ready_for_closeout_excludes_stale_support_from_previous_r
 fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
-    let now = OffsetDateTime::now_utc();
-    let due_soon_acceptance_due_at = (now + Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format due soon acceptance deadline");
-    let overdue_acceptance_due_at = (now - Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format overdue acceptance deadline");
-    let acceptance_expires_at = (now + Duration::hours(2))
-        .format(&Rfc3339)
-        .expect("format acceptance expiry");
+    let now = Utc::now();
+    let due_soon_acceptance_due_at = (now + Duration::hours(1)).to_rfc3339();
+    let overdue_acceptance_due_at = (now - Duration::hours(1)).to_rfc3339();
+    let acceptance_expires_at = (now + Duration::hours(2)).to_rfc3339();
 
     for agent_id in [
         "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
@@ -3892,19 +3874,11 @@ fn api_snapshot_awaiting_handoff_acceptance_excludes_expired_handoffs() {
 fn api_snapshot_accepted_handoff_follow_through_splits_due_soon_and_overdue() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
-    let now = OffsetDateTime::now_utc();
-    let due_soon_follow_through_due_at = (now + Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format due soon follow through deadline");
-    let overdue_follow_through_due_at = (now - Duration::hours(1))
-        .format(&Rfc3339)
-        .expect("format overdue follow through deadline");
-    let stale_overdue_follow_through_due_at = (now - Duration::hours(3))
-        .format(&Rfc3339)
-        .expect("format stale overdue follow through deadline");
-    let follow_through_expires_at = (now + Duration::hours(2))
-        .format(&Rfc3339)
-        .expect("format follow through expiry");
+    let now = Utc::now();
+    let due_soon_follow_through_due_at = (now + Duration::hours(1)).to_rfc3339();
+    let overdue_follow_through_due_at = (now - Duration::hours(1)).to_rfc3339();
+    let stale_overdue_follow_through_due_at = (now - Duration::hours(3)).to_rfc3339();
+    let follow_through_expires_at = (now + Duration::hours(2)).to_rfc3339();
 
     for agent_id in [
         "agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f",
@@ -4568,13 +4542,9 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
     let store = Store::open(&db_path).expect("open store");
-    let now = OffsetDateTime::now_utc();
-    let due_soon_at = (now + Duration::hours(12))
-        .format(&Rfc3339)
-        .expect("format due soon deadline");
-    let overdue_at = (now - Duration::hours(2))
-        .format(&Rfc3339)
-        .expect("format overdue deadline");
+    let now = Utc::now();
+    let due_soon_at = (now + Duration::hours(12)).to_rfc3339();
+    let overdue_at = (now - Duration::hours(2)).to_rfc3339();
 
     store
         .register_agent(&AgentRegistration {

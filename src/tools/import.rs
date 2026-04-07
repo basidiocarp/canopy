@@ -359,13 +359,15 @@ mod tests {
             },
         }
 
-        assert!(!result.is_error, "unexpected error result: {:?}", result.content);
+        assert!(
+            !result.is_error,
+            "unexpected error result: {:?}",
+            result.content
+        );
 
         let payload: serde_json::Value =
             serde_json::from_str(&result.content[0].text).expect("json result");
-        let parent_task_id = payload["parent_task_id"]
-            .as_str()
-            .expect("parent task id");
+        let parent_task_id = payload["parent_task_id"].as_str().expect("parent task id");
 
         assert_eq!(payload["requested_assignee"], "agent-review");
         assert!(payload["assigned_to"].is_null());
@@ -403,7 +405,11 @@ mod tests {
             }),
         );
 
-        assert!(!result.is_error, "unexpected error result: {:?}", result.content);
+        assert!(
+            !result.is_error,
+            "unexpected error result: {:?}",
+            result.content
+        );
 
         let payload: serde_json::Value =
             serde_json::from_str(&result.content[0].text).expect("json result");

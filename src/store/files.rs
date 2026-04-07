@@ -1,9 +1,8 @@
 use rusqlite::params;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use chrono::Utc;
 
 use super::helpers::{check_file_conflicts_in_connection, map_file_lock};
-use super::{Store, StoreError, StoreResult};
+use super::{Store, StoreResult};
 use crate::models::FileLock;
 
 impl Store {
@@ -19,9 +18,7 @@ impl Store {
         files: &[String],
         worktree_id: &str,
     ) -> StoreResult<Vec<FileLock>> {
-        let now = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(|error| StoreError::Validation(error.to_string()))?;
+        let now = Utc::now().to_rfc3339();
 
         // Conflict check and lock acquisition run inside the same transaction
         // to prevent TOCTOU races where another agent locks between check and
@@ -53,9 +50,7 @@ impl Store {
     ///
     /// Returns an error if the database operation fails.
     pub fn unlock_files(&self, task_id: &str) -> StoreResult<u64> {
-        let now = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(|error| StoreError::Validation(error.to_string()))?;
+        let now = Utc::now().to_rfc3339();
         let rows_affected = self.conn.execute(
             r"
             UPDATE file_locks

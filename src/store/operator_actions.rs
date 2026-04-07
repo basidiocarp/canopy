@@ -2,8 +2,8 @@ use crate::models::{
     CouncilMessageType, ExecutionActionKind, HandoffType, OperatorActionKind, Task, TaskEventType,
     TaskRelationshipKind, TaskRelationshipRole, TaskStatus, VerificationState,
 };
+use chrono::Utc;
 use rusqlite::params;
-use time::OffsetDateTime;
 
 use super::helpers::{
     add_council_message_in_connection, add_evidence_in_connection, assign_task_in_connection,
@@ -626,11 +626,8 @@ impl Store {
                 }
                 let acting_agent_id =
                     validate_execution_actor(&current_task, input.acting_agent_id, "pause_task")?;
-                let duration_seconds = compute_open_execution_duration_seconds(
-                    conn,
-                    task_id,
-                    OffsetDateTime::now_utc(),
-                )?;
+                let duration_seconds =
+                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?;
                 conn.execute(
                     r"
                     UPDATE tasks
@@ -688,11 +685,7 @@ impl Store {
                 let acting_agent_id =
                     validate_execution_actor(&current_task, input.acting_agent_id, "yield_task")?;
                 let duration_seconds = if current_task.status == TaskStatus::InProgress {
-                    compute_open_execution_duration_seconds(
-                        conn,
-                        task_id,
-                        OffsetDateTime::now_utc(),
-                    )?
+                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
                 } else {
                     None
                 };
@@ -763,11 +756,7 @@ impl Store {
                     "complete_task",
                 )?;
                 let duration_seconds = if current_task.status == TaskStatus::InProgress {
-                    compute_open_execution_duration_seconds(
-                        conn,
-                        task_id,
-                        OffsetDateTime::now_utc(),
-                    )?
+                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
                 } else {
                     None
                 };

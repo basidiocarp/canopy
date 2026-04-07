@@ -1,7 +1,6 @@
 use rusqlite::{OptionalExtension, params};
+use chrono::Utc;
 use std::collections::HashMap;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::helpers::{
     assign_task_in_connection, create_task_in_connection, get_task_in_connection,
@@ -909,9 +908,7 @@ impl Store {
     ///
     /// Returns an error if the database operation fails.
     pub fn atomic_claim_task(&self, agent_id: &str, task_id: &str) -> StoreResult<Option<Task>> {
-        let now = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(|error| StoreError::Validation(error.to_string()))?;
+        let now = Utc::now().to_rfc3339();
         let rows_affected = self.conn.execute(
             r"
             UPDATE tasks

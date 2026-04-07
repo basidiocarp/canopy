@@ -20,10 +20,10 @@ use crate::models::{
     TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
 use rusqlite::Connection;
+use chrono::Utc;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
-use time::OffsetDateTime;
 
 use schema::{BASE_SCHEMA, migrate_schema};
 
@@ -49,9 +49,7 @@ pub fn agent_last_heartbeat_age_secs(
     };
 
     let heartbeat_at = helpers::parse_database_timestamp(heartbeat_at)?;
-    let age_secs = (OffsetDateTime::now_utc() - heartbeat_at)
-        .whole_seconds()
-        .max(0);
+    let age_secs = (Utc::now() - heartbeat_at).num_seconds().max(0);
     Ok(Some(age_secs))
 }
 

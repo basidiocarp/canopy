@@ -4,11 +4,12 @@ use crate::models::{
     HandoffType, Task, TaskAssignment, TaskEvent, TaskEventType, TaskPriority, TaskRelationship,
     TaskRelationshipKind, TaskStatus, VerificationState, capabilities_match, parse_capabilities,
 };
+use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use std::str::FromStr;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use ulid::Ulid;
+
+type OffsetDateTime = DateTime<Utc>;
 
 use super::{
     AgentHeartbeatWrite, EVIDENCE_REF_SCHEMA_VERSION, EvidenceLinkRefs, HandoffTiming, StoreError,
@@ -372,19 +373,15 @@ pub(crate) fn serialize_capabilities(capabilities: &[String]) -> StoreResult<Str
 }
 
 pub(crate) fn parse_rfc3339_timestamp(raw: &str) -> StoreResult<OffsetDateTime> {
-    OffsetDateTime::parse(raw, &Rfc3339)
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
         .map_err(|_| StoreError::Validation(format!("invalid RFC3339 timestamp: {raw}")))
 }
 
 pub(crate) fn parse_database_timestamp(raw: &str) -> StoreResult<OffsetDateTime> {
-    OffsetDateTime::parse(raw, &Rfc3339)
-        .or_else(|_| {
-            time::PrimitiveDateTime::parse(
-                raw,
-                &time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
-            )
-            .map(time::PrimitiveDateTime::assume_utc)
-        })
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|_| NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S").map(|dt| dt.and_utc()))
         .map_err(|_| StoreError::Validation(format!("invalid database timestamp: {raw}")))
 }
 
@@ -418,7 +415,7 @@ pub(crate) fn handoff_is_expired(handoff: &Handoff) -> StoreResult<bool> {
     let Some(expires_at) = handoff.expires_at.as_deref() else {
         return Ok(false);
     };
-    Ok(parse_rfc3339_timestamp(expires_at)? <= OffsetDateTime::now_utc())
+    Ok(parse_rfc3339_timestamp(expires_at)? <= Utc::now())
 }
 
 pub(crate) fn validate_agent_task_link(
@@ -1390,7 +1387,7 @@ pub(crate) fn compute_open_execution_duration_seconds(
         return Ok(None);
     };
     let started_at = parse_database_timestamp(&start_event.created_at)?;
-    let elapsed = (now - started_at).whole_seconds();
+    let elapsed = (now - started_at).num_seconds();
     Ok(Some(elapsed.max(0)))
 }
 
