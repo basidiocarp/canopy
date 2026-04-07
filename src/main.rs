@@ -10,6 +10,7 @@ use canopy::models::{
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
     TaskAction, TaskRelationshipKind, TaskStatus, VerificationState,
 };
+use canopy::runtime::{DispatchDecision, pre_dispatch_check};
 use canopy::store::{
     CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store,
     TaskCreationOptions, TaskStatusUpdate, TaskTriageUpdate, agent_last_heartbeat_age_secs,
@@ -476,7 +477,9 @@ struct ImportedHandoffStep {
 struct ImportedHandoff {
     path: String,
     verify_script: Option<String>,
+    requested_assignee: Option<String>,
     assigned_to: Option<String>,
+    review_hold_reason: Option<String>,
     parent_task: Task,
     steps: Vec<ImportedHandoffStep>,
 }
@@ -744,13 +747,25 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
         });
     }
 
+    let mut assigned_to = None;
+    let mut review_hold_reason = None;
     let parent_task = if let Some(agent_id) = assign {
-        store.assign_task(
-            &parent_task.task_id,
-            agent_id,
-            "handoff-import",
-            Some("assigned during handoff import"),
-        )?
+        match pre_dispatch_check(path) {
+            DispatchDecision::Proceed => {
+                assigned_to = Some(agent_id.to_string());
+                store.assign_task(
+                    &parent_task.task_id,
+                    agent_id,
+                    "handoff-import",
+                    Some("assigned during handoff import"),
+                )?
+            }
+            DispatchDecision::FlagForReview { reason } => {
+                eprintln!("WARNING: holding handoff for human review: {reason}");
+                review_hold_reason = Some(reason);
+                parent_task
+            }
+        }
     } else {
         parent_task
     };
@@ -758,7 +773,9 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
     print_json(&ImportedHandoff {
         path: path.display().to_string(),
         verify_script: verify_script_exists.then(|| verify_script.display().to_string()),
-        assigned_to: assign.map(ToOwned::to_owned),
+        requested_assignee: assign.map(ToOwned::to_owned),
+        assigned_to,
+        review_hold_reason,
         parent_task,
         steps: imported_steps,
     })

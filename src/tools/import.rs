@@ -2,9 +2,10 @@
 // - tool_import_handoff
 
 use crate::models::{AgentRole, EvidenceSourceKind};
+use crate::runtime::{DispatchDecision, pre_dispatch_check};
 use crate::scope::extract_step_scope;
 use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions};
-use crate::tools::{ToolResult, get_str, validate_required_string};
+use crate::tools::{ToolResult, get_str};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
@@ -19,6 +20,9 @@ struct ImportedSubtask {
 struct ImportHandoffResult {
     parent_task_id: String,
     subtasks_created: usize,
+    requested_assignee: Option<String>,
+    assigned_to: Option<String>,
+    review_hold_reason: Option<String>,
     subtasks: Vec<ImportedSubtask>,
 }
 
@@ -144,9 +148,9 @@ pub fn tool_import_handoff(
     _agent_id: &str,
     args: &Value,
 ) -> ToolResult {
-    let file_path_str = match validate_required_string(args, "file_path") {
-        Ok(v) => v,
-        Err(e) => return e,
+    let file_path_str = match get_str(args, "path").or_else(|| get_str(args, "file_path")) {
+        Some(v) => v,
+        None => return ToolResult::error("missing required parameter: path".to_string()),
     };
     let assign_to = get_str(args, "assign_to");
 
@@ -239,24 +243,171 @@ pub fn tool_import_handoff(
         });
     }
 
+    let mut assigned_to = None;
+    let mut review_hold_reason = None;
     if let Some(agent_id) = assign_to {
-        if let Err(e) = store.assign_task(
-            &parent_task.task_id,
-            agent_id,
-            "handoff-import",
-            Some("assigned during handoff import"),
-        ) {
-            return ToolResult::error(format!(
-                "import succeeded (task {}) but assignment to '{}' failed: {e}. Task created but unassigned.",
-                parent_task.task_id, agent_id
-            ));
+        match pre_dispatch_check(path) {
+            DispatchDecision::Proceed => {
+                if let Err(e) = store.assign_task(
+                    &parent_task.task_id,
+                    agent_id,
+                    "handoff-import",
+                    Some("assigned during handoff import"),
+                ) {
+                    return ToolResult::error(format!(
+                        "import succeeded (task {}) but assignment to '{}' failed: {e}. Task created but unassigned.",
+                        parent_task.task_id, agent_id
+                    ));
+                }
+                assigned_to = Some(agent_id.to_string());
+            }
+            DispatchDecision::FlagForReview { reason } => {
+                eprintln!("WARNING: holding handoff for human review: {reason}");
+                review_hold_reason = Some(reason);
+            }
         }
     }
 
     let result = ImportHandoffResult {
         subtasks_created: subtasks.len(),
         parent_task_id: parent_task.task_id,
+        requested_assignee: assign_to.map(ToOwned::to_owned),
+        assigned_to,
+        review_hold_reason,
         subtasks,
     };
     ToolResult::json(&result)
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use super::tool_import_handoff;
+    use crate::store::Store;
+    use serde_json::json;
+    use std::fs;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn import_handoff_reports_review_hold_without_assignment() {
+        let _guard = env_lock().lock().expect("env lock");
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let handoff_dir = root.join(".handoffs").join("cortina");
+        fs::create_dir_all(&handoff_dir).expect("create handoff dir");
+
+        let handoff_path = handoff_dir.join("demo.md");
+        fs::write(
+            &handoff_path,
+            "# Handoff: Demo\n\n### Step 1: First\nImplement the step.\n",
+        )
+        .expect("write handoff");
+
+        let bin_dir = root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let cortina_path = bin_dir.join("cortina");
+        fs::write(
+            &cortina_path,
+            "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n",
+        )
+        .expect("write cortina stub");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&cortina_path)
+                .expect("stub metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&cortina_path, permissions).expect("chmod cortina stub");
+        }
+
+        let old_path = std::env::var_os("PATH");
+        let mut path_entries = vec![bin_dir.display().to_string()];
+        if let Some(existing) = &old_path {
+            path_entries.push(existing.to_string_lossy().into_owned());
+        }
+
+        unsafe {
+            std::env::set_var("PATH", path_entries.join(":"));
+        }
+
+        let db_path = root.join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+
+        let result = tool_import_handoff(
+            &store,
+            "agent-1",
+            &json!({
+                "file_path": handoff_path.display().to_string(),
+                "assign_to": "agent-review"
+            }),
+        );
+
+        match old_path {
+            Some(value) => unsafe {
+                std::env::set_var("PATH", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PATH");
+            },
+        }
+
+        assert!(!result.is_error, "unexpected error result: {:?}", result.content);
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content[0].text).expect("json result");
+        let parent_task_id = payload["parent_task_id"]
+            .as_str()
+            .expect("parent task id");
+
+        assert_eq!(payload["requested_assignee"], "agent-review");
+        assert!(payload["assigned_to"].is_null());
+        assert_eq!(payload["review_hold_reason"], "stale handoff");
+
+        let task = store.get_task(parent_task_id).expect("load parent task");
+        assert!(
+            task.owner_agent_id.is_none(),
+            "held task should remain unassigned"
+        );
+    }
+
+    #[test]
+    fn import_handoff_accepts_schema_path_parameter() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let handoff_dir = root.join(".handoffs").join("canopy");
+        fs::create_dir_all(&handoff_dir).expect("create handoff dir");
+
+        let handoff_path = handoff_dir.join("demo.md");
+        fs::write(
+            &handoff_path,
+            "# Handoff: Demo\n\n### Step 1: First\nImplement the step.\n",
+        )
+        .expect("write handoff");
+
+        let db_path = root.join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+
+        let result = tool_import_handoff(
+            &store,
+            "agent-1",
+            &json!({
+                "path": handoff_path.display().to_string()
+            }),
+        );
+
+        assert!(!result.is_error, "unexpected error result: {:?}", result.content);
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&result.content[0].text).expect("json result");
+        assert_eq!(payload["parent_task_id"].as_str().is_some(), true);
+        assert_eq!(payload["requested_assignee"], serde_json::Value::Null);
+    }
 }

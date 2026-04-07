@@ -1441,6 +1441,70 @@ Implement the second step.
 }
 
 #[test]
+fn cli_import_handoff_reports_review_hold_without_assignment() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let handoff_dir = temp.path().join(".handoffs").join("cortina");
+    fs::create_dir_all(&handoff_dir).expect("create handoff dir");
+
+    let handoff_path = handoff_dir.join("stale-demo.md");
+    fs::write(
+        &handoff_path,
+        "\
+# Handoff: Stale Demo
+
+### Step 1: First step
+Implement the first step.
+",
+    )
+    .expect("write handoff");
+
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let cortina_path = bin_dir.join("cortina");
+    fs::write(
+        &cortina_path,
+        "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n",
+    )
+    .expect("write cortina stub");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&cortina_path)
+            .expect("stub metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&cortina_path, permissions).expect("chmod cortina stub");
+    }
+
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let merged_path = format!("{}:{}", bin_dir.display(), existing_path.to_string_lossy());
+
+    let output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .env("PATH", merged_path)
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "import-handoff",
+            handoff_path.to_str().expect("handoff path"),
+            "--assign",
+            "agent-review",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let imported: Value = serde_json::from_slice(&output).expect("parse import output");
+    assert_eq!(imported["requested_assignee"], "agent-review");
+    assert!(imported["assigned_to"].is_null());
+    assert_eq!(imported["review_hold_reason"], "stale handoff");
+}
+
+#[test]
 fn cli_task_verify_records_script_evidence_and_completes_leaf_task() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");

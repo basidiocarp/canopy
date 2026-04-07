@@ -1,4 +1,8 @@
+use anyhow::Result;
+use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
+use std::process::Command;
 
 use crate::models::{Task, TaskStatus};
 use crate::scope::{ScopeGap, classify_scope_gap, extract_step_scope, scope_overlaps};
@@ -22,6 +26,25 @@ pub enum ScopeGapOutcome {
         work_item: String,
         scope_gap: ScopeGap,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchDecision {
+    Proceed,
+    FlagForReview { reason: String },
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CortinaAuditStatus {
+    Proceed,
+    FlagReview,
+}
+
+#[derive(Debug, Deserialize)]
+struct CortinaAuditResponse {
+    status: CortinaAuditStatus,
+    reason: Option<String>,
 }
 
 /// Apply the scope-detection protocol to a work item.
@@ -107,6 +130,69 @@ pub fn handle_scope_gap(
                 scope_gap: ScopeGap::Blocking { description },
             })
         }
+    }
+}
+
+pub fn pre_dispatch_check(handoff_path: &Path) -> DispatchDecision {
+    dispatch_decision_from_audit_result(run_cortina_audit(handoff_path), handoff_path)
+}
+
+fn run_cortina_audit(handoff_path: &Path) -> Result<DispatchDecision> {
+    let handoff_arg = handoff_path.display().to_string();
+    let output = Command::new("cortina")
+        .args(["audit-handoff", "--json", handoff_arg.as_str()])
+        .output()?;
+
+    decision_from_cortina_output(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        handoff_path,
+    )
+}
+
+fn decision_from_cortina_output(
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+    handoff_path: &Path,
+) -> Result<DispatchDecision> {
+    if !success {
+        anyhow::bail!(
+            "cortina audit failed for {}: {}",
+            handoff_path.display(),
+            stderr.trim()
+        );
+    }
+
+    let response: CortinaAuditResponse =
+        serde_json::from_str(stdout).map_err(anyhow::Error::from)?;
+
+    Ok(match response.status {
+        CortinaAuditStatus::Proceed => DispatchDecision::Proceed,
+        CortinaAuditStatus::FlagReview => DispatchDecision::FlagForReview {
+            reason: response.reason.unwrap_or_else(|| {
+                format!(
+                    "cortina audit flagged {} for human review",
+                    handoff_path.display()
+                )
+            }),
+        },
+    })
+}
+
+fn dispatch_decision_from_audit_result(
+    result: Result<DispatchDecision>,
+    handoff_path: &Path,
+) -> DispatchDecision {
+    match result {
+        Ok(decision) => decision,
+        Err(error) => DispatchDecision::FlagForReview {
+            reason: format!(
+                "cortina audit failed for {}: {error}",
+                handoff_path.display()
+            ),
+        },
     }
 }
 
@@ -227,5 +313,52 @@ mod tests {
             }
             other => panic!("expected non-blocking outcome, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pre_dispatch_flags_review_from_structured_audit_output() {
+        let decision = decision_from_cortina_output(
+            true,
+            r#"{"status":"flag_review","reason":"stale handoff"}"#,
+            "",
+            Path::new(".handoffs/cortina/demo.md"),
+        )
+        .expect("structured audit output should parse");
+
+        assert_eq!(
+            decision,
+            DispatchDecision::FlagForReview {
+                reason: "stale handoff".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_treats_audit_process_failure_as_error() {
+        let error = decision_from_cortina_output(
+            false,
+            "",
+            "cortina missing",
+            Path::new(".handoffs/cortina/demo.md"),
+        )
+        .expect_err("failed audit process should be treated as error");
+
+        assert!(error.to_string().contains("cortina missing"));
+    }
+
+    #[test]
+    fn pre_dispatch_flags_review_when_audit_result_errors() {
+        let decision = dispatch_decision_from_audit_result(
+            Err(anyhow::anyhow!("cortina missing")),
+            Path::new(".handoffs/cortina/demo.md"),
+        );
+
+        assert_eq!(
+            decision,
+            DispatchDecision::FlagForReview {
+                reason: "cortina audit failed for .handoffs/cortina/demo.md: cortina missing"
+                    .to_string()
+            }
+        );
     }
 }
