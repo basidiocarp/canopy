@@ -12,7 +12,7 @@ mod schema;
 mod tasks;
 mod traits;
 
-pub use traits::CanopyStore;
+pub use traits::{CanopyStore, TaskGetStore, TaskLookupStore};
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,

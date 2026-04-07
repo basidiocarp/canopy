@@ -13,7 +13,9 @@ use crate::models::{
     AgentRole, SnapshotPreset, TaskAction, TaskPriority, TaskRelationshipRole, TaskSeverity,
     TaskStatus,
 };
-use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions, TaskStatusUpdate};
+use crate::store::{
+    CanopyStore, EvidenceLinkRefs, TaskCreationOptions, TaskGetStore, TaskStatusUpdate,
+};
 use crate::tools::{ToolResult, get_str, get_string_array, validate_required_string};
 use serde::Serialize;
 use serde_json::Value;
@@ -142,7 +144,7 @@ pub fn tool_task_decompose(
 
 /// Get task detail by ID.
 pub fn tool_task_get(
-    store: &(impl CanopyStore + ?Sized),
+    store: &(impl TaskGetStore + ?Sized),
     _agent_id: &str,
     args: &Value,
 ) -> ToolResult {
@@ -154,6 +156,74 @@ pub fn tool_task_get(
     match store.get_task(task_id) {
         Ok(task) => ToolResult::json(&task),
         Err(e) => ToolResult::error(format!("failed to get task: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Task, TaskPriority, TaskSeverity, VerificationState};
+    use crate::store::{StoreError, StoreResult};
+    use serde_json::json;
+
+    struct MockTaskLookupStore {
+        tasks: Vec<Task>,
+    }
+
+    impl TaskGetStore for MockTaskLookupStore {
+        fn get_task(&self, task_id: &str) -> StoreResult<Task> {
+            self.tasks
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .cloned()
+                .ok_or(StoreError::NotFound("task"))
+        }
+    }
+
+    fn make_task(id: &str, title: &str) -> Task {
+        Task {
+            task_id: id.to_string(),
+            title: title.to_string(),
+            description: None,
+            requested_by: "test".to_string(),
+            project_root: ".".to_string(),
+            parent_task_id: None,
+            required_role: None,
+            required_capabilities: Vec::new(),
+            auto_review: false,
+            verification_required: false,
+            status: TaskStatus::Open,
+            verification_state: VerificationState::Unknown,
+            priority: TaskPriority::Medium,
+            severity: TaskSeverity::None,
+            owner_agent_id: None,
+            owner_note: None,
+            acknowledged_by: None,
+            acknowledged_at: None,
+            blocked_reason: None,
+            verified_by: None,
+            verified_at: None,
+            closed_by: None,
+            closure_summary: None,
+            closed_at: None,
+            due_at: None,
+            review_due_at: None,
+            scope: Vec::new(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            updated_at: "2025-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn tool_task_get_uses_minimal_lookup_store() {
+        let store = MockTaskLookupStore {
+            tasks: vec![make_task("task-1", "Test task")],
+        };
+
+        let result = tool_task_get(&store, "agent-1", &json!({ "task_id": "task-1" }));
+        assert!(!result.is_error);
+        assert_eq!(result.content.len(), 1);
+        assert!(result.content[0].text.contains("task-1"));
     }
 }
 
