@@ -1,5 +1,5 @@
-use rusqlite::{OptionalExtension, params};
 use chrono::Utc;
+use rusqlite::{OptionalExtension, params};
 
 use super::helpers::{
     get_agent_in_connection, map_agent, map_agent_heartbeat, parse_database_timestamp,

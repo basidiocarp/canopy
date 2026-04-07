@@ -1,5 +1,5 @@
-use rusqlite::params;
 use chrono::Utc;
+use rusqlite::params;
 
 use super::helpers::{check_file_conflicts_in_connection, map_file_lock};
 use super::{Store, StoreResult};

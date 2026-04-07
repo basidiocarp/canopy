@@ -19,8 +19,8 @@ use crate::models::{
     ExecutionActionKind, Freshness, HandoffType, TaskAction, TaskEventType, TaskPriority,
     TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
-use rusqlite::Connection;
 use chrono::Utc;
+use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
