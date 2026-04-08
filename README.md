@@ -44,7 +44,9 @@ chat logs or reconstructing state from memory.
 
 > **Boundary:** `canopy` owns coordination state. `hyphae` owns memory,
 > `cortina` owns lifecycle capture, `stipe` owns installation and host setup,
-> and `cap` owns the operator UI.
+> and `cap` owns the operator UI. `canopy` keeps the coordination ledger and
+> read models explicit; it does not absorb memory policy, presentation policy,
+> or dashboard layout.
 
 ---
 
@@ -103,6 +105,8 @@ open snapshot / task ─►    read models               ─► cap
 - Structured handoff protocol
 - Task-scoped Council threads
 - External evidence references attached to work
+- Operator read models derived from ledger state, not UI state
+- Evidence refs that keep `source_kind`, `source_ref`, and cross-links explicit
 
 ## What Canopy Does Not Own
 
@@ -110,6 +114,7 @@ open snapshot / task ─►    read models               ─► cap
 - Hook and session capture: handled by `cortina`
 - Installation and host repair: handled by `stipe`
 - General-purpose dashboards: handled by `cap`
+- Skills, hooks, and packaging content: handled by `lamella`
 
 ---
 

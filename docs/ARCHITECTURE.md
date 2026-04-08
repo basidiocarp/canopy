@@ -18,6 +18,9 @@ request flow, and storage model.
   owner stays explicit in the ledger.
 - **Read models over raw tables** — operator surfaces consume snapshots and
   summaries, not ad hoc SQL across event history.
+- **Projection, not presentation** — `api.rs` derives operator read models from
+  ledger state; `cap` renders them, but it does not redefine queue or evidence
+  semantics.
 - **Local-first orchestration** — the first release assumes one machine, a
   local SQLite database, and sibling tools reached by reference.
 
@@ -58,6 +61,23 @@ request flow, and storage model.
 Canopy should reference Hyphae, Cortina, Mycelium, and Rhizome as evidence
 sources. It should not absorb their storage or become the system of record for
 installation, memory, or host repair.
+
+### Evidence Contract
+
+- Evidence rows stay task-scoped ledger entries.
+- Each evidence reference keeps `source_kind` and `source_ref` explicit.
+- Handoff, session, memory, symbol, and file links are stored as fields rather
+  than inferred by UI code.
+- Operator surfaces may summarize evidence, but they do not own evidence
+  policy or normalize the contract themselves.
+
+### Operator Read Models
+
+- `api.rs` builds snapshots and task-detail projections from stored ledger
+  state.
+- `tools/` exposes those projections through CLI and MCP entry points.
+- `cap` consumes the projections; it should not reconstruct attention, queue,
+  or evidence semantics from raw tables.
 
 ---
 

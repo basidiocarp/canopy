@@ -31,6 +31,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::Level;
+use tracing::warn;
 
 const EVIDENCE_VERIFY_SCHEMA_VERSION: &str = "1.0";
 
@@ -361,7 +362,11 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                     TaskRelationshipKind::Blocks,
                     &agent_id,
                 )?;
-                eprintln!("Added dependency: {task_id} blocked by {blocker_id}");
+                warn!(
+                    task_id = %task_id,
+                    blocker_id = %blocker_id,
+                    "added dependency before claim"
+                );
             }
 
             // Worktree isolation: record worktree ID in task metadata note
@@ -376,7 +381,11 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                         ..Default::default()
                     },
                 )?;
-                eprintln!("Task {task_id} will use worktree: {worktree_id}");
+                warn!(
+                    task_id = %task_id,
+                    worktree_id = %worktree_id,
+                    "recorded worktree isolation for claim"
+                );
             }
 
             // Scope conflict check before claiming
@@ -737,7 +746,11 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
                 )?
             }
             DispatchDecision::FlagForReview { reason } => {
-                eprintln!("WARNING: holding handoff for human review: {reason}");
+                warn!(
+                    path = %path.display(),
+                    reason = %reason,
+                    "holding handoff for human review"
+                );
                 review_hold_reason = Some(reason);
                 parent_task
             }
@@ -1048,18 +1061,19 @@ fn verification_script_path(path: &Path) -> PathBuf {
 }
 
 fn infer_handoff_project_root(path: &Path) -> Result<String> {
+    infer_handoff_workspace_root(path)
+        .map(|project_root| project_root.display().to_string())
+        .ok_or_else(|| anyhow::anyhow!("failed to infer project root for {}", path.display()))
+}
+
+fn infer_handoff_workspace_root(path: &Path) -> Option<PathBuf> {
     for ancestor in path.ancestors() {
         if ancestor.file_name().and_then(|value| value.to_str()) == Some(".handoffs") {
-            if let Some(project_root) = ancestor.parent() {
-                return Ok(project_root.display().to_string());
-            }
+            return ancestor.parent().map(Path::to_path_buf);
         }
     }
 
-    Ok(std::env::current_dir()
-        .context("resolve current directory for handoff import")?
-        .display()
-        .to_string())
+    path.parent().map(Path::to_path_buf)
 }
 
 fn extract_handoff_title(content: &str) -> String {
@@ -1290,7 +1304,7 @@ fn current_span_context() -> SpanContext {
 fn command_span_context(cli: &Cli) -> SpanContext {
     let context = current_span_context();
     let workspace_root = match &cli.command {
-        Commands::ImportHandoff { path, .. } => path.parent().map(Path::to_path_buf),
+        Commands::ImportHandoff { path, .. } => infer_handoff_workspace_root(path),
         Commands::Serve { project, .. } => project.as_ref().map(PathBuf::from),
         Commands::WorkQueue { project_root, .. } => project_root.as_ref().map(PathBuf::from),
         Commands::Situation { project_root, .. } => project_root.as_ref().map(PathBuf::from),
@@ -1530,10 +1544,11 @@ fn print_json<T: Serialize>(value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidenceVerificationStatus, extract_handoff_steps, filter_verification_output,
-        parse_script_verification_status, verify_evidence_ref,
+        Cli, Commands, EvidenceVerificationStatus, command_span_context, extract_handoff_steps,
+        filter_verification_output, parse_script_verification_status, verify_evidence_ref,
     };
     use canopy::models::{EvidenceRef, EvidenceSourceKind};
+    use std::path::PathBuf;
 
     #[test]
     fn verify_manual_note_evidence_as_verified() {
@@ -1676,5 +1691,29 @@ Implement the second step.
             Some("Implement the first step.")
         );
         assert_eq!(steps[1].step_marker, "Step 2: Second");
+    }
+
+    #[test]
+    fn import_handoff_command_uses_project_root_workspace_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path().join("workspace");
+        let handoff_dir = project_root.join(".handoffs").join("canopy");
+        std::fs::create_dir_all(&handoff_dir).unwrap();
+        let handoff_path = handoff_dir.join("demo.md");
+
+        let cli = Cli {
+            db: None,
+            command: Commands::ImportHandoff {
+                path: PathBuf::from(&handoff_path),
+                assign: None,
+            },
+        };
+        let context = command_span_context(&cli);
+        let project_root = project_root.display().to_string();
+
+        assert_eq!(
+            context.workspace_root.as_deref(),
+            Some(project_root.as_str())
+        );
     }
 }

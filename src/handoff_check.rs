@@ -4,6 +4,7 @@ use spore::logging::{SpanContext, subprocess_span, tool_span, workflow_span};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use tracing::warn;
 
 /// Report on whether a handoff document meets completion criteria.
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +35,9 @@ pub struct VerifyResult {
 ///
 /// Returns an error if the file cannot be read.
 pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
+    let span_context = span_context_for_handoff(handoff_path);
+    let _tool_span = tool_span("handoff_check_completeness", &span_context).entered();
+    let _workflow_span = workflow_span("handoff_check_completeness", &span_context).entered();
     let content =
         std::fs::read_to_string(handoff_path).context("failed to read handoff document")?;
 
@@ -47,6 +51,25 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
     let is_complete = total_checkboxes > 0
         && total_checkboxes == checked_checkboxes
         && empty_paste_markers.is_empty();
+
+    if is_complete {
+        warn!(
+            path = %handoff_path.display(),
+            total_checkboxes,
+            checked_checkboxes,
+            has_verify_script,
+            "handoff completeness check passed"
+        );
+    } else {
+        warn!(
+            path = %handoff_path.display(),
+            total_checkboxes,
+            checked_checkboxes,
+            empty_paste_markers = empty_paste_markers.len(),
+            has_verify_script,
+            "handoff completeness check found outstanding work"
+        );
+    }
 
     Ok(CompletenessReport {
         is_complete,
@@ -103,6 +126,7 @@ const VERIFY_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Returns an error if the script cannot be executed.
 pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
     let Some(script_path) = &report.verify_script_path else {
+        warn!("no verify script found; skipping verification");
         return Ok(VerifyResult {
             success: true,
             passed: 0,
@@ -125,7 +149,7 @@ pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
             .context("failed to spawn verify script")?
     };
 
-    let output = wait_with_timeout(child, VERIFY_SCRIPT_TIMEOUT, &span_context)?;
+    let output = wait_with_timeout(child, VERIFY_SCRIPT_TIMEOUT, &span_context, script_path)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -148,11 +172,13 @@ fn wait_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
     span_context: &SpanContext,
+    script_path: &Path,
 ) -> Result<std::process::Output> {
     use std::io::Read;
 
     let _workflow_span = workflow_span("verify_script_wait", span_context).entered();
     let start = std::time::Instant::now();
+    let mut next_progress_log = Duration::from_secs(5);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -171,8 +197,24 @@ fn wait_with_timeout(
                 });
             }
             Ok(None) => {
-                if start.elapsed() > timeout {
+                let elapsed = start.elapsed();
+                if elapsed >= next_progress_log {
+                    warn!(
+                        script = %script_path.display(),
+                        elapsed_secs = elapsed.as_secs(),
+                        timeout_secs = timeout.as_secs(),
+                        "waiting for verify script to finish"
+                    );
+                    next_progress_log += Duration::from_secs(5);
+                }
+                if elapsed > timeout {
                     let _ = child.kill();
+                    warn!(
+                        script = %script_path.display(),
+                        elapsed_secs = elapsed.as_secs(),
+                        timeout_secs = timeout.as_secs(),
+                        "verify script timed out"
+                    );
                     anyhow::bail!("verify script timed out after {}s", timeout.as_secs());
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -182,12 +224,30 @@ fn wait_with_timeout(
     }
 }
 
-fn span_context_for_script(script_path: &Path) -> SpanContext {
-    let context = SpanContext::for_app("canopy").with_tool("handoff_verify_script");
-    match script_path.parent() {
-        Some(parent) => context.with_workspace_root(parent.display().to_string()),
+fn span_context_for_handoff(handoff_path: &Path) -> SpanContext {
+    let context = SpanContext::for_app("canopy").with_tool("handoff_check_completeness");
+    match workspace_root_from_handoff_path(handoff_path) {
+        Some(workspace_root) => context.with_workspace_root(workspace_root.display().to_string()),
         None => context,
     }
+}
+
+fn span_context_for_script(script_path: &Path) -> SpanContext {
+    let context = SpanContext::for_app("canopy").with_tool("handoff_verify_script");
+    match workspace_root_from_handoff_path(script_path) {
+        Some(workspace_root) => context.with_workspace_root(workspace_root.display().to_string()),
+        None => context,
+    }
+}
+
+fn workspace_root_from_handoff_path(path: &Path) -> Option<PathBuf> {
+    for ancestor in path.ancestors() {
+        if ancestor.file_name().and_then(|value| value.to_str()) == Some(".handoffs") {
+            return ancestor.parent().map(Path::to_path_buf);
+        }
+    }
+
+    path.parent().map(Path::to_path_buf)
 }
 
 /// Count total and checked markdown checkboxes in the content.
@@ -420,5 +480,17 @@ filled output
         assert!(result.success);
         assert_eq!(result.passed, 5);
         assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn workspace_root_is_inferred_from_handoffs_parent() {
+        let dir = TempDir::new().unwrap();
+        let project_root = dir.path().join("workspace");
+        let handoff_dir = project_root.join(".handoffs").join("canopy");
+        fs::create_dir_all(&handoff_dir).unwrap();
+        let handoff_path = handoff_dir.join("demo.md");
+
+        let workspace_root = workspace_root_from_handoff_path(&handoff_path).unwrap();
+        assert_eq!(workspace_root, project_root);
     }
 }
