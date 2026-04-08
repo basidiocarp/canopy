@@ -1260,10 +1260,7 @@ fn non_empty_value(value: &str) -> Option<&str> {
 }
 
 fn runtime_session_id_from_env() -> Option<String> {
-    std::env::var("CLAUDE_SESSION_ID")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    spore::claude_session_id()
 }
 
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {
