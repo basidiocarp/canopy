@@ -313,10 +313,20 @@ mod tests {
 
         let bin_dir = root.join("bin");
         fs::create_dir_all(&bin_dir).expect("create bin dir");
+        #[cfg(windows)]
+        let cortina_path = bin_dir.join("cortina.cmd");
+        #[cfg(not(windows))]
         let cortina_path = bin_dir.join("cortina");
+
+        #[cfg(windows)]
+        let cortina_stub =
+            "@echo off\r\necho {\"status\":\"flag_review\",\"reason\":\"stale handoff\"}\r\n";
+        #[cfg(not(windows))]
+        let cortina_stub =
+            "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n";
         fs::write(
             &cortina_path,
-            "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n",
+            cortina_stub,
         )
         .expect("write cortina stub");
 
@@ -331,13 +341,14 @@ mod tests {
         }
 
         let old_path = std::env::var_os("PATH");
-        let mut path_entries = vec![bin_dir.display().to_string()];
+        let mut path_entries = vec![bin_dir.clone().into_os_string()];
         if let Some(existing) = &old_path {
-            path_entries.push(existing.to_string_lossy().into_owned());
+            path_entries.extend(std::env::split_paths(existing).map(std::path::PathBuf::into_os_string));
         }
+        let joined_path = std::env::join_paths(path_entries).expect("join PATH entries");
 
         unsafe {
-            std::env::set_var("PATH", path_entries.join(":"));
+            std::env::set_var("PATH", joined_path);
         }
 
         let db_path = root.join("canopy.db");

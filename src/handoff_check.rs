@@ -140,9 +140,8 @@ pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
     let _tool_span = tool_span("handoff_verify_script", &span_context).entered();
 
     let child = {
-        let _subprocess_span = subprocess_span("bash verify-script", &span_context).entered();
-        Command::new("bash")
-            .arg(script_path)
+        let _subprocess_span = subprocess_span("verify-script", &span_context).entered();
+        verify_script_command(script_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -165,6 +164,24 @@ pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
         output: combined,
         timed_out: false,
     })
+}
+
+fn verify_script_command(script_path: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        if matches!(
+            script_path.extension().and_then(|ext| ext.to_str()),
+            Some("cmd" | "bat")
+        ) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(script_path);
+            return command;
+        }
+    }
+
+    let mut command = Command::new("bash");
+    command.arg(script_path);
+    command
 }
 
 /// Wait for a child process with a timeout, killing it if exceeded.
@@ -459,7 +476,14 @@ filled output
     #[test]
     fn verify_script_execution() {
         let dir = TempDir::new().unwrap();
+        #[cfg(windows)]
+        let script = dir.path().join("verify.cmd");
+        #[cfg(not(windows))]
         let script = dir.path().join("verify.sh");
+
+        #[cfg(windows)]
+        fs::write(&script, "@echo off\r\necho Results: 5 passed, 0 failed\r\n").unwrap();
+        #[cfg(not(windows))]
         fs::write(&script, "#!/bin/bash\necho 'Results: 5 passed, 0 failed'\n").unwrap();
 
         #[cfg(unix)]
