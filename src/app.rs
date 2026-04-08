@@ -22,7 +22,10 @@ use canopy::store::{
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
-use spore::logging::{SpanContext, root_span, subprocess_span, tool_span, workflow_span};
+use spore::logging::{
+    LogOutput, LoggingConfig, SpanContext, SpanEvents, root_span, subprocess_span, tool_span,
+    workflow_span,
+};
 use spore::{Tool, discover};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,10 +35,14 @@ use tracing::Level;
 const EVIDENCE_VERIFY_SCHEMA_VERSION: &str = "1.0";
 
 pub fn run() -> Result<()> {
-    spore::logging::init_app("canopy", Level::WARN);
-    let span_context = current_span_context();
-    let _root_span = root_span(&span_context).entered();
     let cli = Cli::parse();
+    spore::logging::init_with_config(
+        LoggingConfig::for_app("canopy", Level::WARN)
+            .with_output(LogOutput::Stderr)
+            .with_span_events(SpanEvents::Lifecycle),
+    );
+    let span_context = command_span_context(&cli);
+    let _root_span = root_span(&span_context).entered();
     let _workflow_span = workflow_span(command_name(&cli.command), &span_context).entered();
     let store = db::open(cli.db.as_deref())?;
     commands::run(&store, cli.command)
@@ -1277,6 +1284,39 @@ fn current_span_context() -> SpanContext {
     match std::env::current_dir() {
         Ok(path) => context.with_workspace_root(path.display().to_string()),
         Err(_) => context,
+    }
+}
+
+fn command_span_context(cli: &Cli) -> SpanContext {
+    let context = current_span_context();
+    let workspace_root = match &cli.command {
+        Commands::ImportHandoff { path, .. } => path.parent().map(Path::to_path_buf),
+        Commands::Serve { project, .. } => project.as_ref().map(PathBuf::from),
+        Commands::WorkQueue { project_root, .. } => project_root.as_ref().map(PathBuf::from),
+        Commands::Situation { project_root, .. } => project_root.as_ref().map(PathBuf::from),
+        Commands::Task { command } => match command {
+            TaskCommand::Create { project_root, .. } => Some(PathBuf::from(project_root)),
+            _ => cli
+                .db
+                .as_ref()
+                .and_then(|path| path.parent().map(Path::to_path_buf)),
+        },
+        Commands::Agent { command } => match command {
+            AgentCommand::Register { project_root, .. } => Some(PathBuf::from(project_root)),
+            _ => cli
+                .db
+                .as_ref()
+                .and_then(|path| path.parent().map(Path::to_path_buf)),
+        },
+        _ => cli
+            .db
+            .as_ref()
+            .and_then(|path| path.parent().map(Path::to_path_buf)),
+    };
+
+    match workspace_root {
+        Some(path) => context.with_workspace_root(path.display().to_string()),
+        None => context,
     }
 }
 

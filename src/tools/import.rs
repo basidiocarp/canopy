@@ -9,6 +9,7 @@ use crate::tools::{ToolResult, get_str};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
+use tracing::warn;
 
 #[derive(Debug, Serialize)]
 struct ImportedSubtask {
@@ -23,6 +24,7 @@ struct ImportHandoffResult {
     requested_assignee: Option<String>,
     assigned_to: Option<String>,
     review_hold_reason: Option<String>,
+    warnings: Vec<String>,
     subtasks: Vec<ImportedSubtask>,
 }
 
@@ -158,7 +160,7 @@ pub fn tool_import_handoff(
 
     let warnings = validate_handoff_path(path);
     for w in &warnings {
-        eprintln!("WARNING: {w}");
+        warn!(path = %path.display(), "handoff import warning: {w}");
     }
 
     let content = match std::fs::read_to_string(path) {
@@ -262,7 +264,7 @@ pub fn tool_import_handoff(
                 assigned_to = Some(agent_id.to_string());
             }
             DispatchDecision::FlagForReview { reason } => {
-                eprintln!("WARNING: holding handoff for human review: {reason}");
+                warn!(path = %path.display(), "holding handoff for human review: {reason}");
                 review_hold_reason = Some(reason);
             }
         }
@@ -274,6 +276,7 @@ pub fn tool_import_handoff(
         requested_assignee: assign_to.map(ToOwned::to_owned),
         assigned_to,
         review_hold_reason,
+        warnings,
         subtasks,
     };
     ToolResult::json(&result)

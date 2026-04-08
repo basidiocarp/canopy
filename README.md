@@ -171,6 +171,12 @@ stdout and MCP stdio responses stay clean.
   intended operator knob for this binary.
 - Logging is separate from normal product output: CLI JSON and MCP responses
   still flow on stdout, while operator diagnostics and tracing stay on stderr.
+- Lifecycle span events are enabled by default so the shared span boundaries
+  emit under normal operator runs instead of only appearing at elevated log
+  levels.
+- Most runtime diagnostics now flow through `CANOPY_LOG`, but a few CLI
+  compatibility messages still write directly to stderr when they are part of
+  the user-facing command surface.
 
 ## License
 

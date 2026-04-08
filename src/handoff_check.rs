@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
+use spore::logging::{SpanContext, subprocess_span, tool_span, workflow_span};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -111,14 +112,20 @@ pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
         });
     };
 
-    let child = Command::new("bash")
-        .arg(script_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to spawn verify script")?;
+    let span_context = span_context_for_script(script_path);
+    let _tool_span = tool_span("handoff_verify_script", &span_context).entered();
 
-    let output = wait_with_timeout(child, VERIFY_SCRIPT_TIMEOUT)?;
+    let child = {
+        let _subprocess_span = subprocess_span("bash verify-script", &span_context).entered();
+        Command::new("bash")
+            .arg(script_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("failed to spawn verify script")?
+    };
+
+    let output = wait_with_timeout(child, VERIFY_SCRIPT_TIMEOUT, &span_context)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -140,9 +147,11 @@ pub fn run_verify_script(report: &CompletenessReport) -> Result<VerifyResult> {
 fn wait_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
+    span_context: &SpanContext,
 ) -> Result<std::process::Output> {
     use std::io::Read;
 
+    let _workflow_span = workflow_span("verify_script_wait", span_context).entered();
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -170,6 +179,14 @@ fn wait_with_timeout(
             }
             Err(e) => return Err(e.into()),
         }
+    }
+}
+
+fn span_context_for_script(script_path: &Path) -> SpanContext {
+    let context = SpanContext::for_app("canopy").with_tool("handoff_verify_script");
+    match script_path.parent() {
+        Some(parent) => context.with_workspace_root(parent.display().to_string()),
+        None => context,
     }
 }
 
