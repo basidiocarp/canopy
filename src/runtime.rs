@@ -148,8 +148,8 @@ fn run_cortina_audit(handoff_path: &Path) -> Result<DispatchDecision> {
     let _tool_span = tool_span("cortina_audit_handoff", &span_context).entered();
     let handoff_arg = handoff_path.display().to_string();
     let _subprocess_span = subprocess_span("cortina audit-handoff", &span_context).entered();
-    let cortina_binary = discover(Tool::Cortina)
-        .map_or_else(|| "cortina".into(), |info| info.binary_path);
+    let cortina_binary =
+        discover(Tool::Cortina).map_or_else(|| "cortina".into(), |info| info.binary_path);
     let output = Command::new(cortina_binary)
         .args(["audit-handoff", "--json", handoff_arg.as_str()])
         .output()?;
