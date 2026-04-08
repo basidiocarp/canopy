@@ -22,15 +22,21 @@ use canopy::store::{
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
+use spore::logging::{SpanContext, root_span, subprocess_span, tool_span, workflow_span};
 use spore::{Tool, discover};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::Level;
 
 const EVIDENCE_VERIFY_SCHEMA_VERSION: &str = "1.0";
 
 pub fn run() -> Result<()> {
+    spore::logging::init_app("canopy", Level::WARN);
+    let span_context = current_span_context();
+    let _root_span = root_span(&span_context).entered();
     let cli = Cli::parse();
+    let _workflow_span = workflow_span(command_name(&cli.command), &span_context).entered();
     let store = db::open(cli.db.as_deref())?;
     commands::run(&store, cli.command)
 }
@@ -1198,6 +1204,8 @@ where
 }
 
 fn probe_hyphae_session_status(session_id: &str) -> (EvidenceVerificationStatus, String) {
+    let span_context = current_span_context().with_tool("hyphae_session_status");
+    let _tool_span = tool_span("hyphae_session_status", &span_context).entered();
     let Some(info) = discover(Tool::Hyphae) else {
         return (
             EvidenceVerificationStatus::Unsupported,
@@ -1205,6 +1213,7 @@ fn probe_hyphae_session_status(session_id: &str) -> (EvidenceVerificationStatus,
         );
     };
 
+    let _subprocess_span = subprocess_span("hyphae session status", &span_context).entered();
     let output = match Command::new(&info.binary_path)
         .args(["session", "status", "--id", session_id])
         .output()
@@ -1261,6 +1270,30 @@ fn non_empty_value(value: &str) -> Option<&str> {
 
 fn runtime_session_id_from_env() -> Option<String> {
     spore::claude_session_id()
+}
+
+fn current_span_context() -> SpanContext {
+    let context = SpanContext::for_app("canopy");
+    match std::env::current_dir() {
+        Ok(path) => context.with_workspace_root(path.display().to_string()),
+        Err(_) => context,
+    }
+}
+
+fn command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Agent { .. } => "agent",
+        Commands::ImportHandoff { .. } => "import_handoff",
+        Commands::Task { .. } => "task",
+        Commands::Handoff { .. } => "handoff",
+        Commands::Evidence { .. } => "evidence",
+        Commands::Council { .. } => "council",
+        Commands::Api { .. } => "api",
+        Commands::WorkQueue { .. } => "work_queue",
+        Commands::Files { .. } => "files",
+        Commands::Situation { .. } => "situation",
+        Commands::Serve { .. } => "serve",
+    }
 }
 
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {

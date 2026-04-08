@@ -160,6 +160,18 @@ cargo clippy
 cargo fmt
 ```
 
+## Logging
+
+Canopy writes diagnostic logs to stderr through Spore's shared logger so CLI
+stdout and MCP stdio responses stay clean.
+
+- Use `CANOPY_LOG` for repo-specific logging, for example
+  `CANOPY_LOG=canopy=debug canopy serve --agent-id orchestrator`.
+- `RUST_LOG` still works as the broader Rust fallback, but `CANOPY_LOG` is the
+  intended operator knob for this binary.
+- Logging is separate from normal product output: CLI JSON and MCP responses
+  still flow on stdout, while operator diagnostics and tracing stay on stderr.
+
 ## License
 
 See repository license.

@@ -9,6 +9,21 @@ All notable changes to Canopy are documented in this file.
 - **Changelog format**: Release headings and entry structure now follow the
   shared ecosystem changelog template.
 
+## [0.5.7] - 2026-04-08
+
+### Changed
+
+- **Shared logging rollout**: Canopy now initializes logging through Spore's
+  app-aware `CANOPY_LOG` path instead of relying on generic runtime setup.
+- **Workflow tracing**: CLI command dispatch, MCP request handling, Cortina
+  audit subprocesses, and Hyphae session verification now emit shared tracing
+  spans with workspace-aware context for faster failure localization.
+
+### Fixed
+
+- **Operator guidance**: Docs now distinguish debug logging from normal CLI and
+  MCP stdout output.
+
 ## [0.3.1] - 2026-04-03
 
 ### Added

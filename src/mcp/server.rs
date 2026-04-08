@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
+use spore::logging::{SpanContext, request_span, root_span, tool_span};
 use tracing::{debug, error};
 
 use crate::store::Store;
@@ -20,6 +21,7 @@ pub fn run_server(
     project: Option<&str>,
     worktree: Option<&str>,
 ) -> anyhow::Result<()> {
+    let _root_span = root_span(&server_span_context(project)).entered();
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -51,6 +53,8 @@ pub fn run_server(
             error!("received JSON-RPC message without method field");
             ""
         });
+        let request_context = request_span_context(project, msg.id.as_ref(), method);
+        let _request_span = request_span(method, &request_context).entered();
         debug!("MCP request: {method}");
 
         // Notifications have no id — don't respond
@@ -67,7 +71,7 @@ pub fn run_server(
                 continue;
             }
             "tools/list" => handle_tools_list(id),
-            "tools/call" => handle_tools_call(id, msg.params, store, agent_id),
+            "tools/call" => handle_tools_call(id, msg.params, store, agent_id, project),
             other => JsonRpcResponse::method_not_found(id, other),
         };
 
@@ -143,6 +147,7 @@ fn handle_tools_call(
     params: Option<Value>,
     store: &Store,
     agent_id: &str,
+    project: Option<&str>,
 ) -> JsonRpcResponse {
     let Some(params) = params else {
         return JsonRpcResponse::err(id, -32602, "missing params".into());
@@ -153,9 +158,73 @@ fn handle_tools_call(
     };
 
     debug!("tool call: {name}");
+    let _tool_span = tool_span(name, &tool_span_context(project, &id, name)).entered();
 
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     let result = crate::tools::dispatch_tool(store, agent_id, name, &args);
 
     JsonRpcResponse::ok(id, json!(result))
+}
+
+fn server_span_context(project: Option<&str>) -> SpanContext {
+    let context = SpanContext::for_app("canopy");
+    match project {
+        Some(project) if !project.trim().is_empty() => {
+            context.with_workspace_root(project.to_string())
+        }
+        _ => context,
+    }
+}
+
+fn request_span_context(project: Option<&str>, id: Option<&Value>, method: &str) -> SpanContext {
+    let context = server_span_context(project).with_tool(method);
+    match id.and_then(request_id_from_value) {
+        Some(request_id) => context.with_request_id(request_id),
+        None => context,
+    }
+}
+
+fn tool_span_context(project: Option<&str>, id: &Value, tool_name: &str) -> SpanContext {
+    let context = server_span_context(project).with_tool(tool_name);
+    match request_id_from_value(id) {
+        Some(request_id) => context.with_request_id(request_id),
+        None => context,
+    }
+}
+
+fn request_id_from_value(id: &Value) -> Option<String> {
+    match id {
+        Value::String(value) if !value.trim().is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{request_id_from_value, request_span_context};
+    use serde_json::json;
+
+    #[test]
+    fn request_id_from_value_supports_jsonrpc_scalars() {
+        assert_eq!(
+            request_id_from_value(&json!("req-1")).as_deref(),
+            Some("req-1")
+        );
+        assert_eq!(request_id_from_value(&json!(42)).as_deref(), Some("42"));
+        assert_eq!(request_id_from_value(&json!(true)).as_deref(), Some("true"));
+        assert_eq!(request_id_from_value(&Value::Null), None);
+    }
+
+    #[test]
+    fn request_span_context_carries_workspace_root_and_request_id() {
+        let context = request_span_context(Some("/repo/demo"), Some(&json!("req-7")), "tools/call");
+        assert_eq!(context.service.as_deref(), Some("canopy"));
+        assert_eq!(context.tool.as_deref(), Some("tools/call"));
+        assert_eq!(context.request_id.as_deref(), Some("req-7"));
+        assert_eq!(context.workspace_root.as_deref(), Some("/repo/demo"));
+    }
+
+    use serde_json::Value;
 }
