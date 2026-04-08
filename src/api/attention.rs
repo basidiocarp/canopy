@@ -181,7 +181,10 @@ pub(super) fn derive_task_attention(
             if task.status == TaskStatus::ReviewRequired {
                 reasons.push(TaskAttentionReason::ReviewRequired);
             }
-            if context.review_with_graph_pressure_task_ids.contains(&task.task_id) {
+            if context
+                .review_with_graph_pressure_task_ids
+                .contains(&task.task_id)
+            {
                 reasons.push(TaskAttentionReason::ReviewWithGraphPressure);
             }
             if context
@@ -196,13 +199,22 @@ pub(super) fn derive_task_attention(
             {
                 reasons.push(TaskAttentionReason::ReviewDecisionFollowThrough);
             }
-            if context.review_awaiting_support_task_ids.contains(&task.task_id) {
+            if context
+                .review_awaiting_support_task_ids
+                .contains(&task.task_id)
+            {
                 reasons.push(TaskAttentionReason::ReviewAwaitingSupport);
             }
-            if context.review_ready_for_decision_task_ids.contains(&task.task_id) {
+            if context
+                .review_ready_for_decision_task_ids
+                .contains(&task.task_id)
+            {
                 reasons.push(TaskAttentionReason::ReviewReadyForDecision);
             }
-            if context.review_ready_for_closeout_task_ids.contains(&task.task_id) {
+            if context
+                .review_ready_for_closeout_task_ids
+                .contains(&task.task_id)
+            {
                 reasons.push(TaskAttentionReason::ReviewReadyForCloseout);
             }
             if task.verification_state == VerificationState::Failed {
@@ -214,7 +226,10 @@ pub(super) fn derive_task_attention(
             if is_open && relationship_summary.is_some_and(|summary| summary.children_complete) {
                 reasons.push(TaskAttentionReason::AllChildrenComplete);
             }
-            if context.assigned_awaiting_claim_task_ids.contains(&task.task_id) {
+            if context
+                .assigned_awaiting_claim_task_ids
+                .contains(&task.task_id)
+            {
                 reasons.push(TaskAttentionReason::AssignedAwaitingClaim);
             }
             if context.claimed_not_started_task_ids.contains(&task.task_id) {

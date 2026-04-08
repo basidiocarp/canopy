@@ -178,10 +178,7 @@ impl SnapshotContext {
         self.deadline_summary_by_task_id.get(task_id)
     }
 
-    pub(super) fn relationship_summary(
-        &self,
-        task_id: &str,
-    ) -> Option<&TaskRelationshipSummary> {
+    pub(super) fn relationship_summary(&self, task_id: &str) -> Option<&TaskRelationshipSummary> {
         self.relationship_summary_by_task_id.get(task_id)
     }
 
@@ -189,18 +186,18 @@ impl SnapshotContext {
         SlaQueueSets {
             due_soon_handoff_acceptance_task_ids: &self.due_soon_handoff_acceptance_task_ids,
             overdue_handoff_acceptance_task_ids: &self.overdue_handoff_acceptance_task_ids,
-            due_soon_accepted_handoff_follow_through_task_ids:
-                &self.due_soon_accepted_handoff_follow_through_task_ids,
-            overdue_accepted_handoff_follow_through_task_ids:
-                &self.overdue_accepted_handoff_follow_through_task_ids,
-            due_soon_review_handoff_follow_through_task_ids:
-                &self.due_soon_review_handoff_follow_through_task_ids,
-            overdue_review_handoff_follow_through_task_ids:
-                &self.overdue_review_handoff_follow_through_task_ids,
-            due_soon_review_decision_follow_through_task_ids:
-                &self.due_soon_review_decision_follow_through_task_ids,
-            overdue_review_decision_follow_through_task_ids:
-                &self.overdue_review_decision_follow_through_task_ids,
+            due_soon_accepted_handoff_follow_through_task_ids: &self
+                .due_soon_accepted_handoff_follow_through_task_ids,
+            overdue_accepted_handoff_follow_through_task_ids: &self
+                .overdue_accepted_handoff_follow_through_task_ids,
+            due_soon_review_handoff_follow_through_task_ids: &self
+                .due_soon_review_handoff_follow_through_task_ids,
+            overdue_review_handoff_follow_through_task_ids: &self
+                .overdue_review_handoff_follow_through_task_ids,
+            due_soon_review_decision_follow_through_task_ids: &self
+                .due_soon_review_decision_follow_through_task_ids,
+            overdue_review_decision_follow_through_task_ids: &self
+                .overdue_review_decision_follow_through_task_ids,
         }
     }
 }
@@ -212,7 +209,8 @@ pub(super) fn derive_pending_handoff_acceptance_task_ids(
     handoffs
         .iter()
         .filter(|handoff| {
-            handoff.status == crate::models::HandoffStatus::Open && !handoff_has_expired(handoff, now)
+            handoff.status == crate::models::HandoffStatus::Open
+                && !handoff_has_expired(handoff, now)
         })
         .map(|handoff| handoff.task_id.clone())
         .collect()
@@ -410,7 +408,8 @@ pub(super) fn derive_assigned_awaiting_claim_task_ids(
                         if accepted_handoff_follow_through_task_ids.contains(&task.task_id) {
                             return false;
                         }
-                        if Some(last_assignment.assigned_to.as_str()) != task.owner_agent_id.as_deref()
+                        if Some(last_assignment.assigned_to.as_str())
+                            != task.owner_agent_id.as_deref()
                         {
                             return false;
                         }

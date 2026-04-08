@@ -14,23 +14,23 @@ use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use std::collections::{HashMap, HashSet};
 
 mod allowed_actions;
-mod context;
 mod attention;
+mod context;
 mod operator_actions;
 mod sla;
 mod views;
 
 use self::{
     allowed_actions::derive_allowed_actions,
+    attention::{
+        derive_agent_attention, derive_handoff_attention, derive_task_attention,
+        summarize_attention,
+    },
     context::{
         SnapshotContext, accepted_handoff_requires_follow_through, compare_timestamp_desc,
         freshness_sort_rank, handoff_freshness, heartbeat_freshness, heartbeat_matches_tasks,
         max_freshness, parse_timestamp, review_decision_requires_follow_through,
         review_handoff_requires_follow_through, timestamp_freshness,
-    },
-    attention::{
-        derive_agent_attention, derive_handoff_attention, derive_task_attention,
-        summarize_attention,
     },
     operator_actions::{derive_operator_actions, handoff_has_expired, make_task_allowed_action},
     sla::{derive_task_deadline_summaries, derive_task_sla_summaries, summarize_sla},
@@ -156,8 +156,12 @@ pub fn snapshot(
         .map(|attention| (attention.task_id.clone(), attention.clone()))
         .collect();
     tasks.retain(|task| {
-        matches_view(task, &context, task_attention_by_id.get(&task.task_id), options.view)
-            && matches_filters(task, task_attention_by_id.get(&task.task_id), &options)
+        matches_view(
+            task,
+            &context,
+            task_attention_by_id.get(&task.task_id),
+            options.view,
+        ) && matches_filters(task, task_attention_by_id.get(&task.task_id), &options)
     });
     sort_tasks(&mut tasks, options.sort, &task_attention_by_id);
 
