@@ -778,8 +778,7 @@ fn run_task_verification(
     step: Option<&str>,
 ) -> Result<TaskVerificationRun> {
     let script_display = script.display().to_string();
-    let output = Command::new("bash")
-        .arg(script)
+    let output = verification_script_command(script)
         .output()
         .with_context(|| format!("run verification script {script_display}"))?;
     let combined = combine_command_output(&output);
@@ -876,6 +875,24 @@ fn run_task_verification(
     }
 
     Ok(result)
+}
+
+fn verification_script_command(script: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        if matches!(
+            script.extension().and_then(|ext| ext.to_str()),
+            Some("cmd" | "bat")
+        ) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(script);
+            return command;
+        }
+    }
+
+    let mut command = Command::new("bash");
+    command.arg(script);
+    command
 }
 
 fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> {

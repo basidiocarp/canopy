@@ -1463,10 +1463,17 @@ Implement the first step.
 
     let bin_dir = temp.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("create bin dir");
+    #[cfg(windows)]
+    let cortina_path = bin_dir.join("cortina.cmd");
+    #[cfg(not(windows))]
     let cortina_path = bin_dir.join("cortina");
     fs::write(
         &cortina_path,
-        "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n",
+        if cfg!(windows) {
+            "@echo off\r\necho {\"status\":\"flag_review\",\"reason\":\"stale handoff\"}\r\n"
+        } else {
+            "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n"
+        },
     )
     .expect("write cortina stub");
 
@@ -1481,7 +1488,10 @@ Implement the first step.
     }
 
     let existing_path = std::env::var_os("PATH").unwrap_or_default();
-    let merged_path = format!("{}:{}", bin_dir.display(), existing_path.to_string_lossy());
+    let merged_path = std::env::join_paths(
+        std::iter::once(bin_dir.clone()).chain(std::env::split_paths(&existing_path)),
+    )
+    .expect("join PATH");
 
     let output = Command::cargo_bin("canopy")
         .expect("build canopy binary")
@@ -1533,10 +1543,17 @@ fn cli_task_verify_records_script_evidence_and_completes_leaf_task() {
     let task: Value = serde_json::from_slice(&task_output).expect("parse task");
     let task_id = task["task_id"].as_str().expect("task id").to_string();
 
+    #[cfg(windows)]
+    let verify_script_path = temp.path().join("verify-step.cmd");
+    #[cfg(not(windows))]
     let verify_script_path = temp.path().join("verify-step.sh");
     fs::write(
         &verify_script_path,
-        "#!/bin/bash\necho '--- Step 1: Verified step ---'\necho '  PASS: check'\necho 'Results: 1 passed, 0 failed'\n",
+        if cfg!(windows) {
+            "@echo off\r\necho --- Step 1: Verified step ---\r\necho   PASS: check\r\necho Results: 1 passed, 0 failed\r\n"
+        } else {
+            "#!/bin/bash\necho '--- Step 1: Verified step ---'\necho '  PASS: check'\necho 'Results: 1 passed, 0 failed'\n"
+        },
     )
     .expect("write verify script");
 
