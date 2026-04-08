@@ -322,13 +322,8 @@ mod tests {
         let cortina_stub =
             "@echo off\r\necho {\"status\":\"flag_review\",\"reason\":\"stale handoff\"}\r\n";
         #[cfg(not(windows))]
-        let cortina_stub =
-            "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n";
-        fs::write(
-            &cortina_path,
-            cortina_stub,
-        )
-        .expect("write cortina stub");
+        let cortina_stub = "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"flag_review\",\"reason\":\"stale handoff\"}'\n";
+        fs::write(&cortina_path, cortina_stub).expect("write cortina stub");
 
         #[cfg(unix)]
         {
@@ -343,7 +338,8 @@ mod tests {
         let old_path = std::env::var_os("PATH");
         let mut path_entries = vec![bin_dir.clone().into_os_string()];
         if let Some(existing) = &old_path {
-            path_entries.extend(std::env::split_paths(existing).map(std::path::PathBuf::into_os_string));
+            path_entries
+                .extend(std::env::split_paths(existing).map(std::path::PathBuf::into_os_string));
         }
         let joined_path = std::env::join_paths(path_entries).expect("join PATH entries");
 
