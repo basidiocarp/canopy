@@ -452,11 +452,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     })
 }
 
-#[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
-
 fn derive_task_ownership_summaries(
     tasks: &[Task],
     assignments: &[TaskAssignment],

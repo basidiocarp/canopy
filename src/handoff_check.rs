@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn fully_complete_handoff() {
         let dir = TempDir::new().unwrap();
-        let content = r#"# Test Handoff
+        let content = r"# Test Handoff
 
 - [x] First item done
 - [x] Second item done
@@ -353,7 +353,7 @@ mod tests {
 <!-- PASTE START -->
 some output here
 <!-- PASTE END -->
-"#;
+";
         let handoff_path = write_handoff(&dir, "test-handoff.md", content);
 
         // Create the verify script
@@ -375,7 +375,7 @@ some output here
     #[test]
     fn partially_complete_handoff() {
         let dir = TempDir::new().unwrap();
-        let content = r#"# Test Handoff
+        let content = r"# Test Handoff
 
 - [x] First item done
 - [ ] Second item NOT done
@@ -387,7 +387,7 @@ some output here
 <!-- PASTE START -->
 filled output
 <!-- PASTE END -->
-"#;
+";
         let handoff_path = write_handoff(&dir, "partial.md", content);
 
         let report = check_completeness(&handoff_path).unwrap();

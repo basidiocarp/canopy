@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn extract_step_scope_parses_file_paths() {
-        let content = r#"
+        let content = r"
 **File:** `canopy/src/models.rs`
 
 Add the scope field:
@@ -274,7 +274,7 @@ pub scope: Vec<String>,
 ```
 
 **File:** `canopy/src/store.rs`
-"#;
+";
         let scope = extract_step_scope(content);
         assert_eq!(scope, vec!["canopy/src/models.rs", "canopy/src/store.rs"]);
     }

@@ -150,9 +150,8 @@ pub fn tool_import_handoff(
     _agent_id: &str,
     args: &Value,
 ) -> ToolResult {
-    let file_path_str = match get_str(args, "path").or_else(|| get_str(args, "file_path")) {
-        Some(v) => v,
-        None => return ToolResult::error("missing required parameter: path".to_string()),
+    let Some(file_path_str) = get_str(args, "path").or_else(|| get_str(args, "file_path")) else {
+        return ToolResult::error("missing required parameter: path".to_string());
     };
     let assign_to = get_str(args, "assign_to");
 
@@ -416,7 +415,7 @@ mod tests {
 
         let payload: serde_json::Value =
             serde_json::from_str(&result.content[0].text).expect("json result");
-        assert_eq!(payload["parent_task_id"].as_str().is_some(), true);
+        assert!(payload["parent_task_id"].as_str().is_some());
         assert_eq!(payload["requested_assignee"], serde_json::Value::Null);
     }
 }

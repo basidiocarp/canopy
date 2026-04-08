@@ -1,6 +1,9 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 #[allow(dead_code)]
+#[allow(clippy::too_many_lines)]
 pub(super) fn derive_operator_actions(
     tasks: &[Task],
     task_attention: &[TaskAttention],
@@ -445,6 +448,7 @@ pub(super) fn derive_operator_actions(
     actions
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn derive_allowed_handoff_actions(
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],

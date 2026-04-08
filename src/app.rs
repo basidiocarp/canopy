@@ -661,6 +661,7 @@ fn cli_action_to_task_action<'a>(
     Ok(task_action)
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Result<()> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("read handoff markdown {}", path.display()))?;
@@ -1306,8 +1307,9 @@ fn command_span_context(cli: &Cli) -> SpanContext {
     let workspace_root = match &cli.command {
         Commands::ImportHandoff { path, .. } => infer_handoff_workspace_root(path),
         Commands::Serve { project, .. } => project.as_ref().map(PathBuf::from),
-        Commands::WorkQueue { project_root, .. } => project_root.as_ref().map(PathBuf::from),
-        Commands::Situation { project_root, .. } => project_root.as_ref().map(PathBuf::from),
+        Commands::WorkQueue { project_root, .. } | Commands::Situation { project_root, .. } => {
+            project_root.as_ref().map(PathBuf::from)
+        }
         Commands::Task { command } => match command {
             TaskCommand::Create { project_root, .. } => Some(PathBuf::from(project_root)),
             _ => cli

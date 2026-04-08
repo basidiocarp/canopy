@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_lines)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;

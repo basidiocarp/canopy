@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 pub(crate) fn maybe_create_auto_review_subtasks_in_connection(
@@ -122,7 +124,7 @@ fn get_parent_id_in_connection(conn: &Connection, task_id: &str) -> StoreResult<
         |row| row.get::<_, Option<String>>(0),
     )
     .optional()
-    .map(|value| value.flatten())
+    .map(Option::flatten)
     .map_err(StoreError::from)
 }
 

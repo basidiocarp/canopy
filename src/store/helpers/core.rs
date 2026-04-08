@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {

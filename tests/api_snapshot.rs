@@ -1,3 +1,10 @@
+#![allow(
+    clippy::filter_map_bool_then,
+    clippy::manual_contains,
+    clippy::similar_names,
+    clippy::too_many_lines
+)]
+
 use assert_cmd::Command;
 use canopy::api::{self, SnapshotOptions};
 use canopy::models::{

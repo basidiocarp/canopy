@@ -1074,7 +1074,7 @@ impl Store {
                 |row| row.get::<_, Option<String>>(0),
             )
             .optional()
-            .map(|value| value.flatten())
+            .map(Option::flatten)
             .map_err(StoreError::from)
     }
 

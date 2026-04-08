@@ -30,7 +30,7 @@ fn extract_schema_enum(schema_json: &serde_json::Value, field: &str) -> HashSet<
         .unwrap_or_default()
 }
 
-/// Get Rust enum variants as snake_case strings (matching serde serialization).
+/// Get Rust enum variants as `snake_case` strings (matching serde serialization).
 fn rust_evidence_source_kinds() -> HashSet<String> {
     // These must match the variants in models.rs EvidenceSourceKind
     // with #[serde(rename_all = "snake_case")]

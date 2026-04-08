@@ -160,6 +160,7 @@ pub fn tool_task_get(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::models::{Task, TaskPriority, TaskSeverity, VerificationState};

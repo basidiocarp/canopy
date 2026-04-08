@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use spore::logging::{SpanContext, subprocess_span, tool_span};
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
 
@@ -9,6 +10,7 @@ use crate::models::{Task, TaskStatus};
 use crate::scope::{ScopeGap, classify_scope_gap, extract_step_scope, scope_overlaps};
 use crate::store::{CanopyStore, StoreResult, TaskCreationOptions, TaskStatusUpdate};
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeGapOutcome {
@@ -49,6 +51,7 @@ struct CortinaAuditResponse {
 }
 
 /// Apply the scope-detection protocol to a work item.
+#[allow(clippy::missing_errors_doc)]
 pub fn handle_scope_gap(
     store: &(impl CanopyStore + ?Sized),
     task_id: &str,
@@ -134,6 +137,7 @@ pub fn handle_scope_gap(
     }
 }
 
+#[must_use]
 pub fn pre_dispatch_check(handoff_path: &Path) -> DispatchDecision {
     dispatch_decision_from_audit_result(run_cortina_audit(handoff_path), handoff_path)
 }
@@ -204,18 +208,18 @@ fn dispatch_decision_from_audit_result(
 pub fn scope_gap_paths(work_item: &str, handoff_scope: &[String]) -> Vec<String> {
     extract_step_scope(work_item)
         .into_iter()
-        .filter(|path| scope_overlaps(&[path.clone()], handoff_scope).is_empty())
+        .filter(|path| scope_overlaps(std::slice::from_ref(path), handoff_scope).is_empty())
         .collect()
 }
 
 fn scope_gap_note(kind: &str, description: Option<&str>, work_item: &str) -> String {
     let mut note = format!("scope_gap={kind}");
     if let Some(description) = description {
-        note.push_str(&format!("; description={description}"));
+        let _ = write!(note, "; description={description}");
     }
     let work_item = work_item.lines().next().unwrap_or(work_item).trim();
     if !work_item.is_empty() {
-        note.push_str(&format!("; work_item={work_item}"));
+        let _ = write!(note, "; work_item={work_item}");
     }
     note
 }

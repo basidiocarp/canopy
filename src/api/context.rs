@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -28,6 +30,7 @@ pub(super) struct SnapshotContext {
 }
 
 impl SnapshotContext {
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn new(
         tasks: &[Task],
         handoffs: &[Handoff],

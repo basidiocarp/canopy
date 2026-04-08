@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_lines)]
+
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
     HandoffStatus, HandoffType, OperatorActionKind, TaskAction, TaskEventType,

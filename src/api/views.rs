@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 #[allow(dead_code)]
@@ -38,6 +40,7 @@ pub(super) fn resolve_snapshot_options(options: SnapshotOptions<'_>) -> Resolved
     resolved
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
     match preset {
         SnapshotPreset::Default => {}
@@ -199,6 +202,7 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn matches_view(
     task: &Task,
     context: &SnapshotContext,
@@ -347,6 +351,7 @@ pub(super) fn matches_deadline_view(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn matches_review_view(
     task_id: &str,
     view: TaskView,
@@ -388,6 +393,7 @@ pub(super) fn matches_review_view(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn matches_handoff_view(
     task_id: &str,
     view: TaskView,

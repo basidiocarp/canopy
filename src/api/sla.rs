@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 #[allow(dead_code)]
@@ -86,6 +88,7 @@ pub(super) fn derive_task_deadline_summaries(
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn derive_task_sla_summaries(
     tasks: &[Task],
     deadline_summaries: &[TaskDeadlineSummary],

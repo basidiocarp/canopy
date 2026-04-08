@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 #[allow(dead_code)]
@@ -97,6 +99,7 @@ pub(super) fn derive_handoff_attention(
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn derive_task_attention(
     tasks: &[Task],
     handoffs: &[Handoff],
