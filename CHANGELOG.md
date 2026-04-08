@@ -9,6 +9,21 @@ All notable changes to Canopy are documented in this file.
 - **Changelog format**: Release headings and entry structure now follow the
   shared ecosystem changelog template.
 
+## [0.5.8] - 2026-04-08
+
+### Changed
+
+- **Foundation alignment**: Maintainer docs and architecture notes now make the
+  store, handoff, and coordination boundaries more explicit.
+- **Runtime structure**: Command dispatch, handoff checks, and verification
+  paths now emit clearer shared tracing context and keep workspace inference
+  consistent outside the serve path.
+
+### Fixed
+
+- **Verification visibility**: Completeness and import workflows now emit
+  visible warn-level diagnostics on the touched verification paths.
+
 ## [0.5.7] - 2026-04-08
 
 ### Changed
