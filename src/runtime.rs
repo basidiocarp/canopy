@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use spore::logging::{SpanContext, subprocess_span, tool_span};
+use spore::{Tool, discover};
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
@@ -147,7 +148,9 @@ fn run_cortina_audit(handoff_path: &Path) -> Result<DispatchDecision> {
     let _tool_span = tool_span("cortina_audit_handoff", &span_context).entered();
     let handoff_arg = handoff_path.display().to_string();
     let _subprocess_span = subprocess_span("cortina audit-handoff", &span_context).entered();
-    let output = Command::new("cortina")
+    let cortina_binary = discover(Tool::Cortina)
+        .map_or_else(|| "cortina".into(), |info| info.binary_path);
+    let output = Command::new(cortina_binary)
         .args(["audit-handoff", "--json", handoff_arg.as_str()])
         .output()?;
 
