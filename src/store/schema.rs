@@ -80,7 +80,23 @@ pub(crate) const BASE_SCHEMA: &str = r"
         task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
         author_agent_id TEXT NOT NULL REFERENCES agents(agent_id),
         message_type TEXT NOT NULL,
-        body TEXT NOT NULL
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS council_sessions (
+        council_session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+        project_root TEXT NOT NULL,
+        worktree_id TEXT NULL,
+        participants_json TEXT NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL,
+        session_summary TEXT NULL,
+        transcript_ref TEXT NULL,
+        timeline_ref TEXT NOT NULL,
+        opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        closed_at TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS evidence_refs (
@@ -247,6 +263,25 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
                 created_at,
                 CURRENT_TIMESTAMP
             )
+        ",
+        [],
+    )?;
+
+    ensure_column(conn, "council_messages", "created_at", "TEXT NULL")?;
+    conn.execute(
+        r"
+        UPDATE council_messages
+        SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+        ",
+        [],
+    )?;
+
+    ensure_column(conn, "council_sessions", "session_summary", "TEXT NULL")?;
+    ensure_column(conn, "council_sessions", "updated_at", "TEXT NULL")?;
+    conn.execute(
+        r"
+        UPDATE council_sessions
+        SET updated_at = COALESCE(updated_at, closed_at, opened_at, CURRENT_TIMESTAMP)
         ",
         [],
     )?;

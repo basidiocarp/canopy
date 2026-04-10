@@ -755,6 +755,7 @@ impl Store {
             | OperatorActionKind::SetReviewDueAt
             | OperatorActionKind::ClearReviewDueAt
             | OperatorActionKind::CreateHandoff
+            | OperatorActionKind::SummonCouncilSession
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
             | OperatorActionKind::CreateFollowUpTask

@@ -283,6 +283,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     let handoffs = store.list_handoffs(Some(task_id))?;
     let assignments = store.list_task_assignments(Some(task_id))?;
     let events = store.list_task_events(task_id)?;
+    let council_session = store.get_council_session(task_id)?;
     let messages = store.list_council_messages(task_id)?;
     let evidence = store.list_evidence(task_id)?;
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
@@ -416,6 +417,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         &deadline_summary,
         &relationship_summary,
         &execution_summary,
+        council_session.as_ref(),
         &handoffs,
         &handoff_attention,
         now,
@@ -441,6 +443,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         handoff_attention,
         operator_actions,
         allowed_actions,
+        council_session,
         messages,
         evidence,
         relationships,

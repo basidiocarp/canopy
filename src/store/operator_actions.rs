@@ -14,6 +14,7 @@ use super::helpers::{
     task_has_prior_execution_in_connection, touch_task_in_connection, validate_execution_actor,
 };
 use super::{
+    council::summon_task_council_in_connection,
     CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult,
     TaskCreationOptions, TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput,
     TaskStatusUpdate, TaskTriageUpdate,
@@ -129,6 +130,28 @@ impl Store {
                         execution_action: None,
                         execution_duration_seconds: None,
                         note: Some(note.as_str()),
+                    },
+                )?;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::SummonCouncilSession => self.in_transaction(|conn| {
+                let task = get_task_in_connection(conn, task_id)?;
+                summon_task_council_in_connection(conn, &task, None)?;
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::CouncilSessionSummoned,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(task.verification_state),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        execution_action: None,
+                        execution_duration_seconds: None,
+                        note: Some(
+                            "council_session=reviewer,architect; transcript_ref=none; state=open",
+                        ),
                     },
                 )?;
                 get_task_in_connection(conn, task_id)

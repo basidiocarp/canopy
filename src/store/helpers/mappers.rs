@@ -97,6 +97,7 @@ pub(crate) fn map_council_message(
         author_agent_id: row.get(2)?,
         message_type: parse_enum_column(row, 3)?,
         body: row.get(4)?,
+        created_at: row.get(5)?,
     })
 }
 

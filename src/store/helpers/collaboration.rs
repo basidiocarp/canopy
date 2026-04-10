@@ -179,11 +179,12 @@ pub(crate) fn add_council_message_in_connection(
         author_agent_id: author_agent_id.to_string(),
         message_type,
         body: body.to_string(),
+        created_at: None,
     };
     conn.execute(
         r"
-        INSERT INTO council_messages (message_id, task_id, author_agent_id, message_type, body)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO council_messages (message_id, task_id, author_agent_id, message_type, body, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
         ",
         params![
             message.message_id,
@@ -192,6 +193,14 @@ pub(crate) fn add_council_message_in_connection(
             message.message_type.to_string(),
             message.body
         ],
+    )?;
+    conn.execute(
+        r"
+        UPDATE council_sessions
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?1
+        ",
+        [task_id],
     )?;
     touch_task_in_connection(conn, task_id)?;
     Ok(message)

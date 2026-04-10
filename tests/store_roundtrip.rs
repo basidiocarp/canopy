@@ -244,7 +244,13 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let messages = store
         .list_council_messages(&task.task_id)
         .expect("list council messages");
-    assert_eq!(messages, vec![message]);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, message.message_id);
+    assert_eq!(messages[0].task_id, message.task_id);
+    assert_eq!(messages[0].author_agent_id, message.author_agent_id);
+    assert_eq!(messages[0].message_type, message.message_type);
+    assert_eq!(messages[0].body, message.body);
+    assert!(messages[0].created_at.is_some());
 
     let evidence_refs = store.list_evidence(&task.task_id).expect("list evidence");
     assert_eq!(evidence_refs, vec![evidence]);

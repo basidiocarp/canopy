@@ -517,7 +517,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert!(
         allowed_actions
             .iter()
-            .any(|action| action["kind"] == "post_council_message")
+            .any(|action| action["kind"] == "summon_council_session")
     );
     assert!(
         allowed_actions

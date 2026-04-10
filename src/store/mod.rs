@@ -337,6 +337,7 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.due_at = due_at;
                 input.expires_at = expires_at;
             }
+            TaskAction::SummonCouncilSession => {}
             TaskAction::PostCouncilMessage {
                 author_agent_id,
                 message_type,

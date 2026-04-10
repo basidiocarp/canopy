@@ -260,7 +260,8 @@ impl Store {
                 )?;
                 get_handoff_in_connection(conn, handoff_id)
             }),
-            OperatorActionKind::AcknowledgeTask
+            OperatorActionKind::SummonCouncilSession
+            | OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
             | OperatorActionKind::VerifyTask
             | OperatorActionKind::RecordDecision

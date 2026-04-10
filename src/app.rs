@@ -615,6 +615,7 @@ fn cli_action_to_task_action<'a>(
             due_at,
             expires_at,
         },
+        K::SummonCouncilSession => TaskAction::SummonCouncilSession,
         K::PostCouncilMessage => TaskAction::PostCouncilMessage {
             author_agent_id: require(author_agent_id, "author-agent-id")?,
             message_type: message_type
@@ -1371,6 +1372,15 @@ fn command_name(command: &Commands) -> &'static str {
 
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {
     match command {
+        CouncilCommand::Summon {
+            task_id,
+            changed_by,
+            transcript_ref,
+        } => {
+            let session =
+                store.summon_task_council(&task_id, &changed_by, transcript_ref.as_deref())?;
+            print_json(&session)?;
+        }
         CouncilCommand::Post {
             task_id,
             author_agent_id,

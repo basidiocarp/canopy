@@ -1,5 +1,7 @@
 #![allow(clippy::wildcard_imports)]
 
+use crate::models::CouncilSession;
+
 use super::operator_actions::derive_allowed_handoff_actions;
 use super::*;
 
@@ -11,6 +13,7 @@ pub(super) fn derive_allowed_actions(
     deadline_summary: &TaskDeadlineSummary,
     relationship_summary: &TaskRelationshipSummary,
     execution_summary: &TaskExecutionSummary,
+    council_session: Option<&CouncilSession>,
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
     now: OffsetDateTime,
@@ -21,6 +24,7 @@ pub(super) fn derive_allowed_actions(
         deadline_summary,
         relationship_summary,
         execution_summary,
+        council_session,
     );
     actions.extend(derive_allowed_handoff_actions(
         handoffs,
@@ -37,6 +41,7 @@ pub(super) fn derive_allowed_task_actions(
     deadline_summary: &TaskDeadlineSummary,
     relationship_summary: &TaskRelationshipSummary,
     execution_summary: &TaskExecutionSummary,
+    council_session: Option<&CouncilSession>,
 ) -> Vec<OperatorAction> {
     let task_level = if attention.level == AttentionLevel::Normal {
         AttentionLevel::NeedsAttention
@@ -194,6 +199,14 @@ pub(super) fn derive_allowed_task_actions(
         ),
         make_task_allowed_action(
             task,
+            OperatorActionKind::SummonCouncilSession,
+            task_level,
+            "summon_council_session",
+            format!("Summon council for {}", task.title),
+            "Create a task-linked council session with reviewer and architect roles.",
+        ),
+        make_task_allowed_action(
+            task,
             OperatorActionKind::CreateHandoff,
             task_level,
             "create_handoff",
@@ -292,6 +305,9 @@ pub(super) fn derive_allowed_task_actions(
         OperatorActionKind::ClearTaskDueAt => deadline_summary.due_at.is_some(),
         OperatorActionKind::SetReviewDueAt => task.status == TaskStatus::ReviewRequired,
         OperatorActionKind::ClearReviewDueAt => deadline_summary.review_due_at.is_some(),
+        OperatorActionKind::SummonCouncilSession => {
+            council_session.is_none() && !matches!(task.status, TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled)
+        }
         OperatorActionKind::PauseTask => {
             task.status == TaskStatus::InProgress && task.owner_agent_id.is_some()
         }
@@ -318,6 +334,7 @@ pub(super) fn derive_allowed_task_actions(
                     .reasons
                     .contains(&TaskAttentionReason::ReviewReadyForCloseout)
         }
+        OperatorActionKind::PostCouncilMessage => council_session.is_some(),
         _ => true,
     });
 

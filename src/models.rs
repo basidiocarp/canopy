@@ -323,6 +323,56 @@ pub enum CouncilMessageType {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum CouncilParticipantRole {
+    Reviewer,
+    Architect,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum CouncilParticipantStatus {
+    Pending,
+    Summoned,
+    Accepted,
+    Completed,
+    Declined,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum CouncilSessionState {
+    Open,
+    Closed,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum CouncilSessionTimelineKind {
+    Summon,
+    Response,
+    Output,
+    Decision,
+    Closure,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum EvidenceSourceKind {
     HyphaeSession,
     HyphaeRecall,
@@ -353,6 +403,7 @@ pub enum TaskEventType {
     RelationshipUpdated,
     HandoffCreated,
     HandoffUpdated,
+    CouncilSessionSummoned,
     CouncilMessagePosted,
     EvidenceAttached,
     FollowUpTaskCreated,
@@ -484,6 +535,7 @@ pub enum OperatorActionKind {
     SetReviewDueAt,
     ClearReviewDueAt,
     CreateHandoff,
+    SummonCouncilSession,
     PostCouncilMessage,
     AttachEvidence,
     CreateFollowUpTask,
@@ -595,6 +647,7 @@ pub enum TaskAction<'a> {
         due_at: Option<&'a str>,
         expires_at: Option<&'a str>,
     },
+    SummonCouncilSession,
     PostCouncilMessage {
         author_agent_id: &'a str,
         message_type: CouncilMessageType,
@@ -656,6 +709,7 @@ impl TaskAction<'_> {
             Self::Reassign { .. } => OperatorActionKind::ReassignTask,
             Self::RecordDecision { .. } => OperatorActionKind::RecordDecision,
             Self::CreateHandoff { .. } => OperatorActionKind::CreateHandoff,
+            Self::SummonCouncilSession => OperatorActionKind::SummonCouncilSession,
             Self::PostCouncilMessage { .. } => OperatorActionKind::PostCouncilMessage,
             Self::AttachEvidence { .. } => OperatorActionKind::AttachEvidence,
             Self::CreateFollowUp { .. } => OperatorActionKind::CreateFollowUpTask,
@@ -835,6 +889,37 @@ pub struct CouncilMessage {
     pub author_agent_id: String,
     pub message_type: CouncilMessageType,
     pub body: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CouncilParticipant {
+    pub role: CouncilParticipantRole,
+    pub agent_id: Option<String>,
+    pub status: Option<CouncilParticipantStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CouncilSessionTimelineEntry {
+    pub actor_agent_id: Option<String>,
+    pub body: String,
+    pub created_at: Option<String>,
+    pub kind: CouncilSessionTimelineKind,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CouncilSession {
+    pub council_session_id: String,
+    pub task_id: String,
+    pub worktree_id: Option<String>,
+    pub participants: Vec<CouncilParticipant>,
+    pub session_summary: Option<String>,
+    pub state: CouncilSessionState,
+    pub timeline: Vec<CouncilSessionTimelineEntry>,
+    pub transcript_ref: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1193,6 +1278,7 @@ pub struct TaskDetail {
     pub handoff_attention: Vec<HandoffAttention>,
     pub operator_actions: Vec<OperatorAction>,
     pub allowed_actions: Vec<OperatorAction>,
+    pub council_session: Option<CouncilSession>,
     pub messages: Vec<CouncilMessage>,
     pub evidence: Vec<EvidenceRef>,
     pub relationships: Vec<TaskRelationship>,

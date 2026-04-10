@@ -372,6 +372,14 @@ pub enum TaskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CouncilCommand {
+    Summon {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        changed_by: String,
+        #[arg(long)]
+        transcript_ref: Option<String>,
+    },
     Post {
         #[arg(long)]
         task_id: String,

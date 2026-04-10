@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
-    EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType, RelatedTask,
-    Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship, TaskStatus, TaskSummary,
+    CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus,
+    HandoffType, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
+    TaskStatus, TaskSummary,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -216,6 +217,13 @@ pub trait CouncilStore {
         body: &str,
     ) -> StoreResult<CouncilMessage>;
     fn list_council_messages(&self, task_id: &str) -> StoreResult<Vec<CouncilMessage>>;
+    fn get_council_session(&self, task_id: &str) -> StoreResult<Option<CouncilSession>>;
+    fn summon_task_council(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        transcript_ref: Option<&str>,
+    ) -> StoreResult<CouncilSession>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -608,6 +616,19 @@ impl CouncilStore for super::Store {
 
     fn list_council_messages(&self, task_id: &str) -> StoreResult<Vec<CouncilMessage>> {
         self.list_council_messages(task_id)
+    }
+
+    fn get_council_session(&self, task_id: &str) -> StoreResult<Option<CouncilSession>> {
+        self.get_council_session(task_id)
+    }
+
+    fn summon_task_council(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        transcript_ref: Option<&str>,
+    ) -> StoreResult<CouncilSession> {
+        self.summon_task_council(task_id, changed_by, transcript_ref)
     }
 }
 
