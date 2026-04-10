@@ -152,18 +152,25 @@ canopy serve                expose MCP tools
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): storage model, APIs, and design decisions
-- [docs/MVP.md](docs/MVP.md): first release scope and behavior
+- [docs/README.md](docs/README.md): repo-local docs index
+- [docs/architecture.md](docs/architecture.md): storage model, APIs, and design decisions
+- [docs/mvp.md](docs/mvp.md): first release scope and behavior
 - [ROADMAP.md](ROADMAP.md): planned coordination features and follow-up work
 
 ## Development
 
 ```bash
 cargo build --release
+cargo nextest run
 cargo test
 cargo clippy
 cargo fmt
 ```
+
+- Prefer `cargo nextest run` for the normal test loop.
+- Keep `criterion` out of scope here until a concrete hot path is named.
+- Use whole-command timing when a real operator path feels slow, for example
+  `time cargo run -- api snapshot --preset attention`.
 
 ## Logging
 

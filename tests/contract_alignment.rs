@@ -11,7 +11,7 @@ use std::path::PathBuf;
 fn contracts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("canopy should be inside claude-mycelium workspace")
+        .expect("canopy should be inside basidiocarp workspace")
         .join("contracts")
 }
 

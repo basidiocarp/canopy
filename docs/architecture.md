@@ -230,9 +230,11 @@ every JSON payload.
 ## Key Dependencies
 
 - **`rusqlite`** — local ledger storage, migrations, and relational constraints
-  that keep Canopy honest.
+  that keep Canopy honest. Canopy stays on bundled SQLite only; there is no
+  `modern_sqlite` feature split in this repo today.
 - **`clap`** — the CLI contract. Many operator workflows still enter through the
   terminal even when the same behavior exists over MCP.
-- **`spore`** — shared ecosystem transport and tool primitives.
+- **`spore`** — shared ecosystem transport and tool primitives. Its logging
+  stack is a cross-repo concern.
 - **`time`** — timestamp parsing and formatting for due dates, expiry windows,
   and read-model freshness.

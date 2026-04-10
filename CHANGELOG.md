@@ -4,10 +4,15 @@ All notable changes to Canopy are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-04-09
+
 ### Changed
 
-- **Changelog format**: Release headings and entry structure now follow the
-  shared ecosystem changelog template.
+- **Compile-info policy**: Canopy now documents the current bundled-SQLite
+  design more explicitly and treats the remaining `spore` logging weight as a
+  shared cross-repo concern.
+- **Docs structure**: The docs set now includes a central `docs/README.md`,
+  lowercase architecture paths, and a plan index for maintainer guidance.
 
 ## [0.5.8] - 2026-04-08
 
