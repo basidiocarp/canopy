@@ -15,6 +15,13 @@ fn contracts_dir() -> PathBuf {
         .join("contracts")
 }
 
+fn septa_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("canopy should be inside basidiocarp workspace")
+        .join("septa")
+}
+
 /// Extract enum values from a JSON Schema's `source_kind.enum` array.
 fn extract_schema_enum(schema_json: &serde_json::Value, field: &str) -> HashSet<String> {
     schema_json
@@ -164,6 +171,52 @@ fn task_detail_schema_required_fields_present() {
         assert!(
             required_fields.contains(field),
             "canopy-task-detail-v1 schema missing required field '{field}'"
+        );
+    }
+}
+
+#[test]
+fn workflow_participant_runtime_identity_contract_has_core_fields() {
+    let schema_path = septa_dir().join("workflow-participant-runtime-identity-v1.schema.json");
+    if !schema_path.exists() {
+        eprintln!(
+            "Skipping: workflow-participant-runtime-identity-v1.schema.json not found"
+        );
+        return;
+    }
+
+    let schema_text = fs::read_to_string(&schema_path).expect("read workflow identity schema");
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema_text).expect("parse workflow identity schema");
+
+    let required = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("workflow identity schema should have required array");
+    let required_fields: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+
+    for field in &["schema_version", "workflow_id", "participant_id"] {
+        assert!(
+            required_fields.contains(field),
+            "workflow-participant-runtime-identity-v1 schema missing required field '{field}'"
+        );
+    }
+
+    let properties = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .expect("workflow identity schema should have properties");
+
+    for field in &[
+        "runtime_session_id",
+        "project_root",
+        "worktree_id",
+        "host_ref",
+        "backend_ref",
+    ] {
+        assert!(
+            properties.contains_key(*field),
+            "workflow-participant-runtime-identity-v1 schema missing property '{field}'"
         );
     }
 }

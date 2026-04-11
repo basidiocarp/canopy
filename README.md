@@ -86,6 +86,8 @@ open snapshot / task ─►    read models               ─► cap
 4. Manage handoffs: move work between implementers, validators, and operators with typed status.
 5. Serve operator views: expose task detail, timeline, and attention-focused snapshots.
 
+Canopy is also the first consumer for Septa's `workflow-participant-runtime-identity-v1` contract. It links `workflow_id`, `participant_id`, `runtime_session_id`, `project_root`, and `worktree_id` into the task workflow context instead of treating execution-host identity as ad hoc metadata.
+
 ---
 
 ## Core Features
@@ -107,6 +109,7 @@ open snapshot / task ─►    read models               ─► cap
 - External evidence references attached to work
 - Operator read models derived from ledger state, not UI state
 - Evidence refs that keep `source_kind`, `source_ref`, and cross-links explicit
+- Workflow linkage that can consume shared identity contracts from `septa` instead of inventing repo-local runtime ids
 
 ## What Canopy Does Not Own
 
