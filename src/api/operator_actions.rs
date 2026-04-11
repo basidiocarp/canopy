@@ -12,6 +12,7 @@ pub(super) fn derive_operator_actions(
     execution_summaries: &[TaskExecutionSummary],
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
+    workflow_contexts: &[TaskWorkflowContext],
 ) -> Vec<OperatorAction> {
     let task_attention_by_id: HashMap<_, _> = task_attention
         .iter()
@@ -33,6 +34,10 @@ pub(super) fn derive_operator_actions(
         .iter()
         .map(|attention| (attention.handoff_id.as_str(), attention))
         .collect();
+    let workflow_by_task_id: HashMap<_, _> = workflow_contexts
+        .iter()
+        .map(|context| (context.task_id.as_str(), context))
+        .collect();
 
     let mut actions = Vec::new();
 
@@ -49,6 +54,7 @@ pub(super) fn derive_operator_actions(
         let execution_summary = execution_summary_by_task_id
             .get(task.task_id.as_str())
             .copied();
+        let workflow_context = workflow_by_task_id.get(task.task_id.as_str()).copied();
 
         if attention
             .reasons
@@ -89,6 +95,37 @@ pub(super) fn derive_operator_actions(
                 agent_id: task.owner_agent_id.clone(),
                 title: format!("Review {}", task.title),
                 summary: "Task is waiting on verification or operator review.".to_string(),
+                due_at: None,
+                expires_at: None,
+            });
+        }
+
+        if task.status == TaskStatus::ReviewRequired
+            && workflow_context.is_some_and(|context| {
+                context.council_session_id.is_none()
+                    && context.review_cycle.as_ref().is_some_and(|cycle| {
+                        matches!(
+                            cycle.state,
+                            ReviewCycleState::Pending | ReviewCycleState::InReview
+                        )
+                    })
+            })
+        {
+            actions.push(OperatorAction {
+                action_id: format!("task:{}:summon_council", task.task_id),
+                kind: OperatorActionKind::SummonCouncilSession,
+                target_kind: OperatorActionTargetKind::Task,
+                level: if attention.level == AttentionLevel::Normal {
+                    AttentionLevel::NeedsAttention
+                } else {
+                    attention.level
+                },
+                task_id: Some(task.task_id.clone()),
+                handoff_id: None,
+                agent_id: task.owner_agent_id.clone(),
+                title: format!("Summon council for {}", task.title),
+                summary: "Active review cycle has not been linked to a council session yet."
+                    .to_string(),
                 due_at: None,
                 expires_at: None,
             });

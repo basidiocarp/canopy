@@ -11,13 +11,13 @@ use super::helpers::{
     create_task_in_connection, create_task_relationship_in_connection, get_task_in_connection,
     has_active_blockers_in_connection, record_task_event_in_connection,
     release_agent_current_task_in_connection, sync_owner_for_task_status,
-    task_has_prior_execution_in_connection, touch_task_in_connection, validate_execution_actor,
+    sync_task_workflow_in_connection, task_has_prior_execution_in_connection,
+    touch_task_in_connection, validate_execution_actor,
 };
 use super::{
-    council::summon_task_council_in_connection,
     CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult,
     TaskCreationOptions, TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput,
-    TaskStatusUpdate, TaskTriageUpdate,
+    TaskStatusUpdate, TaskTriageUpdate, council::summon_task_council_in_connection,
 };
 
 impl Store {
@@ -637,6 +637,7 @@ impl Store {
                             note: event_note.as_deref(),
                         },
                     )?;
+                    sync_task_workflow_in_connection(conn, task_id)?;
                     get_task_in_connection(conn, task_id)
                 })?
             }
@@ -693,6 +694,7 @@ impl Store {
                         note: event_note.as_deref(),
                     },
                 )?;
+                sync_task_workflow_in_connection(conn, task_id)?;
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::YieldTask => self.in_transaction(|conn| {
@@ -756,6 +758,7 @@ impl Store {
                         note: event_note.as_deref(),
                     },
                 )?;
+                sync_task_workflow_in_connection(conn, task_id)?;
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::CompleteTask => self.in_transaction(|conn| {
@@ -827,6 +830,7 @@ impl Store {
                         note: event_note.as_deref(),
                     },
                 )?;
+                sync_task_workflow_in_connection(conn, task_id)?;
                 get_task_in_connection(conn, task_id)
             })?,
             _ => return Ok(None),

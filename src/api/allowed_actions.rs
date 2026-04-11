@@ -306,7 +306,11 @@ pub(super) fn derive_allowed_task_actions(
         OperatorActionKind::SetReviewDueAt => task.status == TaskStatus::ReviewRequired,
         OperatorActionKind::ClearReviewDueAt => deadline_summary.review_due_at.is_some(),
         OperatorActionKind::SummonCouncilSession => {
-            council_session.is_none() && !matches!(task.status, TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled)
+            council_session.is_none()
+                && !matches!(
+                    task.status,
+                    TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+                )
         }
         OperatorActionKind::PauseTask => {
             task.status == TaskStatus::InProgress && task.owner_agent_id.is_some()

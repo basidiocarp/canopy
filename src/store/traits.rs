@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
-    CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus,
-    HandoffType, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
-    TaskStatus, TaskSummary,
+    CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
+    RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship, TaskStatus,
+    TaskSummary, TaskWorkflowContext,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -227,6 +227,15 @@ pub trait CouncilStore {
 }
 
 #[allow(clippy::missing_errors_doc)]
+pub trait OrchestrationStore {
+    fn get_task_workflow_context(&self, task_id: &str) -> StoreResult<TaskWorkflowContext>;
+    fn list_task_workflow_contexts(
+        &self,
+        project_root: Option<&str>,
+    ) -> StoreResult<Vec<TaskWorkflowContext>>;
+}
+
+#[allow(clippy::missing_errors_doc)]
 pub trait HeartbeatStore {
     fn list_agent_heartbeats(
         &self,
@@ -259,6 +268,7 @@ pub trait CanopyStore:
     + FileLockStore
     + EvidenceStore
     + CouncilStore
+    + OrchestrationStore
     + HeartbeatStore
 {
 }
@@ -275,6 +285,7 @@ impl<T> CanopyStore for T where
         + FileLockStore
         + EvidenceStore
         + CouncilStore
+        + OrchestrationStore
         + HeartbeatStore
 {
 }
@@ -629,6 +640,19 @@ impl CouncilStore for super::Store {
         transcript_ref: Option<&str>,
     ) -> StoreResult<CouncilSession> {
         self.summon_task_council(task_id, changed_by, transcript_ref)
+    }
+}
+
+impl OrchestrationStore for super::Store {
+    fn get_task_workflow_context(&self, task_id: &str) -> StoreResult<TaskWorkflowContext> {
+        self.get_task_workflow_context(task_id)
+    }
+
+    fn list_task_workflow_contexts(
+        &self,
+        project_root: Option<&str>,
+    ) -> StoreResult<Vec<TaskWorkflowContext>> {
+        self.list_task_workflow_contexts(project_root)
     }
 }
 

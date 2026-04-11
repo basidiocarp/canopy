@@ -564,6 +564,8 @@ pub(crate) fn assign_task_in_connection(
         },
     )?;
 
+    sync_task_workflow_in_connection(conn, task_id)?;
+
     Ok(())
 }
 

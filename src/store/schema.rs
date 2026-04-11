@@ -25,6 +25,10 @@ pub(crate) const BASE_SCHEMA: &str = r"
         requested_by TEXT NOT NULL,
         project_root TEXT NOT NULL,
         parent_task_id TEXT NULL REFERENCES tasks(task_id) ON DELETE SET NULL,
+        queue_state_id TEXT NULL,
+        worktree_binding_id TEXT NULL,
+        execution_session_ref TEXT NULL,
+        review_cycle_id TEXT NULL,
         required_role TEXT NULL,
         required_capabilities TEXT NOT NULL DEFAULT '[]',
         auto_review INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +52,46 @@ pub(crate) const BASE_SCHEMA: &str = r"
         scope TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS task_queue_states (
+        queue_state_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+        queue_name TEXT NOT NULL,
+        lane TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        owner_agent_id TEXT NULL REFERENCES agents(agent_id),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS task_worktree_bindings (
+        worktree_binding_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE CASCADE,
+        project_root TEXT NOT NULL,
+        agent_id TEXT NULL REFERENCES agents(agent_id),
+        worktree_id TEXT NULL,
+        execution_session_ref TEXT NULL,
+        status TEXT NOT NULL,
+        bound_at TEXT NULL,
+        released_at TEXT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS task_review_cycles (
+        review_cycle_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        cycle_number INTEGER NOT NULL DEFAULT 1,
+        state TEXT NOT NULL,
+        council_session_id TEXT NULL REFERENCES council_sessions(council_session_id) ON DELETE SET NULL,
+        requested_by TEXT NULL,
+        evidence_count INTEGER NOT NULL DEFAULT 0,
+        decision_count INTEGER NOT NULL DEFAULT 0,
+        opened_at TEXT NULL,
+        decided_at TEXT NULL,
+        closed_at TEXT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(task_id, cycle_number)
     );
 
     CREATE TABLE IF NOT EXISTS task_assignments (
@@ -199,6 +243,10 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "due_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "review_due_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "parent_task_id", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "queue_state_id", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "worktree_binding_id", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "execution_session_ref", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "review_cycle_id", "TEXT NULL")?;
     ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
     conn.execute(

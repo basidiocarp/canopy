@@ -1,8 +1,11 @@
 use serde_json::{Value, json};
 
+use crate::models::WorkQueueResult;
 use crate::store::{CLAIM_STALE_THRESHOLD_SECS, CanopyStore};
 
 use super::{ToolResult, get_bounded_i64, get_str, validate_required_string};
+
+const TOOL_RESULT_SCHEMA_VERSION: &str = "1.0";
 
 /// List available tasks matching agent capabilities.
 pub fn tool_work_queue(
@@ -31,12 +34,26 @@ pub fn tool_work_queue(
         Ok(t) => t,
         Err(err) => return ToolResult::error(format!("failed to query tasks: {err}")),
     };
+    let mut orchestration = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        match store.get_task_workflow_context(&task.task_id) {
+            Ok(context) => orchestration.push(context),
+            Err(err) => {
+                return ToolResult::error(format!(
+                    "failed to load workflow context for task {}: {err}",
+                    task.task_id
+                ));
+            }
+        }
+    }
 
-    ToolResult::json(&json!({
-        "available_tasks": tasks,
-        "my_role": role_str,
-        "my_capabilities": capabilities,
-    }))
+    ToolResult::json(&WorkQueueResult {
+        schema_version: TOOL_RESULT_SCHEMA_VERSION.to_string(),
+        available_tasks: tasks,
+        orchestration,
+        my_role: role_str,
+        my_capabilities: capabilities,
+    })
 }
 
 /// Atomically claim a task.
@@ -121,5 +138,61 @@ pub fn tool_task_yield(
             }))
         }
         Err(err) => ToolResult::error(format!("yield failed: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_work_queue;
+    use crate::models::{AgentRegistration, AgentStatus};
+    use crate::store::Store;
+    use rusqlite::Connection;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn work_queue_fails_fast_when_workflow_context_is_invalid() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+        let agent = AgentRegistration {
+            agent_id: "agent-1".to_string(),
+            host_id: "host-1".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/repo/demo".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: None,
+            capabilities: Vec::new(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        };
+        store.register_agent(&agent).expect("register agent");
+        let task = store
+            .create_task("Broken workflow", None, "operator", "/repo/demo", None)
+            .expect("create task");
+
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute(
+            "UPDATE task_queue_states SET status = 'not-a-real-status' WHERE task_id = ?1",
+            [task.task_id.as_str()],
+        )
+        .expect("corrupt queue state");
+
+        let result = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "project_root": "/repo/demo" }),
+        );
+        assert!(result.is_error);
+        assert!(
+            result.content[0]
+                .text
+                .contains("failed to load workflow context"),
+            "unexpected error: {}",
+            result.content[0].text
+        );
     }
 }

@@ -211,6 +211,7 @@ pub(super) fn matches_view(
 ) -> bool {
     let deadline_summary = context.deadline_summary(&task.task_id);
     let relationship_summary = context.relationship_summary(&task.task_id);
+    let workflow_context = context.workflow_context(&task.task_id);
 
     if let Some(matches) = matches_review_view(
         &task.task_id,
@@ -268,7 +269,15 @@ pub(super) fn matches_view(
                     )
                 })
         }
-        TaskView::PausedResumable => context.paused_resumable_task_ids.contains(&task.task_id),
+        TaskView::PausedResumable => {
+            context.paused_resumable_task_ids.contains(&task.task_id)
+                || workflow_context.is_some_and(|context| {
+                    context
+                        .queue_state
+                        .as_ref()
+                        .is_some_and(|queue| queue.status == TaskQueueStatus::Paused)
+                })
+        }
         TaskView::DueSoon
         | TaskView::DueSoonExecution
         | TaskView::DueSoonReview
@@ -304,6 +313,16 @@ pub(super) fn matches_view(
         TaskView::Review => {
             task.status == TaskStatus::ReviewRequired
                 || task.verification_state == VerificationState::Pending
+                || workflow_context.is_some_and(|context| {
+                    context.review_cycle.as_ref().is_some_and(|cycle| {
+                        matches!(
+                            cycle.state,
+                            ReviewCycleState::Pending
+                                | ReviewCycleState::InReview
+                                | ReviewCycleState::DecisionReady
+                        )
+                    })
+                })
         }
         TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
             summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0

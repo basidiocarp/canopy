@@ -346,7 +346,7 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .as_array()
             .expect("operator actions")
             .len(),
-        4
+        5
     );
     assert_eq!(snapshot["operator_actions"][0]["kind"], "acknowledge_task");
     assert_eq!(snapshot["operator_actions"][0]["target_kind"], "task");
@@ -354,11 +354,27 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
     assert_eq!(snapshot["operator_actions"][1]["target_kind"], "task");
     assert_eq!(
         snapshot["operator_actions"][2]["kind"],
-        "resolve_dependency"
+        "summon_council_session"
     );
     assert_eq!(snapshot["operator_actions"][2]["target_kind"], "task");
-    assert_eq!(snapshot["operator_actions"][3]["kind"], "promote_follow_up");
+    assert_eq!(
+        snapshot["operator_actions"][3]["kind"],
+        "resolve_dependency"
+    );
     assert_eq!(snapshot["operator_actions"][3]["target_kind"], "task");
+    assert_eq!(snapshot["operator_actions"][4]["kind"], "promote_follow_up");
+    assert_eq!(snapshot["operator_actions"][4]["target_kind"], "task");
+    assert_eq!(
+        snapshot["workflow_contexts"]
+            .as_array()
+            .expect("workflow contexts")
+            .len(),
+        1
+    );
+    assert_eq!(
+        snapshot["workflow_contexts"][0]["review_cycle"]["state"],
+        "pending"
+    );
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(
         snapshot["relationships"]
@@ -474,7 +490,11 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .as_array()
             .expect("operator actions")
             .len(),
-        4
+        5
+    );
+    assert_eq!(
+        detail["workflow_context"]["queue_state"]["status"],
+        "review"
     );
     let allowed_actions = detail["allowed_actions"]
         .as_array()

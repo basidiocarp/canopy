@@ -1,9 +1,12 @@
-use super::helpers::{add_council_message_in_connection, map_council_message, parse_enum_value};
+use super::helpers::{
+    add_council_message_in_connection, map_council_message, parse_enum_value,
+    sync_task_workflow_in_connection,
+};
 use super::{Store, StoreError, StoreResult};
 use crate::models::{
     CouncilMessage, CouncilMessageType, CouncilParticipant, CouncilParticipantRole,
-    CouncilParticipantStatus, CouncilSession, CouncilSessionState,
-    CouncilSessionTimelineEntry, CouncilSessionTimelineKind, Task,
+    CouncilParticipantStatus, CouncilSession, CouncilSessionState, CouncilSessionTimelineEntry,
+    CouncilSessionTimelineKind, Task,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use ulid::Ulid;
@@ -116,10 +119,7 @@ fn build_timeline(
     timeline
 }
 
-fn build_session(
-    raw: StoredCouncilSession,
-    messages: &[CouncilMessage],
-) -> CouncilSession {
+fn build_session(raw: StoredCouncilSession, messages: &[CouncilMessage]) -> CouncilSession {
     let timeline = build_timeline(&raw, messages);
     CouncilSession {
         council_session_id: raw.council_session_id,
@@ -193,6 +193,7 @@ pub(crate) fn summon_task_council_in_connection(
     )?;
 
     super::helpers::touch_task_in_connection(conn, &task.task_id)?;
+    sync_task_workflow_in_connection(conn, &task.task_id)?;
     Ok(())
 }
 
@@ -372,12 +373,18 @@ mod tests {
         assert_eq!(session.state, CouncilSessionState::Open);
         assert_eq!(session.worktree_id.as_deref(), Some("wt-demo"));
         assert_eq!(session.participants.len(), 2);
-        assert_eq!(session.participants[0].role, CouncilParticipantRole::Reviewer);
+        assert_eq!(
+            session.participants[0].role,
+            CouncilParticipantRole::Reviewer
+        );
         assert_eq!(
             session.participants[0].status,
             Some(CouncilParticipantStatus::Summoned)
         );
-        assert_eq!(session.participants[1].role, CouncilParticipantRole::Architect);
+        assert_eq!(
+            session.participants[1].role,
+            CouncilParticipantRole::Architect
+        );
         assert_eq!(
             session.transcript_ref.as_deref(),
             Some("memory://council/transcript")
@@ -410,7 +417,10 @@ mod tests {
             .expect("session")
             .expect("present");
         assert_eq!(session.timeline.len(), 2);
-        assert_eq!(session.timeline[1].kind, CouncilSessionTimelineKind::Decision);
+        assert_eq!(
+            session.timeline[1].kind,
+            CouncilSessionTimelineKind::Decision
+        );
         assert_eq!(
             session.timeline[1].actor_agent_id.as_deref(),
             Some("agent-2")
@@ -431,7 +441,10 @@ mod tests {
 
         assert_eq!(first.council_session_id, second.council_session_id);
         assert_eq!(
-            store.list_council_messages(&task_id).expect("messages").len(),
+            store
+                .list_council_messages(&task_id)
+                .expect("messages")
+                .len(),
             0
         );
     }

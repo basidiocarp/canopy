@@ -76,6 +76,49 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum TaskQueueStatus {
+    Queued,
+    Claimed,
+    Executing,
+    Paused,
+    Blocked,
+    Review,
+    Closed,
+    Cancelled,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum WorktreeBindingStatus {
+    Unbound,
+    Bound,
+    Released,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum ReviewCycleState {
+    Inactive,
+    Pending,
+    InReview,
+    DecisionReady,
+    Closed,
+}
+
 impl TaskStatus {
     #[must_use]
     pub fn allowed_transitions(self) -> &'static [Self] {
@@ -802,6 +845,10 @@ pub struct Task {
     pub requested_by: String,
     pub project_root: String,
     pub parent_task_id: Option<String>,
+    pub queue_state_id: Option<String>,
+    pub worktree_binding_id: Option<String>,
+    pub execution_session_ref: Option<String>,
+    pub review_cycle_id: Option<String>,
     pub required_role: Option<AgentRole>,
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,
@@ -828,6 +875,58 @@ pub struct Task {
     pub scope: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskQueueStateRecord {
+    pub queue_state_id: String,
+    pub task_id: String,
+    pub queue_name: String,
+    pub lane: String,
+    pub position: i64,
+    pub status: TaskQueueStatus,
+    pub owner_agent_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskWorktreeBindingRecord {
+    pub worktree_binding_id: String,
+    pub task_id: String,
+    pub project_root: String,
+    pub agent_id: Option<String>,
+    pub worktree_id: Option<String>,
+    pub execution_session_ref: Option<String>,
+    pub status: WorktreeBindingStatus,
+    pub bound_at: Option<String>,
+    pub released_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskReviewCycleRecord {
+    pub review_cycle_id: String,
+    pub task_id: String,
+    pub cycle_number: i64,
+    pub state: ReviewCycleState,
+    pub council_session_id: Option<String>,
+    pub requested_by: Option<String>,
+    pub evidence_count: i64,
+    pub decision_count: i64,
+    pub opened_at: Option<String>,
+    pub decided_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskWorkflowContext {
+    pub task_id: String,
+    pub queue_state: Option<TaskQueueStateRecord>,
+    pub worktree_binding: Option<TaskWorktreeBindingRecord>,
+    pub review_cycle: Option<TaskReviewCycleRecord>,
+    pub council_session_id: Option<String>,
+    pub execution_session_ref: Option<String>,
+}
+
 /// Describes a file-scope overlap between two tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeConflict {
@@ -837,7 +936,7 @@ pub struct ScopeConflict {
     pub overlapping_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileLock {
     pub lock_id: String,
     pub task_id: String,
@@ -1257,6 +1356,7 @@ pub struct ApiSnapshot {
     pub evidence: Vec<EvidenceRef>,
     pub relationships: Vec<TaskRelationship>,
     pub relationship_summaries: Vec<TaskRelationshipSummary>,
+    pub workflow_contexts: Vec<TaskWorkflowContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1283,10 +1383,39 @@ pub struct TaskDetail {
     pub evidence: Vec<EvidenceRef>,
     pub relationships: Vec<TaskRelationship>,
     pub relationship_summary: TaskRelationshipSummary,
+    pub workflow_context: Option<TaskWorkflowContext>,
     pub related_tasks: Vec<RelatedTask>,
     pub children: Vec<TaskSummary>,
     pub children_complete: bool,
     pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkQueueResult {
+    pub schema_version: String,
+    pub available_tasks: Vec<Task>,
+    pub orchestration: Vec<TaskWorkflowContext>,
+    pub my_role: Option<String>,
+    pub my_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhoAmIResult {
+    pub schema_version: String,
+    pub agent: AgentRegistration,
+    pub tasks: Vec<Task>,
+    pub workflow: Vec<TaskWorkflowContext>,
+    pub pending_handoffs: Vec<Handoff>,
+    pub file_locks: Vec<FileLock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SituationResult {
+    pub schema_version: String,
+    pub agents: Vec<AgentRegistration>,
+    pub file_locks: Vec<FileLock>,
+    pub workflow: Vec<TaskWorkflowContext>,
+    pub open_handoffs_count: usize,
 }
 
 #[cfg(test)]

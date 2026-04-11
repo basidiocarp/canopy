@@ -7,7 +7,7 @@ use super::helpers::{
     has_open_child_tasks_in_connection, has_passing_script_verification_in_connection,
     is_open_task_status, map_task, maybe_auto_complete_task_tree_in_connection,
     record_parent_relationship_in_connection, record_task_event_in_connection,
-    sync_owner_for_task_status,
+    sync_owner_for_task_status, sync_task_workflow_in_connection,
 };
 use super::operator_actions::{
     task_operator_deadline_update, task_operator_status_update, task_operator_triage_update,
@@ -189,11 +189,12 @@ impl Store {
     pub fn list_tasks(&self) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT task_id, title, description, requested_by, project_root, required_role,
-                   required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
+            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+                   queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   parent_task_id, scope, created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             ORDER BY rowid
             ",
@@ -313,6 +314,7 @@ impl Store {
             )?;
 
             sync_owner_for_task_status(conn, task_id, status)?;
+            sync_task_workflow_in_connection(conn, task_id)?;
             let updated = get_task_in_connection(conn, task_id)?;
             let mut notes = Vec::new();
             if let Some(note) = match status {
@@ -778,11 +780,12 @@ impl Store {
         limit: Option<i64>,
     ) -> StoreResult<Vec<Task>> {
         let select = r"
-            SELECT task_id, title, description, requested_by, project_root, required_role,
-                   required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
+            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+                   queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   parent_task_id, scope, created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
         ";
 
@@ -895,11 +898,14 @@ impl Store {
     ///
     /// Returns an error if the database operation fails.
     pub fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()> {
-        self.conn.execute(
-            "UPDATE tasks SET owner_agent_id = NULL, claimed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
-            params![task_id],
-        )?;
-        Ok(())
+        self.in_transaction(|conn| {
+            conn.execute(
+                "UPDATE tasks SET owner_agent_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+                params![task_id],
+            )?;
+            sync_task_workflow_in_connection(conn, task_id)?;
+            Ok(())
+        })
     }
 
     /// Atomically claim a task. Returns the task if successful, None if already claimed.
@@ -909,42 +915,44 @@ impl Store {
     ///
     /// Returns an error if the database operation fails.
     pub fn atomic_claim_task(&self, agent_id: &str, task_id: &str) -> StoreResult<Option<Task>> {
-        let now = Utc::now().to_rfc3339();
-        let rows_affected = self.conn.execute(
-            r"
-            UPDATE tasks
-            SET status = 'assigned',
-                owner_agent_id = ?1,
-                claimed_at = ?2,
-                updated_at = ?2
-            WHERE task_id = ?3
-              AND status = 'open'
-              AND owner_agent_id IS NULL
-            ",
-            params![agent_id, now, task_id],
-        )?;
-        if rows_affected > 0 {
-            // Record the claim event so the audit trail has no gaps
-            record_task_event_in_connection(
-                &self.conn,
-                &TaskEventWrite {
-                    task_id,
-                    event_type: TaskEventType::StatusChanged,
-                    actor: agent_id,
-                    from_status: Some(TaskStatus::Open),
-                    to_status: TaskStatus::Assigned,
-                    verification_state: None,
-                    owner_agent_id: Some(agent_id),
-                    execution_action: None,
-                    execution_duration_seconds: None,
-                    note: Some("claimed via atomic_claim_task"),
-                },
+        self.in_transaction(|conn| {
+            let now = Utc::now().to_rfc3339();
+            let rows_affected = conn.execute(
+                r"
+                UPDATE tasks
+                SET status = 'assigned',
+                    owner_agent_id = ?1,
+                    updated_at = ?2
+                WHERE task_id = ?3
+                  AND status = 'open'
+                  AND owner_agent_id IS NULL
+                ",
+                params![agent_id, now, task_id],
             )?;
-            let task = get_task_in_connection(&self.conn, task_id)?;
-            Ok(Some(task))
-        } else {
-            Ok(None)
-        }
+            if rows_affected > 0 {
+                // Record the claim event so the audit trail has no gaps.
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::StatusChanged,
+                        actor: agent_id,
+                        from_status: Some(TaskStatus::Open),
+                        to_status: TaskStatus::Assigned,
+                        verification_state: None,
+                        owner_agent_id: Some(agent_id),
+                        execution_action: None,
+                        execution_duration_seconds: None,
+                        note: Some("claimed via atomic_claim_task"),
+                    },
+                )?;
+                sync_task_workflow_in_connection(conn, task_id)?;
+                let task = get_task_in_connection(conn, task_id)?;
+                Ok(Some(task))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     /// Query tasks available for claiming, filtered by role/capabilities.
@@ -961,12 +969,13 @@ impl Store {
     ) -> StoreResult<Vec<Task>> {
         let mut sql = String::from(
             r"
-            SELECT task_id, title, description, requested_by, project_root, required_role,
-                   required_capabilities, auto_review, verification_required, status,
+            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+                   queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   required_role, required_capabilities, auto_review, verification_required, status,
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   parent_task_id, scope, created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1015,12 +1024,13 @@ impl Store {
     pub fn list_tasks_for_agent(&self, agent_id: &str) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT task_id, title, description, requested_by, project_root, required_role,
-                   required_capabilities, auto_review, verification_required, status,
+            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+                   queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   required_role, required_capabilities, auto_review, verification_required, status,
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   parent_task_id, scope, created_at, updated_at
+                   scope, created_at, updated_at
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC

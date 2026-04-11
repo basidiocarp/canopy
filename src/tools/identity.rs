@@ -1,9 +1,11 @@
 use serde_json::{Value, json};
 
-use crate::models::{AgentRegistration, AgentRole, AgentStatus};
+use crate::models::{AgentRegistration, AgentRole, AgentStatus, SituationResult, WhoAmIResult};
 use crate::store::CanopyStore;
 
 use super::{ToolResult, get_str, get_string_array};
+
+const TOOL_RESULT_SCHEMA_VERSION: &str = "1.0";
 
 /// Register or update this agent.
 pub fn tool_register(
@@ -104,13 +106,27 @@ pub fn tool_whoami(
         Ok(l) => l,
         Err(err) => return ToolResult::error(format!("failed to list file locks: {err}")),
     };
+    let mut workflow = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        match store.get_task_workflow_context(&task.task_id) {
+            Ok(context) => workflow.push(context),
+            Err(err) => {
+                return ToolResult::error(format!(
+                    "failed to load workflow context for task {}: {err}",
+                    task.task_id
+                ));
+            }
+        }
+    }
 
-    ToolResult::json(&json!({
-        "agent": agent,
-        "tasks": tasks,
-        "pending_handoffs": pending_handoffs,
-        "file_locks": file_locks,
-    }))
+    ToolResult::json(&WhoAmIResult {
+        schema_version: TOOL_RESULT_SCHEMA_VERSION.to_string(),
+        agent,
+        tasks,
+        workflow,
+        pending_handoffs,
+        file_locks,
+    })
 }
 
 /// Situational awareness across all agents.
@@ -138,10 +154,71 @@ pub fn tool_situation(
             .count(),
         Err(err) => return ToolResult::error(format!("failed to list handoffs: {err}")),
     };
+    let workflow = match store.list_task_workflow_contexts(project_root) {
+        Ok(workflow) => workflow,
+        Err(err) => return ToolResult::error(format!("failed to list workflow context: {err}")),
+    };
 
-    ToolResult::json(&json!({
-        "agents": agents,
-        "file_locks": file_locks,
-        "open_handoffs_count": open_handoffs,
-    }))
+    ToolResult::json(&SituationResult {
+        schema_version: TOOL_RESULT_SCHEMA_VERSION.to_string(),
+        agents,
+        file_locks,
+        workflow,
+        open_handoffs_count: open_handoffs,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_whoami;
+    use crate::models::{AgentRegistration, AgentStatus};
+    use crate::store::Store;
+    use rusqlite::Connection;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn whoami_fails_fast_when_workflow_context_is_invalid() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+        let agent = AgentRegistration {
+            agent_id: "agent-1".to_string(),
+            host_id: "host-1".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "gpt-5.4".to_string(),
+            project_root: "/repo/demo".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: None,
+            capabilities: Vec::new(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        };
+        store.register_agent(&agent).expect("register agent");
+        let task = store
+            .create_task("Assigned workflow", None, "operator", "/repo/demo", None)
+            .expect("create task");
+        store
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .expect("assign task");
+
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute(
+            "UPDATE task_queue_states SET status = 'not-a-real-status' WHERE task_id = ?1",
+            [task.task_id.as_str()],
+        )
+        .expect("corrupt queue state");
+
+        let result = tool_whoami(&store, &agent.agent_id, &json!({}));
+        assert!(result.is_error);
+        assert!(
+            result.content[0]
+                .text
+                .contains("failed to load workflow context"),
+            "unexpected error: {}",
+            result.content[0].text
+        );
+    }
 }

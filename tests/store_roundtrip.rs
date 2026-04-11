@@ -1134,6 +1134,16 @@ fn store_requires_prior_execution_before_resume_task() {
         )
         .expect("pause task");
     assert_eq!(paused.status, TaskStatus::Assigned);
+    let paused_workflow = store
+        .get_task_workflow_context(&task.task_id)
+        .expect("load paused workflow");
+    assert_eq!(
+        paused_workflow
+            .queue_state
+            .expect("paused queue state")
+            .status,
+        canopy::models::TaskQueueStatus::Paused
+    );
 
     let resumed = store
         .apply_task_operator_action(
@@ -1146,6 +1156,16 @@ fn store_requires_prior_execution_before_resume_task() {
         )
         .expect("resume task");
     assert_eq!(resumed.status, TaskStatus::InProgress);
+    let resumed_workflow = store
+        .get_task_workflow_context(&task.task_id)
+        .expect("load resumed workflow");
+    assert_eq!(
+        resumed_workflow
+            .queue_state
+            .expect("resumed queue state")
+            .status,
+        canopy::models::TaskQueueStatus::Executing
+    );
 
     let actions: Vec<_> = store
         .list_task_events(&task.task_id)

@@ -5,11 +5,13 @@ use super::*;
 pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {
     conn.query_row(
         r"
-        SELECT task_id, title, description, requested_by, project_root, required_role,
-               required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
+        SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+               queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+               required_role, required_capabilities, auto_review, verification_required, status,
+               verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-               parent_task_id, scope, created_at, updated_at
+               scope, created_at, updated_at
         FROM tasks
         WHERE task_id = ?1
         ",

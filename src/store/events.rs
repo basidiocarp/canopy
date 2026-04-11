@@ -1,6 +1,6 @@
 use super::helpers::{list_task_events_in_connection, map_task_event};
 use super::{Store, StoreError, StoreResult};
-use crate::models::TaskEvent;
+use crate::models::{TaskEvent, TaskWorkflowContext};
 
 impl Store {
     /// Lists timeline events for one task.
@@ -11,6 +11,20 @@ impl Store {
     pub fn list_task_events(&self, task_id: &str) -> StoreResult<Vec<TaskEvent>> {
         self.ensure_task_exists(task_id)?;
         list_task_events_in_connection(&self.conn, task_id)
+    }
+
+    /// Lists timeline events together with the task's typed workflow context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or either query fails.
+    pub fn list_task_events_with_workflow(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<(Vec<TaskEvent>, TaskWorkflowContext)> {
+        let events = self.list_task_events(task_id)?;
+        let workflow = self.get_task_workflow_context(task_id)?;
+        Ok((events, workflow))
     }
 
     /// Lists task events across all tasks.

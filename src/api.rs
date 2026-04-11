@@ -2,12 +2,13 @@ use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
     AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState,
     ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason, HandoffType,
-    OperatorAction, OperatorActionKind, OperatorActionTargetKind, SnapshotAttentionSummary,
-    SnapshotPreset, SnapshotSlaSummary, Task, TaskAssignment, TaskAttention, TaskAttentionReason,
-    TaskDeadlineKind, TaskDeadlineSummary, TaskDetail, TaskEvent, TaskEventType,
-    TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
-    TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary, TaskSeverity, TaskSlaSummary,
-    TaskSort, TaskStatus, TaskView, VerificationState, derive_review_cycle_context,
+    OperatorAction, OperatorActionKind, OperatorActionTargetKind, ReviewCycleState,
+    SnapshotAttentionSummary, SnapshotPreset, SnapshotSlaSummary, Task, TaskAssignment,
+    TaskAttention, TaskAttentionReason, TaskDeadlineKind, TaskDeadlineSummary, TaskDetail,
+    TaskEvent, TaskEventType, TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary,
+    TaskPriority, TaskQueueStatus, TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary,
+    TaskSeverity, TaskSlaSummary, TaskSort, TaskStatus, TaskView, TaskWorkflowContext,
+    VerificationState, derive_review_cycle_context,
 };
 use crate::store::{CanopyStore, StoreError, StoreResult};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
@@ -124,6 +125,7 @@ pub fn snapshot(
     let project_execution_summaries =
         derive_task_execution_summaries(&tasks, &project_task_events, now);
     let project_evidence = store.list_evidence_for_project(project_root)?;
+    let project_workflow_contexts = store.list_task_workflow_contexts(project_root)?;
     let project_deadline_summaries = derive_task_deadline_summaries(&tasks, now);
     let context = SnapshotContext::new(
         &tasks,
@@ -132,6 +134,7 @@ pub fn snapshot(
         &project_assignments,
         &relationship_summaries,
         &project_execution_summaries,
+        &project_workflow_contexts,
         &project_deadline_summaries,
         now,
     );
@@ -210,6 +213,10 @@ pub fn snapshot(
         .into_iter()
         .filter(|summary| task_ids.contains(&summary.task_id))
         .collect::<Vec<_>>();
+    let workflow_contexts = project_workflow_contexts
+        .into_iter()
+        .filter(|context| task_ids.contains(&context.task_id))
+        .collect::<Vec<_>>();
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&agents, &heartbeats, &filtered_agent_attention);
     let filtered_handoffs = handoffs
@@ -235,6 +242,7 @@ pub fn snapshot(
         &execution_summaries,
         &filtered_handoffs,
         &filtered_handoff_attention,
+        &workflow_contexts,
     );
     let attention = summarize_attention(
         &filtered_task_attention,
@@ -268,6 +276,7 @@ pub fn snapshot(
             .collect(),
         relationships,
         relationship_summaries: filtered_relationship_summaries,
+        workflow_contexts,
     })
 }
 
@@ -286,6 +295,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     let council_session = store.get_council_session(task_id)?;
     let messages = store.list_council_messages(task_id)?;
     let evidence = store.list_evidence(task_id)?;
+    let workflow_context = Some(store.get_task_workflow_context(task_id)?);
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
     let now = Utc::now();
@@ -349,6 +359,9 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         &assignments,
         std::slice::from_ref(&relationship_summary),
         std::slice::from_ref(&execution_summary),
+        workflow_context
+            .as_ref()
+            .map_or(&[][..], std::slice::from_ref),
         std::slice::from_ref(&deadline_summary),
         now,
     );
@@ -410,6 +423,9 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         std::slice::from_ref(&execution_summary),
         &handoffs,
         &handoff_attention,
+        workflow_context
+            .as_ref()
+            .map_or(&[][..], std::slice::from_ref),
     );
     let allowed_actions = derive_allowed_actions(
         &task,
@@ -448,6 +464,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         evidence,
         relationships,
         relationship_summary,
+        workflow_context,
         related_tasks: store.list_related_tasks(task_id)?,
         children_complete,
         children,

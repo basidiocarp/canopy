@@ -7,12 +7,13 @@ mod files;
 mod handoffs;
 mod helpers;
 mod operator_actions;
+mod orchestration;
 mod relationships;
 mod schema;
 mod tasks;
 mod traits;
 
-pub use traits::{CanopyStore, TaskGetStore, TaskLookupStore};
+pub use traits::{CanopyStore, OrchestrationStore, TaskGetStore, TaskLookupStore};
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,

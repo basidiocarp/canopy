@@ -28,34 +28,89 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         description: row.get(2)?,
         requested_by: row.get(3)?,
         project_root: row.get(4)?,
-        parent_task_id: row.get(25)?,
-        required_role: parse_optional_enum_column(row, 5)?,
+        parent_task_id: row.get(5)?,
+        queue_state_id: row.get(6)?,
+        worktree_binding_id: row.get(7)?,
+        execution_session_ref: row.get(8)?,
+        review_cycle_id: row.get(9)?,
+        required_role: parse_optional_enum_column(row, 10)?,
         required_capabilities: row
-            .get::<_, Option<String>>(6)?
+            .get::<_, Option<String>>(11)?
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
-        auto_review: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
-        verification_required: row.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
-        status: parse_enum_column(row, 9)?,
-        verification_state: parse_enum_column(row, 10)?,
-        priority: parse_enum_column(row, 11)?,
-        severity: parse_enum_column(row, 12)?,
-        owner_agent_id: row.get(13)?,
-        owner_note: row.get(14)?,
-        acknowledged_by: row.get(15)?,
-        acknowledged_at: row.get(16)?,
-        blocked_reason: row.get(17)?,
-        verified_by: row.get(18)?,
-        verified_at: row.get(19)?,
-        closed_by: row.get(20)?,
-        closure_summary: row.get(21)?,
-        closed_at: row.get(22)?,
-        due_at: row.get(23)?,
-        review_due_at: row.get(24)?,
+        auto_review: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
+        verification_required: row.get::<_, Option<i64>>(13)?.unwrap_or(0) != 0,
+        status: parse_enum_column(row, 14)?,
+        verification_state: parse_enum_column(row, 15)?,
+        priority: parse_enum_column(row, 16)?,
+        severity: parse_enum_column(row, 17)?,
+        owner_agent_id: row.get(18)?,
+        owner_note: row.get(19)?,
+        acknowledged_by: row.get(20)?,
+        acknowledged_at: row.get(21)?,
+        blocked_reason: row.get(22)?,
+        verified_by: row.get(23)?,
+        verified_at: row.get(24)?,
+        closed_by: row.get(25)?,
+        closure_summary: row.get(26)?,
+        closed_at: row.get(27)?,
+        due_at: row.get(28)?,
+        review_due_at: row.get(29)?,
         scope: row
-            .get::<_, Option<String>>(26)?
+            .get::<_, Option<String>>(30)?
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
-        created_at: row.get(27)?,
-        updated_at: row.get(28)?,
+        created_at: row.get(31)?,
+        updated_at: row.get(32)?,
+    })
+}
+
+pub(crate) fn map_task_queue_state(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaskQueueStateRecord> {
+    Ok(TaskQueueStateRecord {
+        queue_state_id: row.get(0)?,
+        task_id: row.get(1)?,
+        queue_name: row.get(2)?,
+        lane: row.get(3)?,
+        position: row.get(4)?,
+        status: parse_enum_column(row, 5)?,
+        owner_agent_id: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+pub(crate) fn map_task_worktree_binding(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaskWorktreeBindingRecord> {
+    Ok(TaskWorktreeBindingRecord {
+        worktree_binding_id: row.get(0)?,
+        task_id: row.get(1)?,
+        project_root: row.get(2)?,
+        agent_id: row.get(3)?,
+        worktree_id: row.get(4)?,
+        execution_session_ref: row.get(5)?,
+        status: parse_enum_column(row, 6)?,
+        bound_at: row.get(7)?,
+        released_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+pub(crate) fn map_task_review_cycle(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaskReviewCycleRecord> {
+    Ok(TaskReviewCycleRecord {
+        review_cycle_id: row.get(0)?,
+        task_id: row.get(1)?,
+        cycle_number: row.get(2)?,
+        state: parse_enum_column(row, 3)?,
+        council_session_id: row.get(4)?,
+        requested_by: row.get(5)?,
+        evidence_count: row.get(6)?,
+        decision_count: row.get(7)?,
+        opened_at: row.get(8)?,
+        decided_at: row.get(9)?,
+        closed_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 

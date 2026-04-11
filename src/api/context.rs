@@ -27,6 +27,7 @@ pub(super) struct SnapshotContext {
     pub(super) overdue_accepted_handoff_follow_through_task_ids: HashSet<String>,
     deadline_summary_by_task_id: HashMap<String, TaskDeadlineSummary>,
     relationship_summary_by_task_id: HashMap<String, TaskRelationshipSummary>,
+    workflow_context_by_task_id: HashMap<String, TaskWorkflowContext>,
 }
 
 impl SnapshotContext {
@@ -38,6 +39,7 @@ impl SnapshotContext {
         assignments: &[TaskAssignment],
         relationship_summaries: &[TaskRelationshipSummary],
         execution_summaries: &[TaskExecutionSummary],
+        workflow_contexts: &[TaskWorkflowContext],
         deadline_summaries: &[TaskDeadlineSummary],
         now: OffsetDateTime,
     ) -> Self {
@@ -174,6 +176,10 @@ impl SnapshotContext {
                 .iter()
                 .map(|summary| (summary.task_id.clone(), summary.clone()))
                 .collect(),
+            workflow_context_by_task_id: workflow_contexts
+                .iter()
+                .map(|context| (context.task_id.clone(), context.clone()))
+                .collect(),
         }
     }
 
@@ -183,6 +189,10 @@ impl SnapshotContext {
 
     pub(super) fn relationship_summary(&self, task_id: &str) -> Option<&TaskRelationshipSummary> {
         self.relationship_summary_by_task_id.get(task_id)
+    }
+
+    pub(super) fn workflow_context(&self, task_id: &str) -> Option<&TaskWorkflowContext> {
+        self.workflow_context_by_task_id.get(task_id)
     }
 
     pub(super) fn sla_queue_sets(&self) -> SlaQueueSets<'_> {
