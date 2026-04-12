@@ -19,6 +19,7 @@ use canopy::store::{
     TaskCreationOptions, TaskStatusUpdate, TaskTriageUpdate, agent_last_heartbeat_age_secs,
     classify_agent_freshness,
 };
+use canopy::tools::evidence::build_evidence_review_rows;
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
@@ -997,7 +998,8 @@ fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()
             print_json(&evidence)?;
         }
         EvidenceCommand::List { task_id } => {
-            print_json(&store.list_evidence(&task_id)?)?;
+            let evidence = store.list_evidence(&task_id)?;
+            print_json(&build_evidence_review_rows(&evidence))?;
         }
         EvidenceCommand::Verify { task_id } => {
             print_json(&verify_evidence(store, task_id.as_deref())?)?;

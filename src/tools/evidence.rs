@@ -16,7 +16,94 @@ use ulid::Ulid;
 struct TaskEvidenceSummary {
     task_id: String,
     evidence_count: usize,
-    evidence: Vec<EvidenceRef>,
+    evidence: Vec<EvidenceReviewRow>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EvidenceReviewRow {
+    #[serde(flatten)]
+    pub(crate) evidence: EvidenceRef,
+    pub(crate) source_kind_label: String,
+    pub(crate) caused_by: Vec<EvidenceAttributionRef>,
+    pub(crate) review_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EvidenceAttributionRef {
+    pub(crate) relation: &'static str,
+    pub(crate) reference: String,
+}
+
+pub fn build_evidence_review_rows(evidence: &[EvidenceRef]) -> Vec<EvidenceReviewRow> {
+    evidence
+        .iter()
+        .cloned()
+        .map(build_evidence_review_row)
+        .collect()
+}
+
+fn build_evidence_review_row(evidence: EvidenceRef) -> EvidenceReviewRow {
+    let source_kind_label = evidence_label(evidence.source_kind);
+    let caused_by = build_caused_by_refs(&evidence);
+    let review_summary = build_review_summary(&evidence, &source_kind_label, &caused_by);
+
+    EvidenceReviewRow {
+        evidence,
+        source_kind_label,
+        caused_by,
+        review_summary,
+    }
+}
+
+fn build_caused_by_refs(evidence: &EvidenceRef) -> Vec<EvidenceAttributionRef> {
+    let mut refs = Vec::new();
+    push_attribution_ref(&mut refs, "handoff", evidence.related_handoff_id.as_deref());
+    push_attribution_ref(&mut refs, "session", evidence.related_session_id.as_deref());
+    push_attribution_ref(
+        &mut refs,
+        "memory_query",
+        evidence.related_memory_query.as_deref(),
+    );
+    push_attribution_ref(&mut refs, "symbol", evidence.related_symbol.as_deref());
+    push_attribution_ref(&mut refs, "file", evidence.related_file.as_deref());
+    refs
+}
+
+fn push_attribution_ref(
+    refs: &mut Vec<EvidenceAttributionRef>,
+    relation: &'static str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        refs.push(EvidenceAttributionRef {
+            relation,
+            reference: value.to_string(),
+        });
+    }
+}
+
+fn build_review_summary(
+    evidence: &EvidenceRef,
+    source_kind_label: &str,
+    caused_by: &[EvidenceAttributionRef],
+) -> String {
+    if caused_by.is_empty() {
+        return format!(
+            "{source_kind_label} evidence '{}' points to {} with no recorded causal links",
+            evidence.label, evidence.source_ref
+        );
+    }
+
+    let links = caused_by
+        .iter()
+        .map(|link| format!("{}={}", link.relation, link.reference))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "{source_kind_label} evidence '{}' points to {} and is caused_by {links}",
+        evidence.label, evidence.source_ref
+    )
 }
 
 /// Attach evidence using the agent-facing compact MCP form.
@@ -61,7 +148,7 @@ pub fn tool_attach_evidence(
         Ok(evidence) => ToolResult::json(&TaskEvidenceSummary {
             task_id: task_id.to_string(),
             evidence_count: evidence.len(),
-            evidence,
+            evidence: build_evidence_review_rows(&evidence),
         }),
         Err(error) => ToolResult::error(format!("failed to list evidence: {error}")),
     }
@@ -101,6 +188,8 @@ pub fn tool_evidence_add(
     let links = EvidenceLinkRefs {
         related_handoff_id: get_str(args, "related_handoff_id"),
         session_id: get_str(args, "related_session_id"),
+        memory_query: get_str(args, "related_memory_query"),
+        symbol: get_str(args, "related_symbol"),
         file: get_str(args, "related_file"),
         ..EvidenceLinkRefs::default()
     };
@@ -174,7 +263,7 @@ pub fn tool_evidence_list(
     };
 
     match store.list_evidence(task_id) {
-        Ok(evidence) => ToolResult::json(&evidence),
+        Ok(evidence) => ToolResult::json(&build_evidence_review_rows(&evidence)),
         Err(error) => ToolResult::error(format!("failed to list evidence: {error}")),
     }
 }
@@ -218,8 +307,8 @@ pub fn tool_evidence_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::{evidence_label, validate_evidence_ref};
-    use crate::models::EvidenceSourceKind;
+    use super::{build_evidence_review_rows, evidence_label, validate_evidence_ref};
+    use crate::models::{EvidenceRef, EvidenceSourceKind};
     use crate::store::Store;
     use serde_json::json;
     use tempfile::tempdir;
@@ -303,6 +392,154 @@ mod tests {
         assert_eq!(
             payload["evidence"][0]["source_ref"],
             "session:01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        );
+        assert_eq!(payload["evidence"][0]["source_kind_label"], "Hyphae session");
+        assert_eq!(
+            payload["evidence"][0]["caused_by"],
+            json!([{ "relation": "session", "reference": "session:01ARZ3NDEKTSV4RRFFQ69G5FAV" }])
+        );
+        assert_eq!(
+            payload["evidence"][0]["review_summary"],
+            "Hyphae session evidence 'Hyphae session' points to session:01ARZ3NDEKTSV4RRFFQ69G5FAV and is caused_by session=session:01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        );
+    }
+
+    #[test]
+    fn tool_evidence_add_preserves_memory_query_and_symbol_links() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("store open");
+        let task = store
+            .create_task("Attach evidence", None, "operator", "/tmp/project", None)
+            .expect("create task");
+        let task_id = task.task_id.clone();
+
+        let result = super::tool_evidence_add(
+            &store,
+            "agent-1",
+            &json!({
+                "task_id": task_id,
+                "source_kind": "hyphae_session",
+                "source_ref": "session:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "label": "Implementation session",
+                "summary": "Shows the successful fix",
+                "related_session_id": "ses_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "related_memory_query": "operator follow-up",
+                "related_symbol": "crate::module::apply_fix",
+                "related_file": "src/module.rs"
+            }),
+        );
+
+        assert!(
+            !result.is_error,
+            "unexpected error result: {:?}",
+            result.content
+        );
+        let payload: EvidenceRef =
+            serde_json::from_str(&result.content[0].text).expect("json evidence");
+        assert_eq!(
+            payload.related_memory_query.as_deref(),
+            Some("operator follow-up")
+        );
+        assert_eq!(
+            payload.related_symbol.as_deref(),
+            Some("crate::module::apply_fix")
+        );
+
+        let rows = build_evidence_review_rows(&[payload]);
+        assert_eq!(rows[0].caused_by.len(), 4);
+        assert_eq!(rows[0].caused_by[0].relation, "session");
+        assert_eq!(rows[0].caused_by[1].relation, "memory_query");
+        assert_eq!(rows[0].caused_by[2].relation, "symbol");
+        assert_eq!(rows[0].caused_by[3].relation, "file");
+    }
+
+    #[test]
+    fn build_evidence_review_rows_include_causal_links() {
+        let evidence = EvidenceRef {
+            schema_version: "1.0".to_string(),
+            evidence_id: "evidence-1".to_string(),
+            task_id: "task-1".to_string(),
+            source_kind: EvidenceSourceKind::HyphaeSession,
+            source_ref: "session:01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            label: "Implementation session".to_string(),
+            summary: Some("Shows the successful fix".to_string()),
+            related_handoff_id: Some("handoff-1".to_string()),
+            related_session_id: Some("ses_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+            related_memory_query: None,
+            related_symbol: Some("crate::module::apply_fix".to_string()),
+            related_file: Some("src/module.rs".to_string()),
+        };
+
+        let rows = build_evidence_review_rows(&[evidence]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_kind_label, "Hyphae session");
+        assert_eq!(rows[0].caused_by.len(), 4);
+        assert_eq!(rows[0].caused_by[0].relation, "handoff");
+        assert_eq!(rows[0].caused_by[0].reference, "handoff-1");
+        assert_eq!(rows[0].caused_by[1].relation, "session");
+        assert_eq!(
+            rows[0].review_summary,
+            "Hyphae session evidence 'Implementation session' points to session:01ARZ3NDEKTSV4RRFFQ69G5FAV and is caused_by handoff=handoff-1, session=ses_01ARZ3NDEKTSV4RRFFQ69G5FAV, symbol=crate::module::apply_fix, file=src/module.rs"
+        );
+    }
+
+    #[test]
+    fn tool_evidence_list_returns_review_row_json_shape() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("store open");
+        let task = store
+            .create_task("List evidence", None, "operator", "/tmp/project", None)
+            .expect("create task");
+        let task_id = task.task_id.clone();
+
+        let add_result = super::tool_evidence_add(
+            &store,
+            "agent-1",
+            &json!({
+                "task_id": task_id,
+                "source_kind": "hyphae_session",
+                "source_ref": "session:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "label": "Implementation session",
+                "summary": "Shows the successful fix",
+                "related_session_id": "ses_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "related_memory_query": "operator follow-up",
+                "related_symbol": "crate::module::apply_fix",
+                "related_file": "src/module.rs"
+            }),
+        );
+        assert!(
+            !add_result.is_error,
+            "unexpected error result: {:?}",
+            add_result.content
+        );
+
+        let list_result = super::tool_evidence_list(
+            &store,
+            "agent-1",
+            &json!({
+                "task_id": task_id,
+            }),
+        );
+        assert!(
+            !list_result.is_error,
+            "unexpected error result: {:?}",
+            list_result.content
+        );
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&list_result.content[0].text).expect("json evidence list");
+        assert_eq!(payload.as_array().expect("evidence array").len(), 1);
+        assert_eq!(payload[0]["source_kind"], "hyphae_session");
+        assert_eq!(payload[0]["source_kind_label"], "Hyphae session");
+        assert_eq!(payload[0]["caused_by"][0]["relation"], "session");
+        assert_eq!(payload[0]["caused_by"][1]["relation"], "memory_query");
+        assert_eq!(payload[0]["caused_by"][2]["relation"], "symbol");
+        assert_eq!(payload[0]["caused_by"][3]["relation"], "file");
+        assert_eq!(
+            payload[0]["review_summary"],
+            "Hyphae session evidence 'Implementation session' points to session:01ARZ3NDEKTSV4RRFFQ69G5FAV and is caused_by session=ses_01ARZ3NDEKTSV4RRFFQ69G5FAV, memory_query=operator follow-up, symbol=crate::module::apply_fix, file=src/module.rs"
         );
     }
 }

@@ -3,7 +3,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
@@ -1440,6 +1440,96 @@ Implement the second step.
         .clone();
     let evidence: Value = serde_json::from_slice(&evidence_output).expect("parse evidence list");
     assert_eq!(evidence[0]["label"], "Verification command");
+    assert_eq!(evidence[0]["source_kind_label"], "Manual note");
+    assert_eq!(
+        evidence[0]["review_summary"],
+        format!(
+            "Manual note evidence 'Verification command' points to {} with no recorded causal links",
+            handoff_path.display()
+        )
+    );
+    assert_eq!(evidence[0]["caused_by"], json!([]));
+}
+
+#[test]
+fn cli_evidence_list_renders_causal_review_surface() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+
+    let task_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "task",
+            "create",
+            "--title",
+            "Trace evidence",
+            "--requested-by",
+            "operator",
+            "--project-root",
+            "/tmp/project",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&task_output).expect("parse task output");
+    let task_id = task["task_id"].as_str().expect("task id");
+
+    Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "evidence",
+            "add",
+            "--task-id",
+            task_id,
+            "--source-kind",
+            "hyphae_session",
+            "--source-ref",
+            "session:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--label",
+            "Implementation session",
+            "--related-session-id",
+            "ses_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--related-memory-query",
+            "operator follow-up",
+            "--related-symbol",
+            "crate::module::apply_fix",
+            "--related-file",
+            "src/module.rs",
+        ])
+        .assert()
+        .success();
+
+    let evidence_output = Command::cargo_bin("canopy")
+        .expect("build canopy binary")
+        .args([
+            "--db",
+            db_path.to_str().expect("db path"),
+            "evidence",
+            "list",
+            "--task-id",
+            task_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evidence: Value = serde_json::from_slice(&evidence_output).expect("parse evidence list");
+    assert_eq!(evidence[0]["source_kind_label"], "Hyphae session");
+    assert_eq!(evidence[0]["caused_by"][0]["relation"], "session");
+    assert_eq!(evidence[0]["caused_by"][1]["relation"], "memory_query");
+    assert_eq!(evidence[0]["caused_by"][2]["relation"], "symbol");
+    assert_eq!(evidence[0]["caused_by"][3]["relation"], "file");
+    assert_eq!(
+        evidence[0]["review_summary"],
+        "Hyphae session evidence 'Implementation session' points to session:01ARZ3NDEKTSV4RRFFQ69G5FAV and is caused_by session=ses_01ARZ3NDEKTSV4RRFFQ69G5FAV, memory_query=operator follow-up, symbol=crate::module::apply_fix, file=src/module.rs"
+    );
 }
 
 #[test]
