@@ -74,6 +74,7 @@ Current direction:
 - Do not store copied sibling payloads when a typed reference is the intended model.
 - Treat enum or payload changes as contract work and update `../septa/` in the same change.
 - Back lifecycle and ownership changes with tests close to the store or tool layer that owns them.
+- Validate septa contracts after changing any cross-project payload: `cd septa && bash validate-all.sh`
 
 ---
 
