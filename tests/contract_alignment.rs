@@ -179,9 +179,7 @@ fn task_detail_schema_required_fields_present() {
 fn workflow_participant_runtime_identity_contract_has_core_fields() {
     let schema_path = septa_dir().join("workflow-participant-runtime-identity-v1.schema.json");
     if !schema_path.exists() {
-        eprintln!(
-            "Skipping: workflow-participant-runtime-identity-v1.schema.json not found"
-        );
+        eprintln!("Skipping: workflow-participant-runtime-identity-v1.schema.json not found");
         return;
     }
 

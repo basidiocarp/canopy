@@ -191,7 +191,6 @@ pub fn tool_evidence_add(
         memory_query: get_str(args, "related_memory_query"),
         symbol: get_str(args, "related_symbol"),
         file: get_str(args, "related_file"),
-        ..EvidenceLinkRefs::default()
     };
 
     match store.add_evidence(task_id, source_kind, source_ref, label, summary, links) {
@@ -393,7 +392,10 @@ mod tests {
             payload["evidence"][0]["source_ref"],
             "session:01ARZ3NDEKTSV4RRFFQ69G5FAV"
         );
-        assert_eq!(payload["evidence"][0]["source_kind_label"], "Hyphae session");
+        assert_eq!(
+            payload["evidence"][0]["source_kind_label"],
+            "Hyphae session"
+        );
         assert_eq!(
             payload["evidence"][0]["caused_by"],
             json!([{ "relation": "session", "reference": "session:01ARZ3NDEKTSV4RRFFQ69G5FAV" }])

@@ -316,7 +316,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::models::{AgentRegistration, AgentRole, AgentStatus};
-    use crate::store::Store;
+    use crate::store::{Store, TaskCreationOptions};
     use tempfile::tempdir;
 
     fn test_store() -> Store {
@@ -351,7 +351,7 @@ mod tests {
                 Some("demo"),
                 "operator",
                 "/workspace/demo",
-                &Default::default(),
+                &TaskCreationOptions::default(),
             )
             .expect("task");
         store

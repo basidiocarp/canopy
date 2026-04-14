@@ -279,6 +279,7 @@ fn upsert_task_worktree_binding_in_connection(
     Ok(binding)
 }
 
+#[allow(clippy::too_many_lines)]
 fn sync_task_review_cycle_in_connection(
     conn: &Connection,
     task: &Task,
@@ -309,10 +310,10 @@ fn sync_task_review_cycle_in_connection(
         TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
     );
 
-    let mut review_cycle_id = existing
-        .as_ref()
-        .map(|record| record.review_cycle_id.clone())
-        .unwrap_or_else(|| Ulid::new().to_string());
+    let mut review_cycle_id = existing.as_ref().map_or_else(
+        || Ulid::new().to_string(),
+        |record| record.review_cycle_id.clone(),
+    );
     let mut cycle_number = existing.as_ref().map_or(1, |record| record.cycle_number);
 
     if review_required

@@ -4,6 +4,7 @@ use super::*;
 
 #[allow(dead_code)]
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn derive_operator_actions(
     tasks: &[Task],
     task_attention: &[TaskAttention],

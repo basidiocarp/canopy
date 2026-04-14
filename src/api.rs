@@ -359,9 +359,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         &assignments,
         std::slice::from_ref(&relationship_summary),
         std::slice::from_ref(&execution_summary),
-        workflow_context
-            .as_ref()
-            .map_or(&[][..], std::slice::from_ref),
+        workflow_context.as_slice(),
         std::slice::from_ref(&deadline_summary),
         now,
     );
@@ -423,9 +421,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         std::slice::from_ref(&execution_summary),
         &handoffs,
         &handoff_attention,
-        workflow_context
-            .as_ref()
-            .map_or(&[][..], std::slice::from_ref),
+        workflow_context.as_slice(),
     );
     let allowed_actions = derive_allowed_actions(
         &task,
