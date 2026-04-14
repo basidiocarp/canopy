@@ -31,10 +31,12 @@ chat logs or reconstructing state from memory.
 
 | Tool | Purpose |
 |------|---------|
+| **[annulus](https://github.com/basidiocarp/annulus)** | Cross-ecosystem operator utilities |
 | **[canopy](https://github.com/basidiocarp/canopy)** | Multi-agent coordination runtime |
 | **[cap](https://github.com/basidiocarp/cap)** | Web dashboard for the ecosystem |
 | **[cortina](https://github.com/basidiocarp/cortina)** | Lifecycle signal capture and session attribution |
 | **[hyphae](https://github.com/basidiocarp/hyphae)** | Persistent agent memory |
+| **[hymenium](https://github.com/basidiocarp/hymenium)** | Workflow orchestration engine |
 | **[lamella](https://github.com/basidiocarp/lamella)** | Skills, hooks, and plugins for coding agents |
 | **[mycelium](https://github.com/basidiocarp/mycelium)** | Token-optimized command output |
 | **[rhizome](https://github.com/basidiocarp/rhizome)** | Code intelligence via tree-sitter and LSP |
