@@ -13,6 +13,94 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 
 #[test]
+fn store_open_migrates_legacy_tasks_before_parent_index_creation() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let conn = Connection::open(&db_path).expect("open legacy db");
+    conn.execute_batch(
+        r"
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            requested_by TEXT NOT NULL,
+            project_root TEXT NOT NULL,
+            status TEXT NOT NULL,
+            verification_state TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            owner_agent_id TEXT NULL,
+            owner_note TEXT NULL,
+            acknowledged_by TEXT NULL,
+            acknowledged_at TEXT NULL,
+            blocked_reason TEXT NULL,
+            verified_by TEXT NULL,
+            verified_at TEXT NULL,
+            closed_by TEXT NULL,
+            closure_summary TEXT NULL,
+            closed_at TEXT NULL,
+            due_at TEXT NULL,
+            review_due_at TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            required_role TEXT NULL,
+            required_capabilities TEXT NOT NULL DEFAULT '[]',
+            auto_review INTEGER NOT NULL DEFAULT 0,
+            verification_required INTEGER NOT NULL DEFAULT 0,
+            claimed_at TEXT NULL,
+            files_hint TEXT NULL,
+            scope TEXT NOT NULL DEFAULT '[]'
+        );
+        INSERT INTO tasks (
+            task_id,
+            title,
+            description,
+            requested_by,
+            project_root,
+            status,
+            verification_state,
+            priority,
+            severity
+        ) VALUES (
+            'task-1',
+            'legacy task',
+            NULL,
+            'operator',
+            '/tmp/project',
+            'open',
+            'not_requested',
+            'medium',
+            'none'
+        );
+        ",
+    )
+    .expect("seed legacy schema");
+    drop(conn);
+
+    Store::open(&db_path).expect("open store after legacy migration");
+
+    let conn = Connection::open(&db_path).expect("reopen migrated db");
+    let mut pragma = conn
+        .prepare("PRAGMA table_info(tasks)")
+        .expect("prepare table_info");
+    let columns = pragma
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("query table_info")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect columns");
+    assert!(columns.iter().any(|column| column == "parent_task_id"));
+
+    let index_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_parent_task_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query parent index");
+    assert_eq!(index_count, 1);
+}
+
+#[test]
 fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
@@ -73,20 +161,16 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     assert!(task.owner_agent_id.is_none());
     assert!(!task.created_at.is_empty());
     assert!(!task.updated_at.is_empty());
-    assert!(
-        store
-            .heartbeat_agent(&agent.agent_id, AgentStatus::InProgress, None)
-            .is_err()
-    );
-    assert!(
-        store
-            .heartbeat_agent(
-                &agent.agent_id,
-                AgentStatus::InProgress,
-                Some(&task.task_id)
-            )
-            .is_err()
-    );
+    assert!(store
+        .heartbeat_agent(&agent.agent_id, AgentStatus::InProgress, None)
+        .is_err());
+    assert!(store
+        .heartbeat_agent(
+            &agent.agent_id,
+            AgentStatus::InProgress,
+            Some(&task.task_id)
+        )
+        .is_err());
 
     let initial_events = store
         .list_task_events(&task.task_id)
@@ -109,32 +193,26 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         assigned.owner_agent_id.as_deref(),
         Some(agent.agent_id.as_str())
     );
-    assert!(
-        store
-            .register_agent(&AgentRegistration {
-                status: AgentStatus::Idle,
-                current_task_id: Some(task.task_id.clone()),
-                ..agent.clone()
-            })
-            .is_err()
-    );
-    assert!(
-        store
-            .register_agent(&AgentRegistration {
-                status: AgentStatus::InProgress,
-                current_task_id: None,
-                ..reviewer.clone()
-            })
-            .is_err()
-    );
+    assert!(store
+        .register_agent(&AgentRegistration {
+            status: AgentStatus::Idle,
+            current_task_id: Some(task.task_id.clone()),
+            ..agent.clone()
+        })
+        .is_err());
+    assert!(store
+        .register_agent(&AgentRegistration {
+            status: AgentStatus::InProgress,
+            current_task_id: None,
+            ..reviewer.clone()
+        })
+        .is_err());
     let second_task = store
         .create_task("Second task", None, "operator", "/tmp/project", None)
         .expect("create second task");
-    assert!(
-        store
-            .assign_task(&second_task.task_id, &agent.agent_id, "operator", None)
-            .is_err()
-    );
+    assert!(store
+        .assign_task(&second_task.task_id, &agent.agent_id, "operator", None)
+        .is_err());
 
     let heartbeat = store
         .heartbeat_agent(
@@ -184,11 +262,9 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("resolve handoff");
     assert_eq!(resolved.status, HandoffStatus::Accepted);
     assert!(resolved.resolved_at.is_some());
-    assert!(
-        store
-            .resolve_handoff(&handoff.handoff_id, HandoffStatus::Completed, "claude-1")
-            .is_err()
-    );
+    assert!(store
+        .resolve_handoff(&handoff.handoff_id, HandoffStatus::Completed, "claude-1")
+        .is_err());
 
     let handoffs = store
         .list_handoffs(Some(&task.task_id))
@@ -401,16 +477,12 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let task_heartbeats = store
         .list_task_heartbeats(&task.task_id, 20)
         .expect("list task heartbeats");
-    assert!(
-        task_heartbeats
-            .iter()
-            .any(|heartbeat| heartbeat.agent_id == reviewer.agent_id)
-    );
-    assert!(
-        task_heartbeats
-            .iter()
-            .any(|heartbeat| heartbeat.agent_id == agent.agent_id)
-    );
+    assert!(task_heartbeats
+        .iter()
+        .any(|heartbeat| heartbeat.agent_id == reviewer.agent_id));
+    assert!(task_heartbeats
+        .iter()
+        .any(|heartbeat| heartbeat.agent_id == agent.agent_id));
 }
 
 #[test]
@@ -463,11 +535,9 @@ fn update_task_status_rejects_invalid_terminal_transition() {
         )
         .expect_err("cancelled task should not go directly to in progress");
 
-    assert!(
-        error
-            .to_string()
-            .contains("cannot transition from cancelled to in_progress")
-    );
+    assert!(error
+        .to_string()
+        .contains("cannot transition from cancelled to in_progress"));
 }
 
 #[test]
@@ -578,11 +648,9 @@ fn assign_task_enforces_required_role_when_both_task_and_agent_define_it() {
     let error = store
         .assign_task(&task.task_id, "codex-1", "operator", None)
         .expect_err("reject mismatched assignee role");
-    assert!(
-        error
-            .to_string()
-            .contains("task requires validator role, agent has implementer")
-    );
+    assert!(error
+        .to_string()
+        .contains("task requires validator role, agent has implementer"));
 
     let assigned = store
         .assign_task(&task.task_id, "claude-1", "operator", None)
@@ -731,11 +799,9 @@ fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_t
     let error = store
         .assign_task(&task.task_id, "codex-2", "operator", None)
         .expect_err("reject missing capability on assign");
-    assert!(
-        error
-            .to_string()
-            .contains("agent missing capabilities: hyphae")
-    );
+    assert!(error
+        .to_string()
+        .contains("agent missing capabilities: hyphae"));
 
     let claimed = store
         .apply_task_operator_action(
@@ -861,11 +927,9 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
     let error = store
         .assign_task(&case_sensitive_task.task_id, "codex-3", "operator", None)
         .expect_err("reject capability mismatch with different casing");
-    assert!(
-        error
-            .to_string()
-            .contains("agent missing capabilities: Rust")
-    );
+    assert!(error
+        .to_string()
+        .contains("agent missing capabilities: Rust"));
 }
 
 #[test]
@@ -947,11 +1011,9 @@ fn completed_review_handoff_creates_validator_review_siblings_for_auto_review_ta
         .get_children(&parent.task_id)
         .expect("get parent children");
     assert_eq!(children.len(), 4);
-    assert!(
-        children
-            .iter()
-            .any(|task| task.task_id == implementation.task_id)
-    );
+    assert!(children
+        .iter()
+        .any(|task| task.task_id == implementation.task_id));
 
     let review_tasks = store
         .list_tasks()
@@ -974,12 +1036,10 @@ fn completed_review_handoff_creates_validator_review_siblings_for_auto_review_ta
                 .expect("load review parent"),
             Some(parent.task_id.clone())
         );
-        assert!(
-            review_task
-                .description
-                .as_deref()
-                .is_some_and(|description| description.contains(&implementation.task_id))
-        );
+        assert!(review_task
+            .description
+            .as_deref()
+            .is_some_and(|description| description.contains(&implementation.task_id)));
     }
 
     let task_events = store
@@ -1098,18 +1158,16 @@ fn store_requires_prior_execution_before_resume_task() {
         .expect("assign task");
     assert_eq!(assigned.status, TaskStatus::Assigned);
 
-    assert!(
-        store
-            .apply_task_operator_action(
-                &task.task_id,
-                "operator",
-                TaskAction::Resume {
-                    acting_agent_id: &agent.agent_id,
-                    note: None
-                },
-            )
-            .is_err()
-    );
+    assert!(store
+        .apply_task_operator_action(
+            &task.task_id,
+            "operator",
+            TaskAction::Resume {
+                acting_agent_id: &agent.agent_id,
+                note: None
+            },
+        )
+        .is_err());
 
     let in_progress = store
         .apply_task_operator_action(
@@ -1296,11 +1354,9 @@ fn task_creation_actions_create_artifacts_and_record_history() {
 
     let tasks = store.list_tasks().expect("list tasks");
     assert_eq!(tasks.len(), 2);
-    assert!(
-        tasks
-            .iter()
-            .any(|item| item.title == "Close the follow-up queue")
-    );
+    assert!(tasks
+        .iter()
+        .any(|item| item.title == "Close the follow-up queue"));
     let follow_up_task = tasks
         .iter()
         .find(|item| item.title == "Close the follow-up queue")
@@ -1469,11 +1525,9 @@ fn task_creation_actions_reject_terminal_tasks() {
         )
         .expect_err("reject follow-up creation on terminal task");
 
-    assert!(
-        error
-            .to_string()
-            .contains("operator action create_follow_up_task is not valid for terminal tasks")
-    );
+    assert!(error
+        .to_string()
+        .contains("operator action create_follow_up_task is not valid for terminal tasks"));
 }
 
 #[test]
@@ -1541,20 +1595,16 @@ fn subtasks_create_parent_relationships_and_enforce_single_parent() {
     let second_parent_error = store
         .link_parent_task(&child_a.task_id, &other_parent.task_id, "operator")
         .expect_err("child should reject second parent");
-    assert!(
-        second_parent_error
-            .to_string()
-            .contains("task already has a parent")
-    );
+    assert!(second_parent_error
+        .to_string()
+        .contains("task already has a parent"));
 
     let self_parent_error = store
         .link_parent_task(&parent.task_id, &parent.task_id, "operator")
         .expect_err("task should not parent itself");
-    assert!(
-        self_parent_error
-            .to_string()
-            .contains("task relationships must link two different tasks")
-    );
+    assert!(self_parent_error
+        .to_string()
+        .contains("task relationships must link two different tasks"));
 }
 
 #[test]
@@ -1586,12 +1636,10 @@ fn deleting_parent_does_not_delete_children() {
         .expect("child survives parent delete");
     assert_eq!(child.title, "Keep child");
     assert!(child.parent_task_id.is_none());
-    assert!(
-        store
-            .get_parent_id(&child_id)
-            .expect("load child parent after delete")
-            .is_none()
-    );
+    assert!(store
+        .get_parent_id(&child_id)
+        .expect("load child parent after delete")
+        .is_none());
 }
 
 #[test]
@@ -1665,11 +1713,9 @@ fn review_operator_actions_record_decision_before_closeout() {
             },
         )
         .expect_err("reject closeout before a recorded decision");
-    assert!(
-        error
-            .to_string()
-            .contains("close_task requires a current-cycle decision context")
-    );
+    assert!(error
+        .to_string()
+        .contains("close_task requires a current-cycle decision context"));
 
     let review_task = store
         .apply_task_operator_action(
@@ -1700,11 +1746,9 @@ fn review_operator_actions_record_decision_before_closeout() {
     let messages = store
         .list_council_messages(&task.task_id)
         .expect("list messages");
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.message_type == CouncilMessageType::Decision)
-    );
+    assert!(messages
+        .iter()
+        .any(|message| message.message_type == CouncilMessageType::Decision));
 
     let events = store
         .list_task_events(&task.task_id)
@@ -1778,13 +1822,11 @@ fn graph_operator_actions_update_relationships_and_status() {
             },
         )
         .expect("resolve dependency");
-    assert!(
-        store
-            .list_related_tasks(&parent.task_id)
-            .expect("list related tasks after dependency resolution")
-            .into_iter()
-            .all(|related| related.relationship_role != TaskRelationshipRole::BlockedBy)
-    );
+    assert!(store
+        .list_related_tasks(&parent.task_id)
+        .expect("list related tasks after dependency resolution")
+        .into_iter()
+        .all(|related| related.relationship_role != TaskRelationshipRole::BlockedBy));
 
     let reopened = store
         .apply_task_operator_action(
@@ -1822,13 +1864,11 @@ fn graph_operator_actions_update_relationships_and_status() {
             },
         )
         .expect("promote follow-up");
-    assert!(
-        store
-            .list_related_tasks(&parent.task_id)
-            .expect("list related tasks after promotion")
-            .into_iter()
-            .all(|related| related.related_task_id != follow_up_a.task_id)
-    );
+    assert!(store
+        .list_related_tasks(&parent.task_id)
+        .expect("list related tasks after promotion")
+        .into_iter()
+        .all(|related| related.related_task_id != follow_up_a.task_id));
 
     store
         .apply_task_operator_action(
@@ -1870,13 +1910,11 @@ fn graph_operator_actions_update_relationships_and_status() {
     store
         .apply_task_operator_action(&parent.task_id, "operator", TaskAction::CloseFollowUpChain)
         .expect("close follow-up chain");
-    assert!(
-        store
-            .list_related_tasks(&parent.task_id)
-            .expect("list related tasks after close")
-            .into_iter()
-            .all(|related| related.relationship_role != TaskRelationshipRole::FollowUpChild)
-    );
+    assert!(store
+        .list_related_tasks(&parent.task_id)
+        .expect("list related tasks after close")
+        .into_iter()
+        .all(|related| related.relationship_role != TaskRelationshipRole::FollowUpChild));
 
     let parent_events = store
         .list_task_events(&parent.task_id)
@@ -2114,16 +2152,14 @@ fn handoff_operator_actions_cover_resolution_paths() {
             },
         )
         .expect("create expired handoff for follow-up");
-    assert!(
-        store
-            .apply_handoff_operator_action(
-                &expired_handoff_for_follow_up.handoff_id,
-                OperatorActionKind::FollowUpHandoff,
-                "operator",
-                HandoffOperatorActionInput::default(),
-            )
-            .is_err()
-    );
+    assert!(store
+        .apply_handoff_operator_action(
+            &expired_handoff_for_follow_up.handoff_id,
+            OperatorActionKind::FollowUpHandoff,
+            "operator",
+            HandoffOperatorActionInput::default(),
+        )
+        .is_err());
 
     let history = store
         .list_task_events(&completed_task.task_id)
@@ -2179,11 +2215,9 @@ fn verification_required_tasks_need_script_evidence_before_completion() {
             },
         )
         .expect_err("reject completion without script evidence");
-    assert!(
-        error
-            .to_string()
-            .contains("requires script verification evidence")
-    );
+    assert!(error
+        .to_string()
+        .contains("requires script verification evidence"));
 
     store
         .add_evidence(
@@ -2426,21 +2460,19 @@ fn task_deadline_updates_persist_and_record_history() {
             },
         )
         .expect("move task into review");
-    assert!(
-        store
-            .update_task_deadlines(
-                &task.task_id,
-                "operator",
-                TaskDeadlineUpdate {
-                    due_at: Some("2026-04-01T00:00:00Z"),
-                    clear_due_at: false,
-                    review_due_at: None,
-                    clear_review_due_at: false,
-                    event_note: None,
-                },
-            )
-            .is_err()
-    );
+    assert!(store
+        .update_task_deadlines(
+            &task.task_id,
+            "operator",
+            TaskDeadlineUpdate {
+                due_at: Some("2026-04-01T00:00:00Z"),
+                clear_due_at: false,
+                review_due_at: None,
+                clear_review_due_at: false,
+                event_note: None,
+            },
+        )
+        .is_err());
 
     let with_review_due = store
         .update_task_deadlines(

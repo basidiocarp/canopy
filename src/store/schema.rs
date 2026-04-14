@@ -188,9 +188,6 @@ pub(crate) const BASE_SCHEMA: &str = r"
     ON task_relationships(source_task_id)
     WHERE kind = 'parent';
 
-    CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id
-    ON tasks(parent_task_id);
-
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,

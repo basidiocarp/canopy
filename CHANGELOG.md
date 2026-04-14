@@ -4,6 +4,14 @@ All notable changes to Canopy are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-04-14
+
+### Fixed
+
+- **Legacy store migration**: Canopy now delays the `tasks(parent_task_id)`
+  index until after schema migration, so older databases open cleanly and
+  `canopy task list` no longer fails during automatic upgrade.
+
 ## [0.5.10] - 2026-04-09
 
 ### Changed
