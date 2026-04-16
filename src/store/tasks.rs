@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{ErrorCode, OptionalExtension, params};
 use std::collections::HashMap;
 
 use super::helpers::{
@@ -73,6 +73,46 @@ impl Store {
                 options,
             )
         })
+    }
+
+    /// Enqueues a new scoped task, preventing duplicates at the database level.
+    ///
+    /// When `scope` is non-empty, a partial unique index ensures only one task
+    /// with that scope can be in `open` (queued) status at a time. A second
+    /// enqueue attempt for the same scope returns
+    /// [`StoreError::DuplicateQueuedTask`] instead of a raw database error.
+    ///
+    /// Tasks with an empty scope (`options.scope` is empty) are created without
+    /// uniqueness enforcement — multiple unscoped tasks can coexist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::DuplicateQueuedTask`] when a queued task for the
+    /// same scope already exists. Returns other [`StoreError`] variants on
+    /// database or validation failures.
+    pub fn enqueue_task(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        project_root: &str,
+        options: &TaskCreationOptions,
+    ) -> StoreResult<Task> {
+        let scope_display = if options.scope.is_empty() {
+            String::new()
+        } else {
+            options.scope.join(", ")
+        };
+        self.create_task_with_options(title, description, requested_by, project_root, options)
+            .map_err(|err| {
+                if is_unique_constraint_error(&err) && !scope_display.is_empty() {
+                    StoreError::DuplicateQueuedTask {
+                        scope: scope_display.clone(),
+                    }
+                } else {
+                    err
+                }
+            })
     }
 
     /// Creates a new task and links it as a child of an existing parent task.
@@ -191,6 +231,7 @@ impl Store {
             r"
             SELECT task_id, title, description, requested_by, project_root, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
@@ -782,6 +823,7 @@ impl Store {
         let select = r"
             SELECT task_id, title, description, requested_by, project_root, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
@@ -955,6 +997,88 @@ impl Store {
         })
     }
 
+    /// Atomically claim a task while enforcing a per-agent concurrency cap.
+    ///
+    /// If the agent already has `concurrency_cap` or more active (non-terminal)
+    /// tasks, the claim is refused with [`StoreError::ConcurrencyCapReached`]
+    /// instead of panicking or silently over-assigning.
+    ///
+    /// The cap and the claim transition happen inside a single `BEGIN IMMEDIATE`
+    /// transaction, so two racing callers cannot both bypass the cap.
+    ///
+    /// Returns the newly claimed task when successful, or `None` when the task
+    /// is already owned by another agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ConcurrencyCapReached`] when the agent is at or
+    /// over its cap. Returns other [`StoreError`] variants on database failures.
+    pub fn atomic_claim_task_with_cap(
+        &self,
+        agent_id: &str,
+        task_id: &str,
+        concurrency_cap: i64,
+    ) -> StoreResult<Option<Task>> {
+        self.in_transaction(|conn| {
+            // Count active (non-terminal) tasks already claimed by this agent.
+            let claimed: i64 = conn.query_row(
+                r"
+                SELECT COUNT(*)
+                FROM tasks
+                WHERE owner_agent_id = ?1
+                  AND status NOT IN ('completed', 'closed', 'cancelled')
+                ",
+                params![agent_id],
+                |row| row.get(0),
+            )?;
+
+            if claimed >= concurrency_cap {
+                return Err(StoreError::ConcurrencyCapReached {
+                    agent_id: agent_id.to_string(),
+                    claimed,
+                    cap: concurrency_cap,
+                });
+            }
+
+            let now = Utc::now().to_rfc3339();
+            let rows_affected = conn.execute(
+                r"
+                UPDATE tasks
+                SET status = 'assigned',
+                    owner_agent_id = ?1,
+                    updated_at = ?2
+                WHERE task_id = ?3
+                  AND status = 'open'
+                  AND owner_agent_id IS NULL
+                ",
+                params![agent_id, now, task_id],
+            )?;
+
+            if rows_affected > 0 {
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::StatusChanged,
+                        actor: agent_id,
+                        from_status: Some(TaskStatus::Open),
+                        to_status: TaskStatus::Assigned,
+                        verification_state: None,
+                        owner_agent_id: Some(agent_id),
+                        execution_action: None,
+                        execution_duration_seconds: None,
+                        note: Some("claimed via atomic_claim_task_with_cap"),
+                    },
+                )?;
+                sync_task_workflow_in_connection(conn, task_id)?;
+                let task = get_task_in_connection(conn, task_id)?;
+                Ok(Some(task))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
     /// Query tasks available for claiming, filtered by role/capabilities.
     ///
     /// # Errors
@@ -971,6 +1095,7 @@ impl Store {
             r"
             SELECT task_id, title, description, requested_by, project_root, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status,
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
@@ -1026,6 +1151,7 @@ impl Store {
             r"
             SELECT task_id, title, description, requested_by, project_root, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+                   workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status,
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
@@ -1098,5 +1224,18 @@ impl Store {
             .optional()?;
         exists.ok_or(StoreError::NotFound("task"))?;
         Ok(())
+    }
+}
+
+/// Returns `true` when `err` is a `SQLite` UNIQUE constraint violation.
+///
+/// Used by [`Store::enqueue_task`] to distinguish duplicate-scope rejections
+/// from unrelated database failures.
+fn is_unique_constraint_error(err: &StoreError) -> bool {
+    match err {
+        StoreError::Database(rusqlite::Error::SqliteFailure(failure, _)) => {
+            failure.code == ErrorCode::ConstraintViolation
+        }
+        _ => false,
     }
 }

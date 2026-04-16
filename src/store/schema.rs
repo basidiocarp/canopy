@@ -29,6 +29,8 @@ pub(crate) const BASE_SCHEMA: &str = r"
         worktree_binding_id TEXT NULL,
         execution_session_ref TEXT NULL,
         review_cycle_id TEXT NULL,
+        workflow_id TEXT NULL,
+        phase_id TEXT NULL,
         required_role TEXT NULL,
         required_capabilities TEXT NOT NULL DEFAULT '[]',
         auto_review INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +113,9 @@ pub(crate) const BASE_SCHEMA: &str = r"
         handoff_type TEXT NOT NULL,
         summary TEXT NOT NULL,
         requested_action TEXT NULL,
+        goal TEXT NULL,
+        next_steps TEXT NULL,
+        stop_reason TEXT NULL,
         due_at TEXT NULL,
         expires_at TEXT NULL,
         status TEXT NOT NULL,
@@ -188,6 +193,13 @@ pub(crate) const BASE_SCHEMA: &str = r"
     ON task_relationships(source_task_id)
     WHERE kind = 'parent';
 
+    -- Prevent duplicate queued tasks for the same scope.
+    -- Only applies when scope is non-empty ('[]' means unscoped).
+    -- Completed, closed, and cancelled tasks for the same scope are not affected.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_queued_scope_dedup
+    ON tasks(scope)
+    WHERE status = 'open' AND scope != '[]';
+
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
@@ -214,6 +226,28 @@ pub(crate) const BASE_SCHEMA: &str = r"
         ON file_locks(agent_id) WHERE released_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_file_locks_task
         ON file_locks(task_id) WHERE released_at IS NULL;
+
+    -- Orchestration outcome learning loop (#141g).
+    -- Observational only: records what happened so policy review has a
+    -- truthful baseline. Does not auto-modify routing policy.
+    CREATE TABLE IF NOT EXISTS workflow_outcomes (
+        workflow_id          TEXT PRIMARY KEY,
+        template_id          TEXT NOT NULL,
+        handoff_path         TEXT NOT NULL,
+        terminal_status      TEXT NOT NULL,
+        failure_type         TEXT NULL,
+        attempt_count        INTEGER NOT NULL,
+        route_taken_json     TEXT NOT NULL,
+        confidence           REAL NULL,
+        root_cause_layer     TEXT NULL,
+        runtime_identity_json TEXT NULL,
+        started_at           TEXT NOT NULL,
+        completed_at         TEXT NOT NULL,
+        created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_outcomes_template_failure
+        ON workflow_outcomes(template_id, failure_type);
 ";
 
 #[allow(clippy::too_many_lines)]
@@ -400,6 +434,25 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
             ON file_locks(agent_id) WHERE released_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_file_locks_task
             ON file_locks(task_id) WHERE released_at IS NULL;
+        ",
+    )?;
+
+    // Workflow ledger alignment (141d) — explicit workflow/phase linkage on tasks
+    ensure_column(conn, "tasks", "workflow_id", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "phase_id", "TEXT NULL")?;
+
+    // Workflow ledger alignment (141d) — semantic handoff context
+    ensure_column(conn, "handoffs", "goal", "TEXT NULL")?;
+    ensure_column(conn, "handoffs", "next_steps", "TEXT NULL")?;
+    ensure_column(conn, "handoffs", "stop_reason", "TEXT NULL")?;
+
+    // Task duplicate prevention: partial unique index on scope for queued (open) tasks.
+    // concurrency cap enforcement: no schema column needed — enforced at claim time.
+    conn.execute_batch(
+        r"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_queued_scope_dedup
+        ON tasks(scope)
+        WHERE status = 'open' AND scope != '[]';
         ",
     )?;
 

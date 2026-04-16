@@ -8,12 +8,13 @@ mod handoffs;
 mod helpers;
 mod operator_actions;
 mod orchestration;
+mod outcomes;
 mod relationships;
 mod schema;
 mod tasks;
 mod traits;
 
-pub use traits::{CanopyStore, OrchestrationStore, TaskGetStore, TaskLookupStore};
+pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
@@ -32,6 +33,50 @@ pub(crate) const EVIDENCE_REF_SCHEMA_VERSION: &str = "1.0";
 pub const CLAIM_STALE_THRESHOLD_SECS: i64 = 300;
 pub const HEARTBEAT_AGING_THRESHOLD_SECS: i64 = 15 * 60;
 pub const HEARTBEAT_STALE_THRESHOLD_SECS: i64 = 60 * 60;
+
+/// Enforce capability requirements for an assign or claim operation.
+///
+/// Loads the task and the agent from the store and checks that the agent has
+/// all capabilities the task requires. Returns `Ok(())` when the task has no
+/// requirements or the agent satisfies them. Returns `Err` with a human-readable
+/// message on mismatch or when the agent record is missing.
+///
+/// # Errors
+///
+/// Returns an error when the task or agent lookup fails, or when the agent
+/// does not meet the task's capability requirements.
+pub fn ensure_capabilities_match(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+    agent_id: &str,
+) -> StoreResult<()> {
+    let task = store.get_task(task_id)?;
+    if task.required_capabilities.is_empty() {
+        return Ok(());
+    }
+    let agent = store.get_agent(agent_id).map_err(|err| {
+        StoreError::Validation(format!(
+            "agent not found: {err} — register this agent before assigning tasks with capability requirements"
+        ))
+    })?;
+    let agent_caps = &agent.capabilities;
+    if !crate::models::capabilities_match(agent_caps, &task.required_capabilities) {
+        let missing: Vec<&str> = task
+            .required_capabilities
+            .iter()
+            .filter(|req| !agent_caps.iter().any(|cap| cap == *req))
+            .map(String::as_str)
+            .collect();
+        return Err(StoreError::Validation(format!(
+            "capability mismatch: task requires [{}] but agent has [{}]; \
+             missing: [{}] — register this agent with the required capabilities",
+            task.required_capabilities.join(", "),
+            agent_caps.join(", "),
+            missing.join(", "),
+        )));
+    }
+    Ok(())
+}
 
 /// Returns the age in seconds of an agent's last heartbeat.
 ///
@@ -110,6 +155,22 @@ pub enum StoreError {
     NotFound(&'static str),
     #[error("validation error: {0}")]
     Validation(String),
+    /// A queued task for the same scope already exists.
+    ///
+    /// Callers should treat this as an idempotent duplicate: look up the
+    /// existing queued task rather than creating a new one.
+    #[error("duplicate queued task for scope: {scope}")]
+    DuplicateQueuedTask {
+        /// The scope string that caused the conflict.
+        scope: String,
+    },
+    /// The agent has reached its concurrency cap and cannot claim another task.
+    #[error("concurrency cap reached for agent {agent_id}: {claimed}/{cap} tasks claimed")]
+    ConcurrencyCapReached {
+        agent_id: String,
+        claimed: i64,
+        cap: i64,
+    },
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -168,6 +229,8 @@ pub struct TaskCreationOptions {
     pub auto_review: bool,
     pub verification_required: bool,
     pub scope: Vec<String>,
+    pub workflow_id: Option<String>,
+    pub phase_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

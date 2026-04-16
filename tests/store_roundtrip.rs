@@ -6,8 +6,8 @@ use canopy::models::{
     TaskRelationshipRole, TaskStatus, VerificationState,
 };
 use canopy::store::{
-    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, TaskCreationOptions,
-    TaskDeadlineUpdate, TaskStatusUpdate,
+    EvidenceLinkRefs, HandoffOperatorActionInput, HandoffTiming, Store, StoreError,
+    TaskCreationOptions, TaskDeadlineUpdate, TaskStatusUpdate,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -2583,4 +2583,257 @@ fn task_deadline_updates_persist_and_record_history() {
             .as_deref()
             .is_some_and(|note| note.contains("review_due_at"))
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Task duplicate prevention tests
+// ---------------------------------------------------------------------------
+
+fn make_agent(id: &str) -> AgentRegistration {
+    AgentRegistration {
+        agent_id: id.to_string(),
+        host_id: format!("{id}-host"),
+        host_type: "codex".to_string(),
+        host_instance: "local".to_string(),
+        model: "test-model".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: format!("{id}-wt"),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    }
+}
+
+#[test]
+fn enqueue_task_with_scope_prevents_duplicate_queued_tasks() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let scope = vec!["canopy/src/store/tasks.rs".to_string()];
+    let opts = TaskCreationOptions {
+        scope: scope.clone(),
+        ..TaskCreationOptions::default()
+    };
+
+    // First enqueue succeeds.
+    let task = store
+        .enqueue_task("implement feature", None, "op", "/tmp/project", &opts)
+        .expect("first enqueue must succeed");
+    assert_eq!(task.scope, scope);
+    assert_eq!(task.status, TaskStatus::Open);
+
+    // Second enqueue with the same scope is rejected with a typed error.
+    let err = store
+        .enqueue_task("implement feature again", None, "op", "/tmp/project", &opts)
+        .expect_err("duplicate enqueue must fail");
+
+    match err {
+        StoreError::DuplicateQueuedTask { scope: ref s } => {
+            assert!(
+                s.contains("canopy/src/store/tasks.rs"),
+                "error should mention the conflicting scope, got: {s}"
+            );
+        }
+        other => panic!("expected DuplicateQueuedTask, got: {other}"),
+    }
+
+    // Only one queued task exists.
+    let open_tasks = store
+        .list_tasks_filtered(None, Some(&[TaskStatus::Open]), None)
+        .expect("list open tasks");
+    assert_eq!(open_tasks.len(), 1);
+    assert_eq!(open_tasks[0].task_id, task.task_id);
+}
+
+#[test]
+fn enqueue_task_duplicate_constraint_does_not_affect_closed_tasks_same_scope() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .register_agent(&make_agent("agent-1"))
+        .expect("register agent");
+
+    let scope = vec!["canopy/src/lib.rs".to_string()];
+    let opts = TaskCreationOptions {
+        scope: scope.clone(),
+        ..TaskCreationOptions::default()
+    };
+
+    // Enqueue, claim, complete — clears the open slot.
+    let task = store
+        .enqueue_task("first scoped task", None, "op", "/tmp/project", &opts)
+        .expect("first enqueue");
+    store
+        .atomic_claim_task("agent-1", &task.task_id)
+        .expect("claim task");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "agent-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start task");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "agent-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("complete task");
+
+    // Now enqueue a second task with the same scope — should succeed because
+    // the first task is no longer in 'open' status.
+    let second = store
+        .enqueue_task("second scoped task", None, "op", "/tmp/project", &opts)
+        .expect("second enqueue after completion must succeed");
+    assert_eq!(second.scope, scope);
+    assert_eq!(second.status, TaskStatus::Open);
+}
+
+#[test]
+fn enqueue_task_unscoped_allows_multiple_simultaneous_queued_tasks() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let opts = TaskCreationOptions::default(); // empty scope
+
+    // Multiple unscoped tasks can be queued concurrently — no constraint applies.
+    store
+        .enqueue_task("unscoped task 1", None, "op", "/tmp/project", &opts)
+        .expect("first unscoped enqueue");
+    store
+        .enqueue_task("unscoped task 2", None, "op", "/tmp/project", &opts)
+        .expect("second unscoped enqueue");
+    store
+        .enqueue_task("unscoped task 3", None, "op", "/tmp/project", &opts)
+        .expect("third unscoped enqueue");
+
+    let open_tasks = store
+        .list_tasks_filtered(None, Some(&[TaskStatus::Open]), None)
+        .expect("list open tasks");
+    assert_eq!(open_tasks.len(), 3);
+}
+
+#[test]
+fn atomic_claim_task_with_cap_enforces_concurrency_limit() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .register_agent(&make_agent("agent-cap"))
+        .expect("register agent");
+
+    // Create two tasks.
+    let task1 = store
+        .create_task("task one", None, "op", "/tmp/project", None)
+        .expect("create task 1");
+    let task2 = store
+        .create_task("task two", None, "op", "/tmp/project", None)
+        .expect("create task 2");
+
+    // Claim task1 under a cap of 1 — succeeds.
+    let claimed = store
+        .atomic_claim_task_with_cap("agent-cap", &task1.task_id, 1)
+        .expect("claim with cap");
+    assert!(claimed.is_some(), "first claim under cap must succeed");
+
+    // Claim task2 under the same cap of 1 — should fail gracefully.
+    let err = store
+        .atomic_claim_task_with_cap("agent-cap", &task2.task_id, 1)
+        .expect_err("second claim must be refused when cap is reached");
+
+    match err {
+        StoreError::ConcurrencyCapReached {
+            ref agent_id,
+            claimed,
+            cap,
+        } => {
+            assert_eq!(agent_id, "agent-cap");
+            assert_eq!(claimed, 1, "agent has 1 claimed task");
+            assert_eq!(cap, 1, "cap is 1");
+        }
+        other => panic!("expected ConcurrencyCapReached, got: {other}"),
+    }
+
+    // task2 is still unclaimed.
+    let t2 = store.get_task(&task2.task_id).expect("get task2");
+    assert_eq!(t2.status, TaskStatus::Open);
+    assert!(t2.owner_agent_id.is_none());
+}
+
+#[test]
+fn atomic_claim_task_with_cap_allows_claim_when_below_cap() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .register_agent(&make_agent("agent-multi"))
+        .expect("register agent");
+
+    let task1 = store
+        .create_task("task one", None, "op", "/tmp/project", None)
+        .expect("create task 1");
+    let task2 = store
+        .create_task("task two", None, "op", "/tmp/project", None)
+        .expect("create task 2");
+
+    // Cap of 2: both claims should succeed.
+    store
+        .atomic_claim_task_with_cap("agent-multi", &task1.task_id, 2)
+        .expect("first claim under cap 2");
+    store
+        .atomic_claim_task_with_cap("agent-multi", &task2.task_id, 2)
+        .expect("second claim under cap 2");
+
+    let tasks = store
+        .list_tasks_for_agent("agent-multi")
+        .expect("list tasks for agent");
+    assert_eq!(tasks.len(), 2);
+}
+
+#[test]
+fn two_simultaneous_claims_produce_exactly_one_successful_claim() {
+    // Simulates concurrent claim by running two claim operations sequentially
+    // in the same process. SQLite's BEGIN IMMEDIATE serialises them, so only
+    // one can win the UPDATE WHERE status='open'.
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .register_agent(&make_agent("agent-a"))
+        .expect("register agent-a");
+    store
+        .register_agent(&make_agent("agent-b"))
+        .expect("register agent-b");
+
+    let task = store
+        .create_task("contested task", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    let claim_a = store.atomic_claim_task("agent-a", &task.task_id);
+    let claim_b = store.atomic_claim_task("agent-b", &task.task_id);
+
+    let wins: usize = [claim_a, claim_b]
+        .into_iter()
+        .filter(|r| matches!(r, Ok(Some(_))))
+        .count();
+    assert_eq!(wins, 1, "exactly one agent should win the race");
+
+    let final_task = store.get_task(&task.task_id).expect("get task");
+    assert_eq!(
+        final_task.status,
+        TaskStatus::Assigned,
+        "task must be assigned"
+    );
+    assert!(
+        final_task.owner_agent_id.is_some(),
+        "task must have an owner"
+    );
 }

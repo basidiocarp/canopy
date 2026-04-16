@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
     CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
-    RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship, TaskStatus,
-    TaskSummary, TaskWorkflowContext,
+    OutcomeSummaryRow, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
+    TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -69,6 +69,14 @@ pub trait TaskMutationStore {
         project_root: &str,
         options: &TaskCreationOptions,
     ) -> StoreResult<Task>;
+    fn enqueue_task(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        project_root: &str,
+        options: &TaskCreationOptions,
+    ) -> StoreResult<Task>;
     fn create_subtask_with_options(
         &self,
         parent_task_id: &str,
@@ -98,6 +106,12 @@ pub trait TaskMutationStore {
         task_action: TaskAction<'_>,
     ) -> StoreResult<Task>;
     fn atomic_claim_task(&self, agent_id: &str, task_id: &str) -> StoreResult<Option<Task>>;
+    fn atomic_claim_task_with_cap(
+        &self,
+        agent_id: &str,
+        task_id: &str,
+        concurrency_cap: i64,
+    ) -> StoreResult<Option<Task>>;
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()>;
 }
 
@@ -144,6 +158,19 @@ pub trait HandoffStore {
         handoff_type: HandoffType,
         summary: &str,
         requested_action: Option<&str>,
+        timing: HandoffTiming<'_>,
+    ) -> StoreResult<Handoff>;
+    fn create_handoff_with_context(
+        &self,
+        task_id: &str,
+        from_agent_id: &str,
+        to_agent_id: &str,
+        handoff_type: HandoffType,
+        summary: &str,
+        requested_action: Option<&str>,
+        goal: Option<&str>,
+        next_steps: Option<&str>,
+        stop_reason: Option<&str>,
         timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff>;
     fn resolve_handoff(
@@ -256,6 +283,19 @@ pub trait HeartbeatStore {
     ) -> StoreResult<Vec<AgentHeartbeatEvent>>;
 }
 
+/// Store trait for orchestration outcome records (learning loop, #141g).
+///
+/// Observational only — these methods record and query outcomes; they do not
+/// modify routing policy.
+#[allow(clippy::missing_errors_doc)]
+pub trait OutcomeStore {
+    fn insert_workflow_outcome(&self, raw_json: &[u8]) -> StoreResult<WorkflowOutcomeRecord>;
+    fn get_workflow_outcome(&self, workflow_id: &str)
+    -> StoreResult<Option<WorkflowOutcomeRecord>>;
+    fn list_workflow_outcomes(&self) -> StoreResult<Vec<WorkflowOutcomeRecord>>;
+    fn outcome_summary_by_template_failure(&self) -> StoreResult<Vec<OutcomeSummaryRow>>;
+}
+
 pub trait CanopyStore:
     AgentStore
     + TaskGetStore
@@ -270,6 +310,7 @@ pub trait CanopyStore:
     + CouncilStore
     + OrchestrationStore
     + HeartbeatStore
+    + OutcomeStore
 {
 }
 
@@ -287,6 +328,7 @@ impl<T> CanopyStore for T where
         + CouncilStore
         + OrchestrationStore
         + HeartbeatStore
+        + OutcomeStore
 {
 }
 
@@ -394,6 +436,17 @@ impl TaskMutationStore for super::Store {
         self.create_task_with_options(title, description, requested_by, project_root, options)
     }
 
+    fn enqueue_task(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        requested_by: &str,
+        project_root: &str,
+        options: &TaskCreationOptions,
+    ) -> StoreResult<Task> {
+        self.enqueue_task(title, description, requested_by, project_root, options)
+    }
+
     fn create_subtask_with_options(
         &self,
         parent_task_id: &str,
@@ -436,6 +489,15 @@ impl TaskMutationStore for super::Store {
 
     fn atomic_claim_task(&self, agent_id: &str, task_id: &str) -> StoreResult<Option<Task>> {
         self.atomic_claim_task(agent_id, task_id)
+    }
+
+    fn atomic_claim_task_with_cap(
+        &self,
+        agent_id: &str,
+        task_id: &str,
+        concurrency_cap: i64,
+    ) -> StoreResult<Option<Task>> {
+        self.atomic_claim_task_with_cap(agent_id, task_id, concurrency_cap)
     }
 
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()> {
@@ -512,6 +574,33 @@ impl HandoffStore for super::Store {
             handoff_type,
             summary,
             requested_action,
+            timing,
+        )
+    }
+
+    fn create_handoff_with_context(
+        &self,
+        task_id: &str,
+        from_agent_id: &str,
+        to_agent_id: &str,
+        handoff_type: HandoffType,
+        summary: &str,
+        requested_action: Option<&str>,
+        goal: Option<&str>,
+        next_steps: Option<&str>,
+        stop_reason: Option<&str>,
+        timing: HandoffTiming<'_>,
+    ) -> StoreResult<Handoff> {
+        self.create_handoff_with_context(
+            task_id,
+            from_agent_id,
+            to_agent_id,
+            handoff_type,
+            summary,
+            requested_action,
+            goal,
+            next_steps,
+            stop_reason,
             timing,
         )
     }
@@ -684,5 +773,26 @@ impl HeartbeatStore for super::Store {
         limit: Option<i64>,
     ) -> StoreResult<Vec<AgentHeartbeatEvent>> {
         self.list_agent_heartbeats_for_project(project_root, limit)
+    }
+}
+
+impl OutcomeStore for super::Store {
+    fn insert_workflow_outcome(&self, raw_json: &[u8]) -> StoreResult<WorkflowOutcomeRecord> {
+        self.insert_workflow_outcome(raw_json)
+    }
+
+    fn get_workflow_outcome(
+        &self,
+        workflow_id: &str,
+    ) -> StoreResult<Option<WorkflowOutcomeRecord>> {
+        self.get_workflow_outcome(workflow_id)
+    }
+
+    fn list_workflow_outcomes(&self) -> StoreResult<Vec<WorkflowOutcomeRecord>> {
+        self.list_workflow_outcomes()
+    }
+
+    fn outcome_summary_by_template_failure(&self) -> StoreResult<Vec<OutcomeSummaryRow>> {
+        self.outcome_summary_by_template_failure()
     }
 }
