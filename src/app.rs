@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
     AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, FilesCommand,
-    HandoffCommand, TaskCommand,
+    HandoffCommand, OutcomeCommand, TaskCommand,
 };
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, EvidenceRef, EvidenceSourceKind,
@@ -133,6 +133,8 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             auto_review,
             verification_required,
             scope,
+            workflow_id,
+            phase_id,
         } => {
             let options = TaskCreationOptions {
                 required_role,
@@ -140,6 +142,8 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 auto_review,
                 verification_required,
                 scope,
+                workflow_id,
+                phase_id,
             };
             let task = if let Some(parent_task_id) = parent.as_deref() {
                 store.create_subtask_with_options(
@@ -166,6 +170,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             assigned_by,
             reason,
         } => {
+            canopy::store::ensure_capabilities_match(store, &task_id, &assigned_to)?;
             let task =
                 store.assign_task(&task_id, &assigned_to, &assigned_by, reason.as_deref())?;
             print_json(&task)?;
@@ -354,6 +359,9 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                     CLAIM_STALE_THRESHOLD_SECS,
                 )?;
             }
+
+            // Capability check before any mutations.
+            canopy::store::ensure_capabilities_match(store, &task_id, &agent_id)?;
 
             // Sequential mode: add BlockedBy relationship before claiming
             if let Some(ref blocker_id) = after {
@@ -906,16 +914,22 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
             handoff_type,
             summary,
             requested_action,
+            goal,
+            next_steps,
+            stop_reason,
             due_at,
             expires_at,
         } => {
-            let handoff = store.create_handoff(
+            let handoff = store.create_handoff_with_context(
                 &task_id,
                 &from_agent_id,
                 &to_agent_id,
                 handoff_type,
                 &summary,
                 requested_action.as_deref(),
+                goal.as_deref(),
+                next_steps.as_deref(),
+                stop_reason.as_deref(),
                 HandoffTiming {
                     due_at: due_at.as_deref(),
                     expires_at: expires_at.as_deref(),
@@ -1368,11 +1382,21 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::WorkQueue { .. } => "work_queue",
         Commands::Files { .. } => "files",
         Commands::Situation { .. } => "situation",
+        Commands::Outcome { .. } => "outcome",
         Commands::Serve { .. } => "serve",
     }
 }
 
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct CouncilSessionStatus {
+        council_session_id: String,
+        state: String,
+        participant_count: usize,
+        opened_at: String,
+        open_seconds: i64,
+    }
+
     match command {
         CouncilCommand::Summon {
             task_id,
@@ -1396,6 +1420,38 @@ fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> 
         CouncilCommand::Show { task_id } => {
             let messages = store.list_council_messages(&task_id)?;
             print_json(&messages)?;
+        }
+        CouncilCommand::Open { task } => {
+            let session = store.open_council_session(&task)?;
+            print_json(&session)?;
+        }
+        CouncilCommand::Close { session, outcome } => {
+            let closed = store.close_council_session(&session, outcome.as_deref())?;
+            print_json(&closed)?;
+        }
+        CouncilCommand::Status { task } => {
+            let sessions = store.get_open_council_sessions(&task)?;
+            let now = chrono::Utc::now();
+            let rows: Vec<CouncilSessionStatus> = sessions
+                .into_iter()
+                .map(|s| {
+                    let open_seconds = chrono::DateTime::parse_from_rfc3339(&s.created_at)
+                        .map(|ts| (now - ts.with_timezone(&chrono::Utc)).num_seconds())
+                        .unwrap_or(0);
+                    CouncilSessionStatus {
+                        council_session_id: s.council_session_id,
+                        state: s.state.to_string(),
+                        participant_count: s.participants.len(),
+                        opened_at: s.created_at,
+                        open_seconds,
+                    }
+                })
+                .collect();
+            print_json(&rows)?;
+        }
+        CouncilCommand::Join { session, agent } => {
+            store.join_council_session(&session, &agent)?;
+            println!("{{\"ok\":true}}");
         }
     }
 
@@ -1564,6 +1620,46 @@ fn handle_situation(
         );
     }
 
+    Ok(())
+}
+
+/// Handle `canopy outcome <subcommand>`.
+///
+/// All subcommands are observational — they record and query orchestration
+/// outcomes without modifying routing policy.
+fn handle_outcome_command(store: &Store, command: OutcomeCommand) -> Result<()> {
+    match command {
+        OutcomeCommand::Record { path } => {
+            let raw: Vec<u8> = if path == "-" {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                std::io::stdin()
+                    .read_to_end(&mut buf)
+                    .context("reading outcome JSON from stdin")?;
+                buf
+            } else {
+                fs::read(&path).with_context(|| format!("reading outcome JSON from {path}"))?
+            };
+            let record = store
+                .insert_workflow_outcome(&raw)
+                .with_context(|| "storing workflow outcome")?;
+            print_json(&record)?;
+        }
+        OutcomeCommand::List => {
+            let records = store.list_workflow_outcomes()?;
+            print_json(&records)?;
+        }
+        OutcomeCommand::Show { workflow_id } => {
+            let record = store
+                .get_workflow_outcome(&workflow_id)?
+                .ok_or_else(|| anyhow::anyhow!("outcome not found: {workflow_id}"))?;
+            print_json(&record)?;
+        }
+        OutcomeCommand::Summary => {
+            let rows = store.outcome_summary_by_template_failure()?;
+            print_json(&rows)?;
+        }
+    }
     Ok(())
 }
 

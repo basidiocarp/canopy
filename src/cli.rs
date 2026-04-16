@@ -70,6 +70,10 @@ pub enum Commands {
         #[arg(long)]
         project_root: Option<String>,
     },
+    Outcome {
+        #[command(subcommand)]
+        command: OutcomeCommand,
+    },
     Serve {
         /// Stable identifier for this agent (e.g. claude-implementer-1)
         #[arg(long, required = true)]
@@ -139,6 +143,15 @@ pub enum HandoffCommand {
         summary: String,
         #[arg(long)]
         requested_action: Option<String>,
+        /// High-level goal this handoff is working toward
+        #[arg(long)]
+        goal: Option<String>,
+        /// Concrete next steps for the receiving agent
+        #[arg(long)]
+        next_steps: Option<String>,
+        /// Why the current agent is stopping (e.g. completed, blocked, `needs_review`)
+        #[arg(long)]
+        stop_reason: Option<String>,
         #[arg(long)]
         due_at: Option<String>,
         #[arg(long)]
@@ -197,6 +210,12 @@ pub enum TaskCommand {
         /// Comma-separated file paths or globs this task will modify
         #[arg(long, value_delimiter = ',')]
         scope: Vec<String>,
+        /// Workflow instance this task belongs to
+        #[arg(long)]
+        workflow_id: Option<String>,
+        /// Workflow phase this task is currently in
+        #[arg(long)]
+        phase_id: Option<String>,
     },
     Assign {
         #[arg(long)]
@@ -394,6 +413,30 @@ pub enum CouncilCommand {
         #[arg(long)]
         task_id: String,
     },
+    /// Open a new council session for the given task.
+    Open {
+        #[arg(long)]
+        task: String,
+    },
+    /// Close an open council session, recording an optional outcome.
+    Close {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        outcome: Option<String>,
+    },
+    /// List open sessions for a task with participant count and time open.
+    Status {
+        #[arg(long)]
+        task: String,
+    },
+    /// Add an agent as a participant in a council session.
+    Join {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        agent: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -486,4 +529,29 @@ pub enum FilesCommand {
         #[arg(long)]
         project_root: Option<String>,
     },
+}
+
+/// Subcommands for `canopy outcome`.
+///
+/// All commands are observational — they record and query orchestration outcomes
+/// without modifying routing policy.
+#[derive(Debug, clap::Subcommand)]
+pub enum OutcomeCommand {
+    /// Parse and store a `workflow-outcome-v1` JSON payload.
+    ///
+    /// Pass a path to a JSON file or `-` to read from stdin.
+    Record {
+        /// Path to a JSON file, or `-` to read from stdin.
+        #[arg(value_name = "PATH_OR_DASH")]
+        path: String,
+    },
+    /// List all stored outcomes, most recent first.
+    List,
+    /// Show a single outcome by `workflow_id`.
+    Show {
+        #[arg(value_name = "WORKFLOW_ID")]
+        workflow_id: String,
+    },
+    /// Print outcome counts grouped by template, failure type, and last phase.
+    Summary,
 }

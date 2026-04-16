@@ -393,6 +393,10 @@ pub enum CouncilParticipantStatus {
 #[value(rename_all = "snake_case")]
 pub enum CouncilSessionState {
     Open,
+    /// At least one message has been posted to the session.
+    Deliberating,
+    /// A decision message has been posted.
+    Decided,
     Closed,
 }
 
@@ -774,6 +778,7 @@ pub enum TaskRelationshipKind {
     FollowUp,
     Blocks,
     Parent,
+    DependsOn,
 }
 
 #[derive(
@@ -789,6 +794,8 @@ pub enum TaskRelationshipRole {
     BlockedBy,
     Parent,
     Child,
+    DependsOn,
+    DependencyOf,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
@@ -849,6 +856,8 @@ pub struct Task {
     pub worktree_binding_id: Option<String>,
     pub execution_session_ref: Option<String>,
     pub review_cycle_id: Option<String>,
+    pub workflow_id: Option<String>,
+    pub phase_id: Option<String>,
     pub required_role: Option<AgentRole>,
     pub required_capabilities: Vec<String>,
     pub auto_review: bool,
@@ -920,6 +929,8 @@ pub struct TaskReviewCycleRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskWorkflowContext {
     pub task_id: String,
+    pub workflow_id: Option<String>,
+    pub phase_id: Option<String>,
     pub queue_state: Option<TaskQueueStateRecord>,
     pub worktree_binding: Option<TaskWorktreeBindingRecord>,
     pub review_cycle: Option<TaskReviewCycleRecord>,
@@ -963,6 +974,9 @@ pub struct Handoff {
     pub handoff_type: HandoffType,
     pub summary: String,
     pub requested_action: Option<String>,
+    pub goal: Option<String>,
+    pub next_steps: Option<String>,
+    pub stop_reason: Option<String>,
     pub due_at: Option<String>,
     pub expires_at: Option<String>,
     pub status: HandoffStatus,
@@ -1416,6 +1430,52 @@ pub struct SituationResult {
     pub file_locks: Vec<FileLock>,
     pub workflow: Vec<TaskWorkflowContext>,
     pub open_handoffs_count: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Workflow outcome learning loop (#141g)
+// ---------------------------------------------------------------------------
+
+/// A parsed orchestration outcome record stored in Canopy's ledger.
+///
+/// Mirrors the `workflow-outcome-v1` septa contract. Fields are parsed at the
+/// boundary from the raw JSON blob — downstream code works with typed values.
+///
+/// This surface is **observational only**: it records what happened so policy
+/// review has a truthful baseline. It does not auto-modify routing policy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowOutcomeRecord {
+    pub workflow_id: String,
+    pub template_id: String,
+    pub handoff_path: String,
+    pub terminal_status: String,
+    pub failure_type: Option<String>,
+    pub attempt_count: i64,
+    /// JSON representation of the route taken (array of phase-role-status objects).
+    pub route_taken_json: String,
+    pub confidence: Option<f64>,
+    pub root_cause_layer: Option<String>,
+    /// JSON representation of the runtime identity context, when present.
+    pub runtime_identity_json: Option<String>,
+    pub started_at: String,
+    pub completed_at: String,
+    /// When this record was stored in Canopy.
+    pub created_at: String,
+}
+
+/// One row in the outcome summary, grouped by template, failure type, and
+/// the tail phase of the route taken.
+///
+/// This surface is **observational**: counts here describe what happened,
+/// not what routing policy to apply next.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutcomeSummaryRow {
+    pub template_id: String,
+    pub failure_type: Option<String>,
+    /// The `phase_id` of the last element in `route_taken`, or an empty
+    /// string when the route was empty.
+    pub last_phase: String,
+    pub count: i64,
 }
 
 #[cfg(test)]

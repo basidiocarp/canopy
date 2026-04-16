@@ -251,6 +251,14 @@ pub trait CouncilStore {
         changed_by: &str,
         transcript_ref: Option<&str>,
     ) -> StoreResult<CouncilSession>;
+    fn open_council_session(&self, task_id: &str) -> StoreResult<CouncilSession>;
+    fn close_council_session(
+        &self,
+        session_id: &str,
+        outcome: Option<&str>,
+    ) -> StoreResult<CouncilSession>;
+    fn join_council_session(&self, session_id: &str, agent_id: &str) -> StoreResult<()>;
+    fn get_open_council_sessions(&self, task_id: &str) -> StoreResult<Vec<CouncilSession>>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -729,6 +737,26 @@ impl CouncilStore for super::Store {
         transcript_ref: Option<&str>,
     ) -> StoreResult<CouncilSession> {
         self.summon_task_council(task_id, changed_by, transcript_ref)
+    }
+
+    fn open_council_session(&self, task_id: &str) -> StoreResult<CouncilSession> {
+        self.open_council_session(task_id)
+    }
+
+    fn close_council_session(
+        &self,
+        session_id: &str,
+        outcome: Option<&str>,
+    ) -> StoreResult<CouncilSession> {
+        self.close_council_session(session_id, outcome)
+    }
+
+    fn join_council_session(&self, session_id: &str, agent_id: &str) -> StoreResult<()> {
+        self.join_council_session(session_id, agent_id)
+    }
+
+    fn get_open_council_sessions(&self, task_id: &str) -> StoreResult<Vec<CouncilSession>> {
+        self.get_open_council_sessions(task_id)
     }
 }
 

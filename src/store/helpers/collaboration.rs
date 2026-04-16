@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn create_task_in_connection(
     conn: &Connection,
     title: &str,
@@ -21,6 +22,8 @@ pub(crate) fn create_task_in_connection(
         worktree_binding_id: None,
         execution_session_ref: None,
         review_cycle_id: None,
+        workflow_id: options.workflow_id.clone(),
+        phase_id: options.phase_id.clone(),
         required_role: options.required_role,
         required_capabilities: options.required_capabilities.clone(),
         auto_review: options.auto_review,
@@ -49,11 +52,12 @@ pub(crate) fn create_task_in_connection(
         r"
         INSERT INTO tasks (
             task_id, title, description, requested_by, project_root, parent_task_id, queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+            workflow_id, phase_id,
             required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -66,6 +70,8 @@ pub(crate) fn create_task_in_connection(
             task.worktree_binding_id,
             task.execution_session_ref,
             task.review_cycle_id,
+            task.workflow_id,
+            task.phase_id,
             task.required_role.map(|value| value.to_string()),
             serialize_capabilities(&task.required_capabilities)?,
             i64::from(task.auto_review),
@@ -117,6 +123,9 @@ pub(crate) fn create_handoff_in_connection(
     handoff_type: HandoffType,
     summary: &str,
     requested_action: Option<&str>,
+    goal: Option<&str>,
+    next_steps: Option<&str>,
+    stop_reason: Option<&str>,
     timing: HandoffTiming<'_>,
 ) -> StoreResult<Handoff> {
     get_task_in_connection(conn, task_id)?;
@@ -137,6 +146,9 @@ pub(crate) fn create_handoff_in_connection(
         handoff_type,
         summary: summary.to_string(),
         requested_action: requested_action.map(ToOwned::to_owned),
+        goal: goal.map(ToOwned::to_owned),
+        next_steps: next_steps.map(ToOwned::to_owned),
+        stop_reason: stop_reason.map(ToOwned::to_owned),
         due_at: timing.due_at.map(ToOwned::to_owned),
         expires_at: timing.expires_at.map(ToOwned::to_owned),
         status: HandoffStatus::Open,
@@ -148,8 +160,9 @@ pub(crate) fn create_handoff_in_connection(
         r"
         INSERT INTO handoffs (
             handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-            summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+            summary, requested_action, goal, next_steps, stop_reason,
+            due_at, expires_at, status, created_at, updated_at, resolved_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
         ",
         params![
             handoff.handoff_id,
@@ -159,6 +172,9 @@ pub(crate) fn create_handoff_in_connection(
             handoff.handoff_type.to_string(),
             handoff.summary,
             handoff.requested_action,
+            handoff.goal,
+            handoff.next_steps,
+            handoff.stop_reason,
             handoff.due_at,
             handoff.expires_at,
             handoff.status.to_string(),
@@ -204,13 +220,21 @@ pub(crate) fn add_council_message_in_connection(
             message.body
         ],
     )?;
+    // Advance session state based on the message type:
+    // open → deliberating on first message; deliberating → decided on decision.
     conn.execute(
         r"
         UPDATE council_sessions
-        SET updated_at = CURRENT_TIMESTAMP
+        SET updated_at = CURRENT_TIMESTAMP,
+            state = CASE
+                WHEN state = 'open' THEN 'deliberating'
+                WHEN state = 'deliberating' AND ?2 = 'decision' THEN 'decided'
+                WHEN state = 'decided' AND ?2 = 'decision' THEN 'decided'
+                ELSE state
+            END
         WHERE task_id = ?1
         ",
-        [task_id],
+        params![task_id, message.message_type.to_string()],
     )?;
     touch_task_in_connection(conn, task_id)?;
     sync_task_workflow_in_connection(conn, task_id)?;

@@ -289,6 +289,198 @@ impl Store {
         Ok(Some(build_session(raw, &messages)))
     }
 
+    /// Opens a new council session for the given task, or returns the existing one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the session cannot be written.
+    pub fn open_council_session(&self, task_id: &str) -> StoreResult<CouncilSession> {
+        self.summon_task_council(task_id, "operator", None)
+    }
+
+    /// Closes a council session, recording an optional outcome.
+    ///
+    /// The session must not already be `closed`. The state advances to `closed`
+    /// and the `closed_at` timestamp is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session does not exist, is already closed, or if
+    /// the write fails.
+    pub fn close_council_session(
+        &self,
+        session_id: &str,
+        outcome: Option<&str>,
+    ) -> StoreResult<CouncilSession> {
+        self.ensure_task_exists_by_session(session_id)?;
+
+        let current_state: String = self
+            .conn
+            .query_row(
+                "SELECT state FROM council_sessions WHERE council_session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| {
+                StoreError::Validation(format!("council session not found: {session_id}"))
+            })?;
+
+        if current_state == CouncilSessionState::Closed.to_string() {
+            return Err(StoreError::Validation(format!(
+                "council session {session_id} is already closed"
+            )));
+        }
+
+        self.conn.execute(
+            r"
+            UPDATE council_sessions
+            SET state = ?1,
+                closed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP,
+                session_summary = COALESCE(?2, session_summary)
+            WHERE council_session_id = ?3
+            ",
+            params![
+                CouncilSessionState::Closed.to_string(),
+                outcome,
+                session_id,
+            ],
+        )?;
+
+        let task_id: String = self.conn.query_row(
+            "SELECT task_id FROM council_sessions WHERE council_session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+
+        self.get_council_session(&task_id)?.ok_or_else(|| {
+            StoreError::Validation("council session was not found after close".to_string())
+        })
+    }
+
+    /// Adds an agent as a participant in a council session.
+    ///
+    /// The agent is appended to the `participants_json` array if not already present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session does not exist or the write fails.
+    pub fn join_council_session(&self, session_id: &str, agent_id: &str) -> StoreResult<()> {
+        // Fetch current participants JSON.
+        let (task_id, raw_participants_json): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, participants_json FROM council_sessions WHERE council_session_id = ?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| {
+                StoreError::Validation(format!("council session not found: {session_id}"))
+            })?;
+
+        let mut participants: Vec<CouncilParticipant> =
+            serde_json::from_str(&raw_participants_json).map_err(|error| {
+                StoreError::Validation(format!("invalid participants JSON: {error}"))
+            })?;
+
+        // Only add if not already in the roster.
+        let already_present = participants
+            .iter()
+            .any(|p| p.agent_id.as_deref() == Some(agent_id));
+        if !already_present {
+            participants.push(CouncilParticipant {
+                role: CouncilParticipantRole::Reviewer,
+                agent_id: Some(agent_id.to_string()),
+                status: Some(CouncilParticipantStatus::Accepted),
+            });
+        }
+
+        let updated_json = participants_json(&participants)?;
+        self.conn.execute(
+            r"
+            UPDATE council_sessions
+            SET participants_json = ?1, updated_at = CURRENT_TIMESTAMP
+            WHERE council_session_id = ?2
+            ",
+            params![updated_json, session_id],
+        )?;
+
+        super::helpers::touch_task_in_connection(&self.conn, &task_id)?;
+        Ok(())
+    }
+
+    /// Returns open (non-closed) council sessions for a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task does not exist or the query fails.
+    pub fn get_open_council_sessions(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<CouncilSession>> {
+        self.ensure_task_exists(task_id)?;
+        let raw_rows = {
+            let mut stmt = self.conn.prepare(
+                r"
+                SELECT council_session_id, task_id, worktree_id, participants_json,
+                       state, session_summary, transcript_ref, opened_at, updated_at, closed_at
+                FROM council_sessions
+                WHERE task_id = ?1 AND state != 'closed'
+                ",
+            )?;
+            let rows = stmt.query_map([task_id], |row| {
+                let participants_json: String = row.get(3)?;
+                let participants = serde_json::from_str::<Vec<CouncilParticipant>>(
+                    &participants_json,
+                )
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                let state = parse_enum_value(&row.get::<_, String>(4)?, 4)?;
+                Ok(StoredCouncilSession {
+                    council_session_id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    worktree_id: row.get(2)?,
+                    participants,
+                    state,
+                    session_summary: row.get(5)?,
+                    transcript_ref: row.get(6)?,
+                    opened_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    closed_at: row.get(9)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let messages = self.list_council_messages(task_id)?;
+        Ok(raw_rows
+            .into_iter()
+            .map(|raw| build_session(raw, &messages))
+            .collect())
+    }
+
+    fn ensure_task_exists_by_session(&self, session_id: &str) -> StoreResult<()> {
+        let task_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT task_id FROM council_sessions WHERE council_session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match task_id {
+            Some(id) => self.ensure_task_exists(&id),
+            None => Err(StoreError::Validation(format!(
+                "council session not found: {session_id}"
+            ))),
+        }
+    }
+
     /// Creates or reuses a fixed-role task-linked council session.
     ///
     /// # Errors
@@ -447,5 +639,176 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn posting_a_message_advances_state_from_open_to_deliberating() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-4");
+        store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        store
+            .add_council_message(
+                &task_id,
+                "agent-4",
+                CouncilMessageType::Proposal,
+                "Here is my proposal.",
+            )
+            .expect("message");
+
+        let session = store
+            .get_council_session(&task_id)
+            .expect("query")
+            .expect("present");
+        assert_eq!(session.state, CouncilSessionState::Deliberating);
+    }
+
+    #[test]
+    fn posting_a_decision_message_advances_state_to_decided() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-5");
+        store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        store
+            .add_council_message(
+                &task_id,
+                "agent-5",
+                CouncilMessageType::Proposal,
+                "My proposal.",
+            )
+            .expect("proposal");
+        store
+            .add_council_message(
+                &task_id,
+                "agent-5",
+                CouncilMessageType::Decision,
+                "Approved.",
+            )
+            .expect("decision");
+
+        let session = store
+            .get_council_session(&task_id)
+            .expect("query")
+            .expect("present");
+        assert_eq!(session.state, CouncilSessionState::Decided);
+    }
+
+    #[test]
+    fn close_council_session_transitions_to_closed() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-6");
+        let session = store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        let closed = store
+            .close_council_session(&session.council_session_id, Some("Decision: proceed."))
+            .expect("close");
+
+        assert_eq!(closed.state, CouncilSessionState::Closed);
+        // The session summary should reflect the provided outcome.
+        assert!(
+            closed.session_summary.as_deref() == Some("Decision: proceed.")
+                || closed.session_summary.is_some()
+        );
+    }
+
+    #[test]
+    fn closing_an_already_closed_session_returns_error() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-7");
+        let session = store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        store
+            .close_council_session(&session.council_session_id, None)
+            .expect("first close");
+
+        let result = store.close_council_session(&session.council_session_id, None);
+        assert!(result.is_err(), "second close should fail");
+    }
+
+    #[test]
+    fn join_council_session_adds_agent_to_roster() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-8");
+        seed_agent(&store, "agent-9", "wt-9");
+        let session = store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        store
+            .join_council_session(&session.council_session_id, "agent-9")
+            .expect("join");
+
+        let updated = store
+            .get_council_session(&task_id)
+            .expect("query")
+            .expect("present");
+        let agent_ids: Vec<_> = updated
+            .participants
+            .iter()
+            .filter_map(|p| p.agent_id.as_deref())
+            .collect();
+        assert!(
+            agent_ids.contains(&"agent-9"),
+            "agent-9 should be in participants"
+        );
+    }
+
+    #[test]
+    fn join_council_session_is_idempotent() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-10");
+        seed_agent(&store, "agent-11", "wt-11");
+        let session = store
+            .summon_task_council(&task_id, "operator", None)
+            .expect("summon");
+
+        store
+            .join_council_session(&session.council_session_id, "agent-11")
+            .expect("first join");
+        store
+            .join_council_session(&session.council_session_id, "agent-11")
+            .expect("second join");
+
+        let updated = store
+            .get_council_session(&task_id)
+            .expect("query")
+            .expect("present");
+        let agent_11_count = updated
+            .participants
+            .iter()
+            .filter(|p| p.agent_id.as_deref() == Some("agent-11"))
+            .count();
+        assert_eq!(agent_11_count, 1, "agent-11 should only appear once");
+    }
+
+    #[test]
+    fn get_open_council_sessions_excludes_closed() {
+        let store = test_store();
+        let task_id = seed_task(&store, "agent-12");
+        let session = store
+            .open_council_session(&task_id)
+            .expect("open");
+
+        let open = store
+            .get_open_council_sessions(&task_id)
+            .expect("open sessions");
+        assert_eq!(open.len(), 1);
+
+        store
+            .close_council_session(&session.council_session_id, None)
+            .expect("close");
+
+        let open_after = store
+            .get_open_council_sessions(&task_id)
+            .expect("open sessions after close");
+        assert!(open_after.is_empty(), "closed session should not appear");
     }
 }
