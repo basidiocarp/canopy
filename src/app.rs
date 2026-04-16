@@ -9,7 +9,7 @@ use canopy::cli::{
     HandoffCommand, OutcomeCommand, TaskCommand,
 };
 use canopy::models::{
-    AgentRegistration, AgentRole, AgentStatus, EvidenceRef, EvidenceSourceKind,
+    AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
     TaskAction, TaskRelationshipKind, TaskStatus, VerificationState,
 };
@@ -1387,6 +1387,90 @@ fn command_name(command: &Commands) -> &'static str {
     }
 }
 
+/// A serializable participant entry included in the `council_record` artifact.
+#[derive(Debug, Serialize)]
+struct ArtifactParticipant {
+    role: String,
+    agent_id: Option<String>,
+}
+
+/// Payload emitted to hyphae when a council session is closed.
+#[derive(Debug, Serialize)]
+struct CouncilRecordArtifact {
+    artifact_type: &'static str,
+    schema_version: &'static str,
+    council_session_id: String,
+    task_id: String,
+    participants: Vec<ArtifactParticipant>,
+    outcome: Option<String>,
+    message_count: usize,
+    opened_at: String,
+    closed_at: String,
+}
+
+/// Emits a `council_record` artifact to hyphae after a session is closed.
+///
+/// Failures are logged as warnings and do not propagate — the close-out flow
+/// must not be broken by an unavailable hyphae binary.
+fn emit_council_record_artifact(session: &CouncilSession) {
+    let participants: Vec<ArtifactParticipant> = session
+        .participants
+        .iter()
+        .map(|p| ArtifactParticipant {
+            role: p.role.to_string(),
+            agent_id: p.agent_id.clone(),
+        })
+        .collect();
+
+    let artifact = CouncilRecordArtifact {
+        artifact_type: "council_record",
+        schema_version: "1.0",
+        council_session_id: session.council_session_id.clone(),
+        task_id: session.task_id.clone(),
+        participants,
+        outcome: session.session_summary.clone(),
+        message_count: session.timeline.len(),
+        opened_at: session.created_at.clone(),
+        closed_at: session.updated_at.clone(),
+    };
+
+    let payload = match serde_json::to_string(&artifact) {
+        Ok(json) => json,
+        Err(error) => {
+            warn!("council_record artifact serialization failed: {error}");
+            return;
+        }
+    };
+
+    let topic = format!(
+        "artifact/council_record/{}",
+        session.council_session_id
+    );
+
+    let Some(info) = discover(Tool::Hyphae) else {
+        warn!("hyphae binary not found; skipping council_record artifact emission");
+        return;
+    };
+
+    let result = Command::new(&info.binary_path)
+        .args(["store", "--topic", &topic, "--content", &payload])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                "hyphae store for council_record artifact exited non-zero: {}",
+                stderr.trim()
+            );
+        }
+        Err(error) => {
+            warn!("failed to invoke hyphae for council_record artifact emission: {error}");
+        }
+    }
+}
+
 fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> {
     #[derive(serde::Serialize)]
     struct CouncilSessionStatus {
@@ -1427,6 +1511,7 @@ fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> 
         }
         CouncilCommand::Close { session, outcome } => {
             let closed = store.close_council_session(&session, outcome.as_deref())?;
+            emit_council_record_artifact(&closed);
             print_json(&closed)?;
         }
         CouncilCommand::Status { task } => {
@@ -1818,6 +1903,79 @@ Implement the second step.
             Some("Implement the first step.")
         );
         assert_eq!(steps[1].step_marker, "Step 2: Second");
+    }
+
+    #[test]
+    fn council_record_artifact_payload_is_well_formed() {
+        use canopy::models::{
+            CouncilParticipant, CouncilParticipantRole, CouncilParticipantStatus, CouncilSession,
+            CouncilSessionState,
+        };
+
+        let session = CouncilSession {
+            council_session_id: "cs-01JTEST".to_string(),
+            task_id: "task-01JTEST".to_string(),
+            worktree_id: None,
+            participants: vec![
+                CouncilParticipant {
+                    role: CouncilParticipantRole::Reviewer,
+                    agent_id: Some("agent-alpha".to_string()),
+                    status: Some(CouncilParticipantStatus::Summoned),
+                },
+                CouncilParticipant {
+                    role: CouncilParticipantRole::Architect,
+                    agent_id: None,
+                    status: Some(CouncilParticipantStatus::Summoned),
+                },
+            ],
+            session_summary: Some("Approved with minor notes.".to_string()),
+            state: CouncilSessionState::Closed,
+            timeline: vec![],
+            transcript_ref: None,
+            created_at: "2026-04-15T10:00:00Z".to_string(),
+            updated_at: "2026-04-15T11:00:00Z".to_string(),
+        };
+
+        // Build the artifact the same way emit_council_record_artifact does.
+        let participants: Vec<super::ArtifactParticipant> = session
+            .participants
+            .iter()
+            .map(|p| super::ArtifactParticipant {
+                role: p.role.to_string(),
+                agent_id: p.agent_id.clone(),
+            })
+            .collect();
+
+        let artifact = super::CouncilRecordArtifact {
+            artifact_type: "council_record",
+            schema_version: "1.0",
+            council_session_id: session.council_session_id.clone(),
+            task_id: session.task_id.clone(),
+            participants,
+            outcome: session.session_summary.clone(),
+            message_count: session.timeline.len(),
+            opened_at: session.created_at.clone(),
+            closed_at: session.updated_at.clone(),
+        };
+
+        let json = serde_json::to_string(&artifact).expect("artifact must serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+
+        assert_eq!(value["artifact_type"], "council_record");
+        assert_eq!(value["schema_version"], "1.0");
+        assert_eq!(value["council_session_id"], "cs-01JTEST");
+        assert_eq!(value["task_id"], "task-01JTEST");
+        assert_eq!(value["outcome"], "Approved with minor notes.");
+        assert_eq!(value["message_count"], 0);
+        assert_eq!(value["opened_at"], "2026-04-15T10:00:00Z");
+        assert_eq!(value["closed_at"], "2026-04-15T11:00:00Z");
+
+        let parts = value["participants"].as_array().expect("participants array");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["role"], "reviewer");
+        assert_eq!(parts[0]["agent_id"], "agent-alpha");
+        assert_eq!(parts[1]["role"], "architect");
+        assert!(parts[1]["agent_id"].is_null());
     }
 
     #[test]
