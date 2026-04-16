@@ -2792,10 +2792,10 @@ fn atomic_claim_task_with_cap_allows_claim_when_below_cap() {
         .atomic_claim_task_with_cap("agent-multi", &task2.task_id, 2)
         .expect("second claim under cap 2");
 
-    let tasks = store
+    let claimed_tasks = store
         .list_tasks_for_agent("agent-multi")
         .expect("list tasks for agent");
-    assert_eq!(tasks.len(), 2);
+    assert_eq!(claimed_tasks.len(), 2);
 }
 
 #[test]
