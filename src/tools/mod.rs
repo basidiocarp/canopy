@@ -10,6 +10,7 @@ pub mod policy;
 pub mod queue;
 pub mod scope;
 pub mod task;
+pub mod tool_adoption;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -172,6 +173,7 @@ pub fn dispatch_tool(
         "canopy_outcome_list" => outcomes::tool_outcome_list(store, agent_id, args),
         "canopy_outcome_show" => outcomes::tool_outcome_show(store, agent_id, args),
         "canopy_outcome_summary" => outcomes::tool_outcome_summary(store, agent_id, args),
+        "canopy_record_tool_usage" => tool_adoption::tool_record_tool_usage(store, agent_id, args),
         _ => ToolResult::error(format!("unknown tool: {name}")),
     }
 }

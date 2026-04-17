@@ -1044,6 +1044,28 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
     ));
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tool Adoption Scoring (1)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_record_tool_usage",
+        "Record a tool-usage-event-v1 JSON payload to compute and store tool adoption scores. Accepts either a 'json' string key containing the full payload or a 'json_object' key with the parsed object. Observational only — does not alter routing policy.",
+        json!({
+            "type": "object",
+            "properties": {
+                "json": {
+                    "type": "string",
+                    "description": "Raw tool-usage-event-v1 JSON string"
+                },
+                "json_object": {
+                    "type": "object",
+                    "description": "Parsed tool-usage-event-v1 object (alternative to json string)"
+                }
+            }
+        }),
+    ));
+
     tools
 }
 

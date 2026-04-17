@@ -4,7 +4,7 @@ use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
     CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
     OutcomeSummaryRow, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
-    TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord,
+    TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord, ToolAdoptionScore,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -304,6 +304,20 @@ pub trait OutcomeStore {
     fn outcome_summary_by_template_failure(&self) -> StoreResult<Vec<OutcomeSummaryRow>>;
 }
 
+/// Tool adoption scoring — records and queries tool usage events and adoption metrics.
+#[allow(clippy::missing_errors_doc)]
+pub trait ToolAdoptionStore {
+    fn record_tool_adoption_score(
+        &self,
+        task_id: &str,
+        score: &ToolAdoptionScore,
+    ) -> StoreResult<()>;
+    fn get_tool_adoption_score(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Option<ToolAdoptionScore>>;
+}
+
 pub trait CanopyStore:
     AgentStore
     + TaskGetStore
@@ -319,6 +333,7 @@ pub trait CanopyStore:
     + OrchestrationStore
     + HeartbeatStore
     + OutcomeStore
+    + ToolAdoptionStore
 {
 }
 
@@ -337,6 +352,7 @@ impl<T> CanopyStore for T where
         + OrchestrationStore
         + HeartbeatStore
         + OutcomeStore
+        + ToolAdoptionStore
 {
 }
 
@@ -822,5 +838,22 @@ impl OutcomeStore for super::Store {
 
     fn outcome_summary_by_template_failure(&self) -> StoreResult<Vec<OutcomeSummaryRow>> {
         self.outcome_summary_by_template_failure()
+    }
+}
+
+impl ToolAdoptionStore for super::Store {
+    fn record_tool_adoption_score(
+        &self,
+        task_id: &str,
+        score: &ToolAdoptionScore,
+    ) -> StoreResult<()> {
+        super::tool_usage::store_tool_adoption_score(&self.conn, task_id, score)
+    }
+
+    fn get_tool_adoption_score(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Option<ToolAdoptionScore>> {
+        super::tool_usage::load_tool_adoption_score(&self.conn, task_id)
     }
 }

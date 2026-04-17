@@ -436,6 +436,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     );
 
     let children_complete = relationship_summary.children_complete;
+    let tool_adoption_score = store.get_tool_adoption_score(task_id)?;
 
     Ok(TaskDetail {
         schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
@@ -465,7 +466,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         children_complete,
         children,
         parent_id: store.get_parent_id(task_id)?,
-        tool_adoption_score: None,
+        tool_adoption_score,
     })
 }
 

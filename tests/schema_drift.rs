@@ -87,6 +87,7 @@ fn test_dispatch_tools_are_in_schema() {
         "canopy_outcome_list",
         "canopy_outcome_show",
         "canopy_outcome_summary",
+        "canopy_record_tool_usage",
     ];
 
     let schema_tools = canopy::mcp::schema::tool_definitions();
@@ -112,7 +113,7 @@ fn test_dispatch_tools_are_in_schema() {
 fn test_tool_count_matches() {
     let schema_count = canopy::mcp::schema::tool_definitions().len();
     assert_eq!(
-        schema_count, 38,
-        "Expected 38 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
+        schema_count, 39,
+        "Expected 39 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
     );
 }
