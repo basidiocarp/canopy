@@ -40,6 +40,9 @@ pub(super) fn run(store: &Store, command: Commands) -> Result<()> {
         Commands::Notification { command } => {
             handle_notification_command(store, command)?;
         }
+        Commands::Policy { command } => {
+            handle_policy_command(&command)?;
+        }
     }
 
     Ok(())

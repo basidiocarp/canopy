@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+use crate::tools::policy::annotations_for_tool;
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn tool_definitions() -> Vec<Value> {
@@ -1047,9 +1049,15 @@ pub fn tool_definitions() -> Vec<Value> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn tool_def(name: &str, description: &str, input_schema: Value) -> Value {
+    let ann = annotations_for_tool(name);
     json!({
         "name": name,
         "description": description,
-        "inputSchema": input_schema
+        "inputSchema": input_schema,
+        "annotations": {
+            "readOnlyHint": ann.read_only_hint,
+            "destructiveHint": ann.destructive_hint,
+            "idempotentHint": ann.idempotent_hint
+        }
     })
 }

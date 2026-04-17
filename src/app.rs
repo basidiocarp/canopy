@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
     AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, FilesCommand,
-    HandoffCommand, NotificationCommand, OutcomeCommand, TaskCommand,
+    HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand, TaskCommand,
 };
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
@@ -1385,6 +1385,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Outcome { .. } => "outcome",
         Commands::Serve { .. } => "serve",
         Commands::Notification { .. } => "notification",
+        Commands::Policy { .. } => "policy",
     }
 }
 
@@ -1771,6 +1772,22 @@ fn handle_notification_command(store: &Store, command: NotificationCommand) -> R
         NotificationCommand::MarkAllRead => {
             let count = store.mark_all_notifications_seen()?;
             println!("Marked {} notification(s) as read.", count);
+            Ok(())
+        }
+    }
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn handle_policy_command(command: &PolicyCommand) -> Result<()> {
+    match command {
+        PolicyCommand::Show => {
+            use canopy::tools::policy::DispatchPolicy;
+            let desc = DispatchPolicy::Default.describe();
+            println!("Active dispatch policy: {}", desc.name);
+            println!();
+            println!("  readOnlyHint=true    → {}", desc.read_only);
+            println!("  destructiveHint=true → {}", desc.destructive);
+            println!("  (no hint)            → {}", desc.other);
             Ok(())
         }
     }

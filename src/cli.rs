@@ -89,6 +89,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: NotificationCommand,
     },
+    /// Show the active MCP dispatch policy — which tool annotation classes
+    /// are auto-allowed and which require operator confirmation.
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -575,4 +581,12 @@ pub enum NotificationCommand {
     },
     /// Mark all notifications as read.
     MarkAllRead,
+}
+
+/// Subcommands for `canopy policy`.
+#[derive(Debug, Subcommand)]
+pub enum PolicyCommand {
+    /// Print the active dispatch policy: which annotation classes are
+    /// auto-allowed and which require operator confirmation.
+    Show,
 }

@@ -6,6 +6,7 @@ pub mod handoff;
 pub mod identity;
 pub mod import;
 pub mod outcomes;
+pub mod policy;
 pub mod queue;
 pub mod scope;
 pub mod task;
@@ -13,6 +14,7 @@ pub mod task;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::runtime::DispatchDecision;
 use crate::store::CanopyStore;
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -109,6 +111,11 @@ pub fn get_string_array(args: &Value, key: &str) -> Vec<String> {
 }
 
 /// Dispatch a tool call to the appropriate handler.
+///
+/// Before routing to the handler, the active [`policy::DispatchPolicy`] is
+/// evaluated against the tool's annotations.  A [`DispatchDecision::FlagForReview`]
+/// result causes an error [`ToolResult`] to be returned immediately so the
+/// MCP server can surface the block to the operator.
 #[must_use]
 pub fn dispatch_tool(
     store: &(impl CanopyStore + ?Sized),
@@ -116,6 +123,14 @@ pub fn dispatch_tool(
     name: &str,
     args: &Value,
 ) -> ToolResult {
+    // Policy check: look up the tool's annotations and evaluate the active policy.
+    let annotations = policy::annotations_for_tool(name);
+    if let DispatchDecision::FlagForReview { reason } =
+        policy::DispatchPolicy::Default.evaluate(name, annotations)
+    {
+        return ToolResult::error(format!("policy blocked: {reason}"));
+    }
+
     match name {
         "canopy_register" => identity::tool_register(store, agent_id, args),
         "canopy_heartbeat" => identity::tool_heartbeat(store, agent_id, args),
