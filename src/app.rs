@@ -43,6 +43,11 @@ pub fn run() -> Result<()> {
             .with_output(LogOutput::Stderr)
             .with_span_events(SpanEvents::Lifecycle),
     );
+    let _telemetry = spore::telemetry::init_tracer("canopy")
+        .unwrap_or_else(|e| {
+            tracing::debug!("OTel init skipped: {}", e);
+            spore::telemetry::TelemetryInit::disabled("canopy")
+        });
     let span_context = command_span_context(&cli);
     let _root_span = root_span(&span_context).entered();
     let _workflow_span = workflow_span(command_name(&cli.command), &span_context).entered();
@@ -1766,12 +1771,12 @@ fn handle_notification_command(store: &Store, command: NotificationCommand) -> R
         }
         NotificationCommand::MarkRead { notification_id } => {
             store.mark_notification_seen(&notification_id)?;
-            println!("Marked {} as read.", notification_id);
+            println!("Marked {notification_id} as read.");
             Ok(())
         }
         NotificationCommand::MarkAllRead => {
             let count = store.mark_all_notifications_seen()?;
-            println!("Marked {} notification(s) as read.", count);
+            println!("Marked {count} notification(s) as read.");
             Ok(())
         }
     }

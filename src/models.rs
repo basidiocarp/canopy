@@ -1499,7 +1499,7 @@ pub enum NotificationEventType {
 
 impl std::fmt::Display for NotificationEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).unwrap_or_else(|_| format!("{:?}", self));
+        let s = serde_json::to_string(self).unwrap_or_else(|_| format!("{self:?}"));
         write!(f, "{}", s.trim_matches('"'))
     }
 }

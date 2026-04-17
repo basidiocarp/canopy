@@ -72,6 +72,7 @@ impl Store {
         stop_reason: Option<&str>,
         timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff> {
+        let _span = tracing::info_span!("canopy.handoff.transition").entered();
         self.in_transaction(|conn| {
             create_handoff_in_connection(
                 conn,
@@ -119,6 +120,7 @@ impl Store {
         changed_by: &str,
         acting_agent_id: Option<&str>,
     ) -> StoreResult<Handoff> {
+        let _span = tracing::info_span!("canopy.handoff.transition").entered();
         self.in_transaction(|conn| {
             let handoff = get_handoff_in_connection(conn, handoff_id)?;
             if handoff.status != HandoffStatus::Open {

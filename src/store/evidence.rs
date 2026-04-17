@@ -18,6 +18,7 @@ impl Store {
         summary: Option<&str>,
         links: EvidenceLinkRefs<'_>,
     ) -> StoreResult<EvidenceRef> {
+        let _span = tracing::info_span!("canopy.evidence.write").entered();
         self.in_transaction(|conn| {
             add_evidence_in_connection(
                 conn,

@@ -268,6 +268,7 @@ impl Store {
         changed_by: &str,
         update: TaskStatusUpdate<'_>,
     ) -> StoreResult<Task> {
+        let _span = tracing::info_span!("canopy.task.update_status").entered();
         self.ensure_task_exists(task_id)?;
         self.in_transaction(|conn| {
             let current = get_task_in_connection(conn, task_id)?;
