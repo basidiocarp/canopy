@@ -1373,7 +1373,7 @@ pub struct ApiSnapshot {
     pub workflow_contexts: Vec<TaskWorkflowContext>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskDetail {
     pub schema_version: String,
     pub attention: TaskAttention,
@@ -1402,6 +1402,8 @@ pub struct TaskDetail {
     pub children: Vec<TaskSummary>,
     pub children_complete: bool,
     pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_adoption_score: Option<ToolAdoptionScore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1507,9 +1509,109 @@ pub struct Notification {
     pub created_at: String,
 }
 
+/// Status of a single tool in the adoption analysis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolAdoptionStatus {
+    /// Tool was called during the session.
+    Used,
+    /// Tool was available but not relevant to the work performed.
+    AvailableUnused,
+    /// Tool was relevant to the work but was not called — a gap.
+    RelevantUnused,
+}
+
+/// Per-tool adoption breakdown entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolAdoptionDetail {
+    pub tool_name: String,
+    /// Which ecosystem component provides this tool (e.g., "hyphae", "rhizome").
+    pub source: String,
+    pub status: ToolAdoptionStatus,
+}
+
+/// Tool adoption score for a task session.
+///
+/// Score = tools_used / tools_relevant, or 1.0 when no tools were relevant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolAdoptionScore {
+    /// Adoption ratio: 0.0 to 1.0.
+    pub score: f32,
+    /// Count of ecosystem tools that were actually called.
+    pub tools_used: u32,
+    /// Count of tools deemed relevant to the work performed.
+    pub tools_relevant: u32,
+    /// Count of tools that were available in the session.
+    pub tools_available: u32,
+    /// Per-tool breakdown.
+    pub details: Vec<ToolAdoptionDetail>,
+}
+
+impl ToolAdoptionScore {
+    /// Compute a score from lists of used, relevant, and available tool names.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use canopy::models::{ToolAdoptionScore, ToolAdoptionDetail, ToolAdoptionStatus};
+    ///
+    /// let score = ToolAdoptionScore::compute(
+    ///     &[("rhizome_get_definition", "rhizome")],
+    ///     &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome")],
+    ///     &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome"), ("hyphae_memory_recall", "hyphae")],
+    /// );
+    /// assert!((score.score - 0.5).abs() < 0.01);
+    /// ```
+    pub fn compute(
+        used: &[(&str, &str)],
+        relevant: &[(&str, &str)],
+        available: &[(&str, &str)],
+    ) -> Self {
+        let tools_used = used.len() as u32;
+        let tools_relevant = relevant.len() as u32;
+        let tools_available = available.len() as u32;
+
+        let score = if tools_relevant == 0 {
+            1.0
+        } else {
+            let used_and_relevant = used
+                .iter()
+                .filter(|(name, _)| relevant.iter().any(|(rn, _)| rn == name))
+                .count();
+            used_and_relevant as f32 / tools_relevant as f32
+        };
+
+        let mut details = Vec::new();
+        for (name, source) in available {
+            let is_relevant = relevant.iter().any(|(rn, _)| rn == name);
+            let is_used = used.iter().any(|(un, _)| un == name);
+            let status = if is_used {
+                ToolAdoptionStatus::Used
+            } else if is_relevant {
+                ToolAdoptionStatus::RelevantUnused
+            } else {
+                ToolAdoptionStatus::AvailableUnused
+            };
+            details.push(ToolAdoptionDetail {
+                tool_name: name.to_string(),
+                source: source.to_string(),
+                status,
+            });
+        }
+
+        Self {
+            score,
+            tools_used,
+            tools_relevant,
+            tools_available,
+            details,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{capabilities_match, parse_capabilities};
+    use super::{capabilities_match, parse_capabilities, ToolAdoptionScore, ToolAdoptionStatus};
 
     #[test]
     fn parse_capabilities_reads_json_arrays_and_falls_back_to_empty() {
@@ -1540,5 +1642,34 @@ mod tests {
             &["rust".to_string()],
             &["Rust".to_string()]
         ));
+    }
+
+    #[test]
+    fn score_with_no_relevant_tools_is_perfect() {
+        let score = ToolAdoptionScore::compute(&[], &[], &[("hyphae_memory_recall", "hyphae")]);
+        assert!((score.score - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn score_computes_ratio_correctly() {
+        let score = ToolAdoptionScore::compute(
+            &[("rhizome_get_definition", "rhizome")],
+            &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome")],
+            &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome")],
+        );
+        assert!((score.score - 0.5).abs() < 0.001);
+        assert_eq!(score.tools_used, 1);
+        assert_eq!(score.tools_relevant, 2);
+    }
+
+    #[test]
+    fn relevant_unused_tool_is_a_gap() {
+        let score = ToolAdoptionScore::compute(
+            &[],
+            &[("rhizome_get_definition", "rhizome")],
+            &[("rhizome_get_definition", "rhizome")],
+        );
+        assert!((score.score - 0.0).abs() < 0.001);
+        assert_eq!(score.details[0].status, ToolAdoptionStatus::RelevantUnused);
     }
 }

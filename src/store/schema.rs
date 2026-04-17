@@ -261,6 +261,13 @@ pub(crate) const BASE_SCHEMA: &str = r"
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_task ON notifications(task_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_seen ON notifications(seen);
+
+    CREATE TABLE IF NOT EXISTS tool_adoption_scores (
+        task_id    TEXT NOT NULL PRIMARY KEY,
+        score_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+    );
 ";
 
 #[allow(clippy::too_many_lines)]
@@ -466,6 +473,18 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_queued_scope_dedup
         ON tasks(scope)
         WHERE status = 'open' AND scope != '[]';
+        ",
+    )?;
+
+    // Tool adoption scoring (#114c) — per-task tool usage analysis
+    conn.execute_batch(
+        r"
+        CREATE TABLE IF NOT EXISTS tool_adoption_scores (
+            task_id    TEXT NOT NULL PRIMARY KEY,
+            score_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+        );
         ",
     )?;
 

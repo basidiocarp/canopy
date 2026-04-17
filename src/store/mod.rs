@@ -7,6 +7,7 @@ mod files;
 mod handoffs;
 mod helpers;
 pub mod notifications;
+pub mod tool_usage;
 mod operator_actions;
 mod orchestration;
 mod outcomes;
@@ -152,6 +153,8 @@ const AUTO_REVIEW_SUBTASKS: [(&str, &str); 3] = [
 pub enum StoreError {
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("record not found: {0}")]
     NotFound(&'static str),
     #[error("validation error: {0}")]

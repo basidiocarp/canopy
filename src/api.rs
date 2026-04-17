@@ -465,6 +465,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         children_complete,
         children,
         parent_id: store.get_parent_id(task_id)?,
+        tool_adoption_score: None,
     })
 }
 
