@@ -1532,7 +1532,7 @@ pub struct ToolAdoptionDetail {
 
 /// Tool adoption score for a task session.
 ///
-/// Score = tools_used / tools_relevant, or 1.0 when no tools were relevant.
+/// `Score` = `tools_used` / `tools_relevant`, or 1.0 when no tools were relevant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolAdoptionScore {
     /// Adoption ratio: 0.0 to 1.0.
@@ -1562,14 +1562,15 @@ impl ToolAdoptionScore {
     /// );
     /// assert!((score.score - 0.5).abs() < 0.01);
     /// ```
+    #[must_use]
     pub fn compute(
         used: &[(&str, &str)],
         relevant: &[(&str, &str)],
         available: &[(&str, &str)],
     ) -> Self {
-        let tools_used = used.len() as u32;
-        let tools_relevant = relevant.len() as u32;
-        let tools_available = available.len() as u32;
+        let tools_used = u32::try_from(used.len()).unwrap_or(u32::MAX);
+        let tools_relevant = u32::try_from(relevant.len()).unwrap_or(u32::MAX);
+        let tools_available = u32::try_from(available.len()).unwrap_or(u32::MAX);
 
         let score = if tools_relevant == 0 {
             1.0
@@ -1578,7 +1579,9 @@ impl ToolAdoptionScore {
                 .iter()
                 .filter(|(name, _)| relevant.iter().any(|(rn, _)| rn == name))
                 .count();
-            used_and_relevant as f32 / tools_relevant as f32
+            #[allow(clippy::cast_precision_loss)]
+            let score = used_and_relevant as f32 / tools_relevant as f32;
+            score
         };
 
         let mut details = Vec::new();
