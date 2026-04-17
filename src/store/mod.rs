@@ -575,7 +575,7 @@ impl Store {
     ///
     /// Returns an error if the query fails.
     pub fn list_notifications(&self, include_seen: bool) -> StoreResult<Vec<crate::models::Notification>> {
-        self.in_transaction(|conn| {
+        self.in_read_transaction(|conn| {
             notifications::list_notifications(conn, include_seen)
         })
     }
@@ -588,6 +588,21 @@ impl Store {
     pub fn mark_notification_seen(&self, notification_id: &str) -> StoreResult<()> {
         self.in_transaction(|conn| {
             notifications::mark_seen(conn, notification_id)
+        })
+    }
+
+    /// Marks all unseen notifications as seen in a single update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn mark_all_notifications_seen(&self) -> StoreResult<usize> {
+        self.in_transaction(|conn| {
+            let count = conn.execute(
+                "UPDATE notifications SET seen = 1 WHERE seen = 0",
+                [],
+            )?;
+            Ok(count)
         })
     }
 }

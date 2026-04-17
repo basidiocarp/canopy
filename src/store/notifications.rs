@@ -200,47 +200,57 @@ mod tests {
 
     #[test]
     fn completing_task_emits_notification() {
-        let conn = test_conn();
+        use crate::store::Store;
+        use std::path::Path;
 
-        // Create a task first
-        conn.execute(
-            r"
-            INSERT INTO tasks (
-                task_id, title, description, requested_by, project_root,
-                status, verification_state, priority, severity, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            rusqlite::params![
-                "task-notif-test",
+        let store = Store::open(Path::new(":memory:")).expect("in-memory store");
+
+        // Create a task via the store
+        let task = store
+            .create_task(
                 "Test Task",
-                None::<String>,
+                None,
                 "test-user",
                 ".",
-                "open",
-                "not_required",
-                "medium",
-                "none",
-                "2026-04-16T00:00:00Z",
-                "2026-04-16T00:00:00Z",
-            ],
-        )
-        .expect("create test task");
+                None,
+            )
+            .expect("create task");
 
-        // Update task to Completed (this should emit a notification)
-        conn.execute(
-            "UPDATE tasks SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?2",
-            rusqlite::params!["completed", "task-notif-test"],
-        )
-        .expect("update task to completed");
+        // Transition to InProgress first (allowed from Open)
+        store
+            .update_task_status(
+                &task.task_id,
+                crate::models::TaskStatus::InProgress,
+                "test-user",
+                crate::store::TaskStatusUpdate::default(),
+            )
+            .expect("update task to in-progress");
 
-        // Note: The actual notification emission happens in the Store::update_task_status method
-        // which calls this module, so here we just verify the notification infrastructure works.
-        let notif = make_notification("manual-notif", NotificationEventType::TaskCompleted);
-        notif.task_id.clone();
-        insert_notification(&conn, &notif).expect("insert manual notification");
+        // Now transition to Completed (allowed from InProgress)
+        store
+            .update_task_status(
+                &task.task_id,
+                crate::models::TaskStatus::Completed,
+                "test-user",
+                crate::store::TaskStatusUpdate {
+                    verification_state: None,
+                    blocked_reason: None,
+                    closure_summary: Some("test completion"),
+                    event_note: None,
+                },
+            )
+            .expect("update task to completed");
 
-        let rows = list_notifications(&conn, true).expect("list all notifications");
-        assert!(rows.iter().any(|n| n.event_type == NotificationEventType::TaskCompleted));
+        // Verify that a notification was emitted
+        let notifs = store
+            .list_notifications(true)
+            .expect("list all notifications");
+        assert!(
+            notifs
+                .iter()
+                .any(|n| n.event_type == NotificationEventType::TaskCompleted),
+            "notification for task completion should have been emitted"
+        );
     }
 
     #[test]

@@ -1758,7 +1758,7 @@ fn handle_notification_command(store: &Store, command: NotificationCommand) -> R
             } else {
                 for n in &notifs {
                     let read_mark = if n.seen { "[read]" } else { "[unread]" };
-                    println!("{} {} {:?} {}", read_mark, n.notification_id, n.event_type, n.created_at);
+                    println!("{} {} {} {}", read_mark, n.notification_id, n.event_type, n.created_at);
                 }
             }
             Ok(())
@@ -1769,11 +1769,8 @@ fn handle_notification_command(store: &Store, command: NotificationCommand) -> R
             Ok(())
         }
         NotificationCommand::MarkAllRead => {
-            let notifs = store.list_notifications(false)?;
-            for n in &notifs {
-                store.mark_notification_seen(&n.notification_id)?;
-            }
-            println!("All notifications marked as read.");
+            let count = store.mark_all_notifications_seen()?;
+            println!("Marked {} notification(s) as read.", count);
             Ok(())
         }
     }
