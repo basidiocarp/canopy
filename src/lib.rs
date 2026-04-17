@@ -1,4 +1,5 @@
 pub mod api;
+pub mod capability;
 pub mod cli;
 pub mod handoff_check;
 pub mod mcp;

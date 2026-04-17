@@ -17,7 +17,7 @@ use super::{
     TaskOperatorActionInput, TaskStatusUpdate, TaskTriageUpdate,
 };
 use crate::models::{
-    AgentRole, HandoffStatus, HandoffType, OperatorActionKind, Task, TaskAction, TaskEventType,
+    AgentRole, HandoffStatus, HandoffType, Notification, NotificationEventType, OperatorActionKind, Task, TaskAction, TaskEventType,
     TaskRelationship, TaskRelationshipRole, TaskStatus, TaskSummary, VerificationState,
     capabilities_match, derive_review_cycle_context,
 };
@@ -356,6 +356,27 @@ impl Store {
 
             sync_owner_for_task_status(conn, task_id, status)?;
             sync_task_workflow_in_connection(conn, task_id)?;
+
+            // Emit notification for status transitions
+            if matches!(status, TaskStatus::Completed | TaskStatus::Blocked) {
+                let event_type = match status {
+                    TaskStatus::Completed => NotificationEventType::TaskCompleted,
+                    TaskStatus::Blocked => NotificationEventType::TaskBlocked,
+                    _ => unreachable!(),
+                };
+                let notif = Notification {
+                    notification_id: ulid::Ulid::new().to_string(),
+                    event_type,
+                    task_id: Some(task_id.to_string()),
+                    agent_id: None,
+                    payload: serde_json::json!({}),
+                    seen: false,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                };
+                // Ignore notification emission errors — notification failure must not fail the task update
+                let _ = super::notifications::insert_notification(conn, &notif);
+            }
+
             let updated = get_task_in_connection(conn, task_id)?;
             let mut notes = Vec::new();
             if let Some(note) = match status {

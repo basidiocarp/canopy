@@ -22,6 +22,8 @@ impl Store {
 
         Ok(TaskWorkflowContext {
             task_id: task.task_id,
+            workflow_id: task.workflow_id,
+            phase_id: task.phase_id,
             queue_state,
             worktree_binding,
             review_cycle,

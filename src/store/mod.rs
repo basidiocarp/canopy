@@ -568,6 +568,28 @@ impl Store {
             }
         }
     }
+
+    /// Lists notifications, optionally including already-seen ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn list_notifications(&self, include_seen: bool) -> StoreResult<Vec<crate::models::Notification>> {
+        self.in_transaction(|conn| {
+            notifications::list_notifications(conn, include_seen)
+        })
+    }
+
+    /// Marks a notification as seen.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn mark_notification_seen(&self, notification_id: &str) -> StoreResult<()> {
+        self.in_transaction(|conn| {
+            notifications::mark_seen(conn, notification_id)
+        })
+    }
 }
 
 fn is_busy_error(e: &StoreError) -> bool {

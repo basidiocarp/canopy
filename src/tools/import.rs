@@ -249,6 +249,14 @@ pub fn tool_import_handoff(
     if let Some(agent_id) = assign_to {
         match pre_dispatch_check(path) {
             DispatchDecision::Proceed => {
+                if let Err(e) =
+                    crate::store::ensure_capabilities_match(store, &parent_task.task_id, agent_id)
+                {
+                    return ToolResult::error(format!(
+                        "import succeeded (task {}) but cannot assign to '{}': {e}. Task created but unassigned.",
+                        parent_task.task_id, agent_id
+                    ));
+                }
                 if let Err(e) = store.assign_task(
                     &parent_task.task_id,
                     agent_id,

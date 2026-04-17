@@ -57,6 +57,10 @@ pub fn tool_work_queue(
 }
 
 /// Atomically claim a task.
+///
+/// Enforces capability requirements: if the task has non-empty
+/// `required_capabilities`, the claiming agent must have all of them.
+/// Returns a clear error listing the missing capabilities on mismatch.
 pub fn tool_task_claim(
     store: &(impl CanopyStore + ?Sized),
     agent_id: &str,
@@ -77,6 +81,11 @@ pub fn tool_task_claim(
         {
             return ToolResult::error(format!("claim failed: {err}"));
         }
+    }
+
+    // Capability check: load task and agent, then verify requirements are met.
+    if let Err(err) = crate::store::ensure_capabilities_match(store, task_id, agent_id) {
+        return ToolResult::error(format!("claim failed: {err}"));
     }
 
     match store.atomic_claim_task(agent_id, task_id) {
@@ -143,12 +152,42 @@ pub fn tool_task_yield(
 
 #[cfg(test)]
 mod tests {
-    use super::tool_work_queue;
+    use super::{tool_task_claim, tool_work_queue};
     use crate::models::{AgentRegistration, AgentStatus};
     use crate::store::Store;
+    use crate::store::TaskCreationOptions;
     use rusqlite::Connection;
     use serde_json::json;
     use tempfile::tempdir;
+
+    fn open_store() -> (Store, tempfile::TempDir) {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+        (store, temp)
+    }
+
+    fn register_agent_with_caps(
+        store: &Store,
+        agent_id: &str,
+        caps: Vec<String>,
+    ) -> AgentRegistration {
+        let agent = AgentRegistration {
+            agent_id: agent_id.to_string(),
+            host_id: "host-1".to_string(),
+            host_type: "codex".to_string(),
+            host_instance: "local".to_string(),
+            model: "sonnet".to_string(),
+            project_root: "/repo".to_string(),
+            worktree_id: "wt-1".to_string(),
+            role: None,
+            capabilities: caps,
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: None,
+        };
+        store.register_agent(&agent).expect("register agent")
+    }
 
     #[test]
     fn work_queue_fails_fast_when_workflow_context_is_invalid() {
@@ -192,6 +231,132 @@ mod tests {
                 .text
                 .contains("failed to load workflow context"),
             "unexpected error: {}",
+            result.content[0].text
+        );
+    }
+
+    // -- capability enforcement tests -------------------------------------------
+
+    #[test]
+    fn claim_succeeds_when_agent_has_required_capabilities() {
+        let (store, _temp) = open_store();
+        let agent = register_agent_with_caps(&store, "cap-agent-1", vec!["rust".to_string()]);
+        // Give the agent a recent heartbeat so the freshness check passes.
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task_with_options(
+                "Rust work",
+                None,
+                "operator",
+                "/repo",
+                &TaskCreationOptions {
+                    required_capabilities: vec!["rust".to_string()],
+                    ..Default::default()
+                },
+            )
+            .expect("create task");
+
+        let result = tool_task_claim(&store, &agent.agent_id, &json!({ "task_id": task.task_id }));
+        assert!(
+            !result.is_error,
+            "claim should succeed when agent has required caps; error: {}",
+            result.content[0].text
+        );
+    }
+
+    #[test]
+    fn claim_fails_with_capability_mismatch_error() {
+        let (store, _temp) = open_store();
+        // Agent declares "frontend" capability but task requires "rust".
+        // An agent that has declared capabilities must have the right ones.
+        let agent =
+            register_agent_with_caps(&store, "wrong-caps-agent", vec!["frontend".to_string()]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task_with_options(
+                "Rust work requiring capability",
+                None,
+                "operator",
+                "/repo",
+                &TaskCreationOptions {
+                    required_capabilities: vec!["rust".to_string()],
+                    ..Default::default()
+                },
+            )
+            .expect("create task");
+
+        let result = tool_task_claim(&store, &agent.agent_id, &json!({ "task_id": task.task_id }));
+        assert!(result.is_error, "claim should fail on capability mismatch");
+        assert!(
+            result.content[0].text.contains("capability mismatch"),
+            "error should mention capability mismatch, got: {}",
+            result.content[0].text
+        );
+        assert!(
+            result.content[0].text.contains("missing"),
+            "error should list missing capabilities, got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[test]
+    fn claim_fails_listing_missing_capability_when_agent_has_partial_match() {
+        let (store, _temp) = open_store();
+        // Agent has "rust" but task requires "rust" + "shell".
+        let agent =
+            register_agent_with_caps(&store, "partial-caps-agent", vec!["rust".to_string()]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task_with_options(
+                "Multi-capability task",
+                None,
+                "operator",
+                "/repo",
+                &TaskCreationOptions {
+                    required_capabilities: vec!["rust".to_string(), "shell".to_string()],
+                    ..Default::default()
+                },
+            )
+            .expect("create task");
+
+        let result = tool_task_claim(&store, &agent.agent_id, &json!({ "task_id": task.task_id }));
+        assert!(
+            result.is_error,
+            "claim should fail on partial capability mismatch"
+        );
+        assert!(
+            result.content[0].text.contains("shell"),
+            "error should list shell as missing, got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[test]
+    fn claim_succeeds_when_task_has_no_required_capabilities() {
+        let (store, _temp) = open_store();
+        // Agent has no capabilities, but task has no requirements — should succeed.
+        let agent = register_agent_with_caps(&store, "bare-agent", vec![]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task("No capability task", None, "operator", "/repo", None)
+            .expect("create task");
+
+        let result = tool_task_claim(&store, &agent.agent_id, &json!({ "task_id": task.task_id }));
+        assert!(
+            !result.is_error,
+            "claim should succeed for no-requirement task; error: {}",
             result.content[0].text
         );
     }

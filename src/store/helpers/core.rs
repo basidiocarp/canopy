@@ -7,6 +7,7 @@ pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreR
         r"
         SELECT task_id, title, description, requested_by, project_root, parent_task_id,
                queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+               workflow_id, phase_id,
                required_role, required_capabilities, auto_review, verification_required, status,
                verification_state, priority, severity, owner_agent_id, owner_note,
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
@@ -47,7 +48,8 @@ pub(crate) fn get_handoff_in_connection(
     conn.query_row(
         r"
         SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-               summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+               summary, requested_action, goal, next_steps, stop_reason,
+               due_at, expires_at, status, created_at, updated_at, resolved_at
         FROM handoffs
         WHERE handoff_id = ?1
         ",

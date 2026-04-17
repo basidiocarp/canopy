@@ -29,12 +29,16 @@ pub(super) fn run(store: &Store, command: Commands) -> Result<()> {
         } => {
             handle_situation(store, agent_id.as_deref(), project_root.as_deref())?;
         }
+        Commands::Outcome { command } => handle_outcome_command(store, command)?,
         Commands::Serve {
             agent_id,
             project,
             worktree,
         } => {
             server::run(store, &agent_id, project.as_deref(), &worktree)?;
+        }
+        Commands::Notification { command } => {
+            handle_notification_command(store, command)?;
         }
     }
 

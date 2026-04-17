@@ -112,6 +112,7 @@ pub fn handle_scope_gap(
                     auto_review: false,
                     verification_required: task.verification_required,
                     scope: child_scope,
+                    ..TaskCreationOptions::default()
                 },
             )?;
 

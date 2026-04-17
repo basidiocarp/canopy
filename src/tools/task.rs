@@ -39,11 +39,15 @@ pub fn tool_task_create(
         .get("verification_required")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let workflow_id = get_str(args, "workflow_id").map(ToOwned::to_owned);
+    let phase_id = get_str(args, "phase_id").map(ToOwned::to_owned);
 
     let options = TaskCreationOptions {
         required_role,
         required_capabilities,
         verification_required,
+        workflow_id,
+        phase_id,
         ..TaskCreationOptions::default()
     };
 
@@ -193,6 +197,8 @@ mod tests {
             worktree_binding_id: None,
             execution_session_ref: None,
             review_cycle_id: None,
+            workflow_id: None,
+            phase_id: None,
             required_role: None,
             required_capabilities: Vec::new(),
             auto_review: false,

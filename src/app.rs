@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
     AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, FilesCommand,
-    HandoffCommand, OutcomeCommand, TaskCommand,
+    HandoffCommand, NotificationCommand, OutcomeCommand, TaskCommand,
 };
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
@@ -1384,6 +1384,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Situation { .. } => "situation",
         Commands::Outcome { .. } => "outcome",
         Commands::Serve { .. } => "serve",
+        Commands::Notification { .. } => "notification",
     }
 }
 
@@ -1746,6 +1747,36 @@ fn handle_outcome_command(store: &Store, command: OutcomeCommand) -> Result<()> 
         }
     }
     Ok(())
+}
+
+fn handle_notification_command(store: &Store, command: NotificationCommand) -> Result<()> {
+    match command {
+        NotificationCommand::List { all } => {
+            let notifs = store.list_notifications(all)?;
+            if notifs.is_empty() {
+                println!("No notifications.");
+            } else {
+                for n in &notifs {
+                    let read_mark = if n.seen { "[read]" } else { "[unread]" };
+                    println!("{} {} {:?} {}", read_mark, n.notification_id, n.event_type, n.created_at);
+                }
+            }
+            Ok(())
+        }
+        NotificationCommand::MarkRead { notification_id } => {
+            store.mark_notification_seen(&notification_id)?;
+            println!("Marked {} as read.", notification_id);
+            Ok(())
+        }
+        NotificationCommand::MarkAllRead => {
+            let notifs = store.list_notifications(false)?;
+            for n in &notifs {
+                store.mark_notification_seen(&n.notification_id)?;
+            }
+            println!("All notifications marked as read.");
+            Ok(())
+        }
+    }
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<()> {

@@ -244,6 +244,14 @@ pub fn tool_definitions() -> Vec<Value> {
                 "verification_required": {
                     "type": "boolean",
                     "description": "Task requires explicit verification before close"
+                },
+                "workflow_id": {
+                    "type": "string",
+                    "description": "Workflow instance this task belongs to (optional)"
+                },
+                "phase_id": {
+                    "type": "string",
+                    "description": "Workflow phase this task is currently in (optional)"
                 }
             },
             "required": ["title", "requested_by", "project_root"]
@@ -649,6 +657,18 @@ pub fn tool_definitions() -> Vec<Value> {
                 "expires_at": {
                     "type": "string",
                     "description": "RFC3339 UTC time after which the handoff is no longer valid"
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "Concrete objective for the receiving agent (optional)"
+                },
+                "next_steps": {
+                    "type": "string",
+                    "description": "Specific next actions the receiver should take (optional)"
+                },
+                "stop_reason": {
+                    "type": "string",
+                    "description": "Why the sender is stopping work on this task (optional)"
                 }
             },
             "required": ["task_id", "from_agent_id", "to_agent_id", "handoff_type", "summary"]
@@ -964,6 +984,61 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             },
             "required": ["handoff_path"]
+        }),
+    ));
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Outcome Learning Loop (4) — observational only, no policy side-effects
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_outcome_record",
+        "Record a workflow-outcome-v1 JSON payload in the outcome ledger. Accepts either a 'json' string key containing the full payload or a 'json_object' key with the parsed object. Observational only — does not alter routing policy.",
+        json!({
+            "type": "object",
+            "properties": {
+                "json": {
+                    "type": "string",
+                    "description": "Raw workflow-outcome-v1 JSON string"
+                },
+                "json_object": {
+                    "type": "object",
+                    "description": "Parsed workflow-outcome-v1 object (alternative to json string)"
+                }
+            }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_outcome_list",
+        "List all stored workflow outcomes, most recent first (by completed_at). Observational only.",
+        json!({
+            "type": "object",
+            "properties": {}
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_outcome_show",
+        "Retrieve a single stored workflow outcome by workflow_id. Returns an error if the outcome is not found.",
+        json!({
+            "type": "object",
+            "properties": {
+                "workflow_id": {
+                    "type": "string",
+                    "description": "The workflow instance ULID to look up"
+                }
+            },
+            "required": ["workflow_id"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_outcome_summary",
+        "Return outcome counts grouped by template_id, failure_type, and the tail phase of the route taken. Use to observe outcome patterns before considering policy changes. Observational only — does not modify routing policy.",
+        json!({
+            "type": "object",
+            "properties": {}
         }),
     ));
 

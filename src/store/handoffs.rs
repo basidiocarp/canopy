@@ -38,6 +38,40 @@ impl Store {
         requested_action: Option<&str>,
         timing: HandoffTiming<'_>,
     ) -> StoreResult<Handoff> {
+        self.create_handoff_with_context(
+            task_id,
+            from_agent_id,
+            to_agent_id,
+            handoff_type,
+            summary,
+            requested_action,
+            None,
+            None,
+            None,
+            timing,
+        )
+    }
+
+    /// Creates a handoff with optional semantic context fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task or source agent does not exist or if the
+    /// database write fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_handoff_with_context(
+        &self,
+        task_id: &str,
+        from_agent_id: &str,
+        to_agent_id: &str,
+        handoff_type: HandoffType,
+        summary: &str,
+        requested_action: Option<&str>,
+        goal: Option<&str>,
+        next_steps: Option<&str>,
+        stop_reason: Option<&str>,
+        timing: HandoffTiming<'_>,
+    ) -> StoreResult<Handoff> {
         self.in_transaction(|conn| {
             create_handoff_in_connection(
                 conn,
@@ -47,6 +81,9 @@ impl Store {
                 handoff_type,
                 summary,
                 requested_action,
+                goal,
+                next_steps,
+                stop_reason,
                 timing,
             )
         })
@@ -307,7 +344,8 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+                       summary, requested_action, goal, next_steps, stop_reason,
+                       due_at, expires_at, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 WHERE task_id = ?1
                 ORDER BY rowid
@@ -321,7 +359,8 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+                       summary, requested_action, goal, next_steps, stop_reason,
+                       due_at, expires_at, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 ORDER BY rowid
                 ",
@@ -348,7 +387,8 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT h.handoff_id, h.task_id, h.from_agent_id, h.to_agent_id, h.handoff_type,
-                       h.summary, h.requested_action, h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
+                       h.summary, h.requested_action, h.goal, h.next_steps, h.stop_reason,
+                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
                 FROM handoffs h
                 JOIN tasks t ON t.task_id = h.task_id
                 WHERE t.project_root = ?1
@@ -363,7 +403,8 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                       summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+                       summary, requested_action, goal, next_steps, stop_reason,
+                       due_at, expires_at, status, created_at, updated_at, resolved_at
                 FROM handoffs
                 WHERE status NOT IN ('rejected', 'expired', 'cancelled', 'completed')
                 ORDER BY rowid
@@ -391,7 +432,8 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT h.handoff_id, h.task_id, h.from_agent_id, h.to_agent_id, h.handoff_type,
-                       h.summary, h.requested_action, h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
+                       h.summary, h.requested_action, h.goal, h.next_steps, h.stop_reason,
+                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
                 FROM handoffs h
                 JOIN tasks t ON t.task_id = h.task_id
                 WHERE t.project_root = ?1
@@ -415,7 +457,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-                   summary, requested_action, due_at, expires_at, status, created_at,
+                   summary, requested_action, goal, next_steps, stop_reason,
+                   due_at, expires_at, status, created_at,
                    updated_at, resolved_at
             FROM handoffs
             WHERE to_agent_id = ?1 AND status = 'open'

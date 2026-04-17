@@ -10,6 +10,10 @@ request flow, and storage model.
 
 ## Design Principles
 
+- **Coordination ledger, not chat history** — durable work state lives in the
+  coordination ledger as tasks, assignments, handoffs, and events, not inferred
+  from free-form threads. This explicit ledger is what makes multi-agent work
+  auditable and recoverable.
 - **Task-first, not chat-first** — durable work state is stored as tasks,
   assignments, handoffs, and events, not inferred from free-form threads.
 - **Evidence before conclusion** — decisions attach to `EvidenceRef` rows so
@@ -36,6 +40,12 @@ request flow, and storage model.
 - Task-scoped Council threads
 - Evidence references to sibling tools
 - Read models for operator attention and queue views
+
+Hymenium is the single orchestration authority for the ecosystem. Canopy stores
+and reports on coordination state that Hymenium orchestrates, but Canopy defers
+all workflow lifecycle decisions (phase gating, dispatch, escalation) to
+Hymenium. This separation keeps coordination semantics clear: Canopy is the ledger
+and operator surface, not a second workflow engine.
 
 ### Hyphae owns
 
@@ -71,10 +81,12 @@ installation, memory, or host repair.
 - Operator surfaces may summarize evidence, but they do not own evidence
   policy or normalize the contract themselves.
 
-### Operator Read Models
+### Operator Read Models and Operator Surface
 
+- The operator surface is where operators understand task state, evidence, and
+  coordination facts without reconstructing them from logs.
 - `api.rs` builds snapshots and task-detail projections from stored ledger
-  state.
+  state to make the operator surface legible.
 - `tools/` exposes those projections through CLI and MCP entry points.
 - `cap` consumes the projections; it should not reconstruct attention, queue,
   or evidence semantics from raw tables.

@@ -180,6 +180,9 @@ impl Store {
                             )
                         })?,
                     input.requested_action,
+                    None,
+                    None,
+                    None,
                     HandoffTiming {
                         due_at: input.due_at,
                         expires_at: input.expires_at,
@@ -405,19 +408,25 @@ impl Store {
                         "link_task_dependency requires a relationship_role".to_string(),
                     )
                 })?;
-                let (source_task_id, target_task_id, note_role) = match relationship_role {
+                let (source_task_id, target_task_id, note_role, rel_kind) = match relationship_role {
                     TaskRelationshipRole::Blocks => {
-                        (task_id, related_task_id, TaskRelationshipRole::Blocks)
+                        (task_id, related_task_id, TaskRelationshipRole::Blocks, TaskRelationshipKind::Blocks)
                     }
                     TaskRelationshipRole::BlockedBy => {
-                        (related_task_id, task_id, TaskRelationshipRole::BlockedBy)
+                        (related_task_id, task_id, TaskRelationshipRole::BlockedBy, TaskRelationshipKind::Blocks)
+                    }
+                    TaskRelationshipRole::DependsOn => {
+                        (task_id, related_task_id, TaskRelationshipRole::DependsOn, TaskRelationshipKind::DependsOn)
+                    }
+                    TaskRelationshipRole::DependencyOf => {
+                        (related_task_id, task_id, TaskRelationshipRole::DependencyOf, TaskRelationshipKind::DependsOn)
                     }
                     TaskRelationshipRole::FollowUpParent
                     | TaskRelationshipRole::FollowUpChild
                     | TaskRelationshipRole::Parent
                     | TaskRelationshipRole::Child => {
                         return Err(StoreError::Validation(
-                            "link_task_dependency only supports blocks or blocked_by roles"
+                            "link_task_dependency only supports blocks, blocked_by, depends_on, or dependency_of roles"
                                 .to_string(),
                         ));
                     }
@@ -426,7 +435,7 @@ impl Store {
                     conn,
                     source_task_id,
                     target_task_id,
-                    TaskRelationshipKind::Blocks,
+                    rel_kind,
                     changed_by,
                 )?;
                 let related_task = get_task_in_connection(conn, related_task_id)?;
@@ -456,6 +465,8 @@ impl Store {
                 let inverse_role = match relationship_role {
                     TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
                     TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
+                    TaskRelationshipRole::DependsOn => TaskRelationshipRole::DependencyOf,
+                    TaskRelationshipRole::DependencyOf => TaskRelationshipRole::DependsOn,
                     TaskRelationshipRole::FollowUpParent
                     | TaskRelationshipRole::FollowUpChild
                     | TaskRelationshipRole::Parent

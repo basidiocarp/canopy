@@ -85,6 +85,10 @@ pub enum Commands {
         #[arg(long, default_value = "main")]
         worktree: String,
     },
+    Notification {
+        #[command(subcommand)]
+        command: NotificationCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -554,4 +558,21 @@ pub enum OutcomeCommand {
     },
     /// Print outcome counts grouped by template, failure type, and last phase.
     Summary,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NotificationCommand {
+    /// List notifications, optionally including already-read ones.
+    List {
+        /// Include already-read notifications.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Mark a specific notification as read.
+    MarkRead {
+        /// Notification ID to mark as read.
+        notification_id: String,
+    },
+    /// Mark all notifications as read.
+    MarkAllRead,
 }

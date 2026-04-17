@@ -84,6 +84,7 @@ fn create_review_subtasks_in_connection(
                 auto_review: false,
                 verification_required: false,
                 scope: Vec::new(),
+                ..TaskCreationOptions::default()
             },
         )?;
         set_task_priority_in_connection(conn, &review_task.task_id, review_priority)?;

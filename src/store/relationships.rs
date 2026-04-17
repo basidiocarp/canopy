@@ -67,6 +67,7 @@ impl Store {
                         TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpChild,
                         TaskRelationshipKind::Blocks => TaskRelationshipRole::Blocks,
                         TaskRelationshipKind::Parent => TaskRelationshipRole::Parent,
+                        TaskRelationshipKind::DependsOn => TaskRelationshipRole::DependsOn,
                     };
                     (relationship.target_task_id.clone(), role)
                 } else {
@@ -74,6 +75,7 @@ impl Store {
                         TaskRelationshipKind::FollowUp => TaskRelationshipRole::FollowUpParent,
                         TaskRelationshipKind::Blocks => TaskRelationshipRole::BlockedBy,
                         TaskRelationshipKind::Parent => TaskRelationshipRole::Child,
+                        TaskRelationshipKind::DependsOn => TaskRelationshipRole::DependencyOf,
                     };
                     (relationship.source_task_id.clone(), role)
                 };

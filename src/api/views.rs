@@ -509,6 +509,7 @@ pub(super) fn is_open_task_status(status: TaskStatus) -> bool {
     )
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn derive_task_relationship_summaries(
     tasks: &[Task],
     relationships: &[TaskRelationship],
@@ -572,6 +573,20 @@ pub(super) fn derive_task_relationship_summaries(
                     } else {
                         summary.active_blocker_count += 1;
                     }
+                }
+            }
+            TaskRelationshipKind::DependsOn => {
+                // dependency edges: source depends on target — surface as blocker context
+                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+                    summary.blocker_count += 1;
+                    if relationship_blocker_is_stale(target_task, now) {
+                        summary.stale_blocker_count += 1;
+                    } else {
+                        summary.active_blocker_count += 1;
+                    }
+                }
+                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+                    summary.blocking_count += 1;
                 }
             }
             TaskRelationshipKind::Parent => {

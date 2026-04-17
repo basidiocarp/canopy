@@ -251,7 +251,9 @@ pub(crate) fn delete_task_relationship_in_connection(
     }
     if let Some(child_task_id) = match relationship.kind {
         TaskRelationshipKind::Parent => Some(relationship.source_task_id.as_str()),
-        TaskRelationshipKind::FollowUp | TaskRelationshipKind::Blocks => None,
+        TaskRelationshipKind::FollowUp
+        | TaskRelationshipKind::Blocks
+        | TaskRelationshipKind::DependsOn => None,
     } {
         conn.execute(
             r"

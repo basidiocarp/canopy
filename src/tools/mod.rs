@@ -5,6 +5,7 @@ pub mod files;
 pub mod handoff;
 pub mod identity;
 pub mod import;
+pub mod outcomes;
 pub mod queue;
 pub mod scope;
 pub mod task;
@@ -152,6 +153,10 @@ pub fn dispatch_tool(
         "canopy_check_handoff_completeness" => {
             completeness::tool_check_handoff_completeness(store, agent_id, args)
         }
+        "canopy_outcome_record" => outcomes::tool_outcome_record(store, agent_id, args),
+        "canopy_outcome_list" => outcomes::tool_outcome_list(store, agent_id, args),
+        "canopy_outcome_show" => outcomes::tool_outcome_show(store, agent_id, args),
+        "canopy_outcome_summary" => outcomes::tool_outcome_summary(store, agent_id, args),
         _ => ToolResult::error(format!("unknown tool: {name}")),
     }
 }

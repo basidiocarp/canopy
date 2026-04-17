@@ -40,18 +40,24 @@ pub fn tool_handoff_create(
     };
 
     let requested_action = get_str(args, "requested_action");
+    let goal = get_str(args, "goal");
+    let next_steps = get_str(args, "next_steps");
+    let stop_reason = get_str(args, "stop_reason");
     let timing = HandoffTiming {
         due_at: get_str(args, "due_at"),
         expires_at: get_str(args, "expires_at"),
     };
 
-    match store.create_handoff(
+    match store.create_handoff_with_context(
         task_id,
         agent_id,
         to_agent_id,
         handoff_type,
         summary,
         requested_action,
+        goal,
+        next_steps,
+        stop_reason,
         timing,
     ) {
         Ok(handoff) => ToolResult::json(&handoff),
