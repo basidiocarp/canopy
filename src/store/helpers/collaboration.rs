@@ -1,5 +1,6 @@
 #![allow(clippy::wildcard_imports)]
 
+use crate::models::{Notification, NotificationEventType};
 use super::*;
 
 #[allow(clippy::too_many_lines)]
@@ -312,5 +313,18 @@ pub(crate) fn add_evidence_in_connection(
     )?;
     touch_task_in_connection(conn, task_id)?;
     sync_task_workflow_in_connection(conn, task_id)?;
+
+    // Emit notification for evidence receipt — ignore errors so evidence insert is not rolled back
+    let notif = Notification {
+        notification_id: Ulid::new().to_string(),
+        event_type: NotificationEventType::EvidenceReceived,
+        task_id: Some(task_id.to_string()),
+        agent_id: None,
+        payload: serde_json::json!({ "evidence_id": evidence.evidence_id }),
+        seen: false,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = super::super::notifications::insert_notification(conn, &notif);
+
     Ok(evidence)
 }

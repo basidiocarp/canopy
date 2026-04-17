@@ -569,17 +569,20 @@ pub enum OutcomeCommand {
 #[derive(Debug, Subcommand)]
 pub enum NotificationCommand {
     /// List notifications, optionally including already-read ones.
+    /// Usage: canopy notification list [--all]
     List {
         /// Include already-read notifications.
         #[arg(long)]
         all: bool,
     },
     /// Mark a specific notification as read.
+    /// Usage: canopy notification mark-read <notification-id>
     MarkRead {
         /// Notification ID to mark as read.
         notification_id: String,
     },
     /// Mark all notifications as read.
+    /// Usage: canopy notification mark-all-read
     MarkAllRead,
 }
 

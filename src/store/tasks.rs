@@ -359,10 +359,14 @@ impl Store {
             sync_task_workflow_in_connection(conn, task_id)?;
 
             // Emit notification for status transitions
-            if matches!(status, TaskStatus::Completed | TaskStatus::Blocked) {
+            if matches!(
+                status,
+                TaskStatus::Completed | TaskStatus::Blocked | TaskStatus::Cancelled
+            ) {
                 let event_type = match status {
                     TaskStatus::Completed => NotificationEventType::TaskCompleted,
                     TaskStatus::Blocked => NotificationEventType::TaskBlocked,
+                    TaskStatus::Cancelled => NotificationEventType::TaskCancelled,
                     _ => unreachable!(),
                 };
                 let notif = Notification {

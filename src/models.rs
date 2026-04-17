@@ -1491,6 +1491,8 @@ pub enum NotificationEventType {
     TaskAssigned,
     TaskCompleted,
     TaskBlocked,
+    TaskCancelled,
+    EvidenceReceived,
     HandoffReady,
     HandoffRejected,
     CouncilOpened,
