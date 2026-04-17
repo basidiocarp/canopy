@@ -6,6 +6,7 @@ mod evidence;
 mod files;
 mod handoffs;
 mod helpers;
+pub mod notifications;
 mod operator_actions;
 mod orchestration;
 mod outcomes;

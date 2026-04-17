@@ -1478,6 +1478,35 @@ pub struct OutcomeSummaryRow {
     pub count: i64,
 }
 
+/// Event kind carried by a [`Notification`].
+///
+/// This enum will grow as new coordination signals are identified. Downstream
+/// code should match against it with a wildcard arm to stay forward-compatible.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum NotificationEventType {
+    TaskAssigned,
+    TaskCompleted,
+    TaskBlocked,
+    HandoffReady,
+    HandoffRejected,
+    CouncilOpened,
+    CouncilClosed,
+}
+
+/// A notification row stored in the `notifications` table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Notification {
+    pub notification_id: String,
+    pub event_type: NotificationEventType,
+    pub task_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub payload: serde_json::Value,
+    pub seen: bool,
+    pub created_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{capabilities_match, parse_capabilities};

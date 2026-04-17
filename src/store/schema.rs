@@ -248,6 +248,19 @@ pub(crate) const BASE_SCHEMA: &str = r"
 
     CREATE INDEX IF NOT EXISTS idx_workflow_outcomes_template_failure
         ON workflow_outcomes(template_id, failure_type);
+
+    CREATE TABLE IF NOT EXISTS notifications (
+        notification_id TEXT NOT NULL PRIMARY KEY,
+        event_type      TEXT NOT NULL,
+        task_id         TEXT,
+        agent_id        TEXT,
+        payload         TEXT NOT NULL DEFAULT '{}',
+        seen            INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_task ON notifications(task_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_seen ON notifications(seen);
 ";
 
 #[allow(clippy::too_many_lines)]
