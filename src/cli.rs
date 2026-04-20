@@ -259,6 +259,8 @@ pub enum TaskCommand {
         task_id: String,
         #[arg(long, required = true)]
         summary: String,
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     Status {
         #[arg(long)]

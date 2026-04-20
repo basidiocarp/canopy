@@ -439,7 +439,30 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             agent_id,
             task_id,
             summary,
+            force,
         } => {
+            // Gate: if verification_required=true, check for passing ScriptVerification evidence
+            let task_record = store.get_task(&task_id)?;
+
+            if task_record.verification_required && !force {
+                let evidence = store.list_evidence(&task_id).unwrap_or_default();
+                let has_passing_verification = evidence.iter().any(|e| {
+                    matches!(e.source_kind, EvidenceSourceKind::ScriptVerification)
+                        && e.summary.as_deref().map_or(false, |s| s.contains("script verification passed"))
+                });
+                if !has_passing_verification {
+                    return Err(anyhow::anyhow!(
+                        "task {} requires script verification before completion.\n\n\
+                         Attach a passing verification result:\n  \
+                         canopy evidence add --task-id {} --source-kind script_verification \\\n    \
+                         --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
+                         Or override (operators only):\n  \
+                         canopy task complete {} --agent-id {} --summary '{}' --force",
+                        task_id, task_id, task_id, agent_id, summary
+                    ));
+                }
+            }
+
             let task = store.update_task_status(
                 &task_id,
                 TaskStatus::Completed,
@@ -459,6 +482,19 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 Some(&summary),
                 EvidenceLinkRefs::default(),
             )?;
+
+            // Log force override if applicable
+            if force && task_record.verification_required {
+                store.add_evidence(
+                    &task_id,
+                    EvidenceSourceKind::ManualNote,
+                    &task_id,
+                    "verification_override",
+                    Some("completion allowed with --force override despite missing verification"),
+                    EvidenceLinkRefs::default(),
+                )?;
+            }
+
             print_json(&task)?;
         }
     }

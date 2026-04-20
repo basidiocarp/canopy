@@ -245,6 +245,7 @@ pub fn snapshot(
         &workflow_contexts,
     );
     let attention = summarize_attention(
+        &tasks,
         &filtered_task_attention,
         &filtered_handoff_attention,
         &filtered_agent_attention,

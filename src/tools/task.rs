@@ -16,7 +16,7 @@ use crate::models::{
 use crate::store::{
     CanopyStore, EvidenceLinkRefs, TaskCreationOptions, TaskGetStore, TaskStatusUpdate,
 };
-use crate::tools::{ToolResult, get_str, get_string_array, validate_required_string};
+use crate::tools::{ToolResult, get_bool, get_str, get_string_array, validate_required_string};
 use serde::Serialize;
 use serde_json::Value;
 use std::str::FromStr;
@@ -325,6 +325,9 @@ pub fn tool_task_update_status(
 /// If `handoff_path` is provided, validates that the handoff document meets
 /// completion criteria before allowing the transition. Tasks without a
 /// handoff path bypass the check for backward compatibility.
+///
+/// If `verification_required=true`, checks for passing ScriptVerification evidence
+/// before allowing completion. Can be overridden with `--force`.
 pub fn tool_task_complete(
     store: &(impl CanopyStore + ?Sized),
     agent_id: &str,
@@ -357,6 +360,34 @@ pub fn tool_task_complete(
         }
     }
 
+    // Gate: if verification_required=true, check for passing ScriptVerification evidence
+    let force = get_bool(args, "force").unwrap_or(false);
+    let task_record = match store.get_task(task_id) {
+        Ok(t) => t,
+        Err(e) => return ToolResult::error(format!("failed to load task: {e}")),
+    };
+
+    if task_record.verification_required && !force {
+        let evidence = match store.list_evidence(task_id) {
+            Ok(e) => e,
+            Err(_) => vec![],
+        };
+        let has_passing_verification = evidence.iter().any(|e| {
+            matches!(e.source_kind, crate::models::EvidenceSourceKind::ScriptVerification)
+                && e.summary.as_deref().map_or(false, |s| s.contains("script verification passed"))
+        });
+        if !has_passing_verification {
+            return ToolResult::error(format!(
+                "task {task_id} requires script verification before completion.\n\n\
+                 Attach a passing verification result:\n  \
+                 canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
+                 --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
+                 Or override (operators only):\n  \
+                 canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force"
+            ));
+        }
+    }
+
     let update = TaskStatusUpdate {
         closure_summary: Some(summary),
         ..TaskStatusUpdate::default()
@@ -376,6 +407,18 @@ pub fn tool_task_complete(
         Some(summary),
         EvidenceLinkRefs::default(),
     );
+
+    // Log force override if applicable
+    if force && task_record.verification_required {
+        let _ = store.add_evidence(
+            task_id,
+            crate::models::EvidenceSourceKind::ManualNote,
+            task_id,
+            "verification_override",
+            Some("completion allowed with --force override despite missing verification"),
+            EvidenceLinkRefs::default(),
+        );
+    }
 
     ToolResult::json(&task)
 }

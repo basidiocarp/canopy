@@ -331,6 +331,7 @@ pub(super) fn derive_task_attention(
 }
 
 pub(super) fn summarize_attention(
+    tasks: &[Task],
     task_attention: &[TaskAttention],
     handoff_attention: &[HandoffAttention],
     agent_attention: &[AgentAttention],
@@ -346,6 +347,10 @@ pub(super) fn summarize_attention(
         .filter_map(|action| action.handoff_id.as_deref())
         .collect::<HashSet<_>>()
         .len();
+    let needs_verification_count = tasks
+        .iter()
+        .filter(|task| task.verification_required)
+        .count();
 
     SnapshotAttentionSummary {
         tasks_needing_attention: task_attention
@@ -374,5 +379,6 @@ pub(super) fn summarize_attention(
             .count(),
         actionable_tasks: actionable_task_count,
         actionable_handoffs: actionable_handoff_count,
+        needs_verification_count,
     }
 }

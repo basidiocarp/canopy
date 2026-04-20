@@ -78,6 +78,12 @@ pub fn get_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
 }
 
+/// Extract an optional boolean from a JSON object by key.
+#[must_use]
+pub fn get_bool(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(Value::as_bool)
+}
+
 /// Extract a required string parameter, returning a `ToolResult` error on failure.
 ///
 /// # Errors

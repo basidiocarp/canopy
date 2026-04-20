@@ -1272,6 +1272,7 @@ pub struct SnapshotAttentionSummary {
     pub stale_agents: usize,
     pub actionable_tasks: usize,
     pub actionable_handoffs: usize,
+    pub needs_verification_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
