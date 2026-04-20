@@ -388,6 +388,28 @@ pub fn tool_task_complete(
         }
     }
 
+    // Gate: check for open child tasks (unless --force is used)
+    if !force {
+        let open_children = match store.list_open_child_tasks(task_id) {
+            Ok(children) => children,
+            Err(e) => return ToolResult::error(format!("failed to check child tasks: {e}")),
+        };
+        if !open_children.is_empty() {
+            let mut child_list = String::new();
+            for (child_id, child_title, child_status) in &open_children {
+                child_list.push_str(&format!("  {}  {}  [{}]\n", child_id, child_title, child_status));
+            }
+            return ToolResult::error(format!(
+                "task {task_id} has {} open sub-task(s).\n\n\
+                 Complete or cancel all sub-tasks first, or use --force to override.\n\n\
+                 Open sub-tasks:\n{}\n\
+                 To override:\n  \
+                 canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force",
+                open_children.len(), child_list
+            ));
+        }
+    }
+
     let update = TaskStatusUpdate {
         closure_summary: Some(summary),
         ..TaskStatusUpdate::default()
@@ -418,6 +440,21 @@ pub fn tool_task_complete(
             Some("completion allowed with --force override despite missing verification"),
             EvidenceLinkRefs::default(),
         );
+    }
+
+    if force {
+        if let Ok(open_children) = store.list_open_child_tasks(task_id) {
+            if !open_children.is_empty() {
+                let _ = store.add_evidence(
+                    task_id,
+                    crate::models::EvidenceSourceKind::ManualNote,
+                    task_id,
+                    "children_override",
+                    Some("completion allowed with --force override despite open sub-tasks"),
+                    EvidenceLinkRefs::default(),
+                );
+            }
+        }
     }
 
     ToolResult::json(&task)

@@ -376,7 +376,10 @@ pub enum TaskCommand {
         #[arg(long)]
         step: Option<String>,
     },
-    List,
+    List {
+        #[arg(long, default_value_t = false)]
+        tree: bool,
+    },
     ListView {
         #[arg(long)]
         project_root: Option<String>,

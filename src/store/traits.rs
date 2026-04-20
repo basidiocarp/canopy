@@ -57,6 +57,7 @@ pub trait TaskLookupStore: TaskGetStore {
     fn get_children(&self, task_id: &str) -> StoreResult<Vec<TaskSummary>>;
     fn get_parent_id(&self, task_id: &str) -> StoreResult<Option<String>>;
     fn list_related_tasks(&self, task_id: &str) -> StoreResult<Vec<RelatedTask>>;
+    fn list_open_child_tasks(&self, task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>>;
 }
 
 #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
@@ -445,6 +446,10 @@ impl TaskLookupStore for super::Store {
 
     fn list_related_tasks(&self, task_id: &str) -> StoreResult<Vec<RelatedTask>> {
         self.list_related_tasks(task_id)
+    }
+
+    fn list_open_child_tasks(&self, task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>> {
+        self.list_open_child_tasks(task_id)
     }
 }
 

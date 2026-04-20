@@ -1251,6 +1251,23 @@ impl Store {
         exists.ok_or(StoreError::NotFound("task"))?;
         Ok(())
     }
+
+    /// Lists open child tasks for a given parent task.
+    ///
+    /// Returns a vec of (task_id, title, status) tuples for all child tasks
+    /// that are in an open status (not completed, closed, or cancelled).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn list_open_child_tasks(&self, parent_task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>> {
+        let children = self.get_children(parent_task_id)?;
+        Ok(children
+            .into_iter()
+            .filter(|c| is_open_task_status(c.status))
+            .map(|c| (c.task_id, c.title, c.status))
+            .collect())
+    }
 }
 
 /// Returns `true` when `err` is a `SQLite` UNIQUE constraint violation.

@@ -319,8 +319,43 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 step.as_deref(),
             )?)?;
         }
-        TaskCommand::List => {
-            print_json(&store.list_tasks()?)?;
+        TaskCommand::List { tree } => {
+            if tree {
+                let tasks = store.list_tasks()?;
+                let relationships = store.list_task_relationships(None)?;
+
+                // Build parent->child map
+                let mut children_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                for rel in &relationships {
+                    if rel.kind == TaskRelationshipKind::Parent {
+                        children_map
+                            .entry(rel.target_task_id.clone())
+                            .or_insert_with(Vec::new)
+                            .push(rel.source_task_id.clone());
+                    }
+                }
+
+                // Find root tasks (tasks with no parent)
+                let mut root_ids = Vec::new();
+                for task in &tasks {
+                    if task.parent_task_id.is_none() {
+                        root_ids.push(task.task_id.clone());
+                    }
+                }
+                root_ids.sort();
+
+                // Render tree
+                let mut output = String::from("TASK LIST\n");
+                for (idx, root_id) in root_ids.iter().enumerate() {
+                    let is_last = idx == root_ids.len() - 1;
+                    if let Some(root_task) = tasks.iter().find(|t| t.task_id == *root_id) {
+                        render_task_tree(&mut output, root_task, &tasks, &children_map, "", is_last);
+                    }
+                }
+                println!("{}", output);
+            } else {
+                print_json(&store.list_tasks()?)?;
+            }
         }
         TaskCommand::ListView {
             project_root,
@@ -463,6 +498,25 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 }
             }
 
+            // Gate: check for open child tasks (unless --force is used)
+            if !force {
+                let open_children = store.list_open_child_tasks(&task_id)?;
+                if !open_children.is_empty() {
+                    let mut child_list = String::new();
+                    for (child_id, child_title, child_status) in &open_children {
+                        child_list.push_str(&format!("  {}  {}  [{}]\n", child_id, child_title, child_status));
+                    }
+                    return Err(anyhow::anyhow!(
+                        "task {} has {} open sub-task(s).\n\n\
+                         Complete or cancel all sub-tasks first, or use --force to override.\n\n\
+                         Open sub-tasks:\n{}\n\
+                         To override:\n  \
+                         canopy task complete {} --agent-id {} --summary '{}' --force",
+                        task_id, open_children.len(), child_list, task_id, agent_id, summary
+                    ));
+                }
+            }
+
             let task = store.update_task_status(
                 &task_id,
                 TaskStatus::Completed,
@@ -495,11 +549,49 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 )?;
             }
 
+            if force && !store.list_open_child_tasks(&task_id).unwrap_or_default().is_empty() {
+                store.add_evidence(
+                    &task_id,
+                    EvidenceSourceKind::ManualNote,
+                    &task_id,
+                    "children_override",
+                    Some("completion allowed with --force override despite open sub-tasks"),
+                    EvidenceLinkRefs::default(),
+                )?;
+            }
+
             print_json(&task)?;
         }
     }
 
     Ok(())
+}
+
+fn render_task_tree(
+    output: &mut String,
+    task: &Task,
+    all_tasks: &[Task],
+    children_map: &std::collections::HashMap<String, Vec<String>>,
+    prefix: &str,
+    is_last: bool,
+) {
+    // Add current task
+    let current_prefix = if is_last { "└─ " } else { "├─ " };
+    output.push_str(&format!(
+        "{}{}{} [{}]      {}\n",
+        prefix, current_prefix, task.task_id, task.status, task.title
+    ));
+
+    // Add children
+    if let Some(child_ids) = children_map.get(&task.task_id) {
+        let next_prefix = if is_last { "   " } else { "│  " };
+        for (idx, child_id) in child_ids.iter().enumerate() {
+            if let Some(child_task) = all_tasks.iter().find(|t| &t.task_id == child_id) {
+                let is_last_child = idx == child_ids.len() - 1;
+                render_task_tree(output, child_task, all_tasks, children_map, &format!("{}{}", prefix, next_prefix), is_last_child);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
