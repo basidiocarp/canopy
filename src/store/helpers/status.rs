@@ -220,7 +220,7 @@ pub(crate) fn list_handoffs_for_task_in_connection(
     let mut stmt = conn.prepare(
         r"
         SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
-               summary, requested_action, due_at, expires_at, status, created_at, updated_at, resolved_at
+               summary, requested_action, goal, next_steps, stop_reason, due_at, expires_at, status, created_at, updated_at, resolved_at
         FROM handoffs
         WHERE task_id = ?1
         ORDER BY rowid
