@@ -268,6 +268,24 @@ pub(crate) const BASE_SCHEMA: &str = r"
         created_at TEXT NOT NULL,
         FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
     );
+
+    -- Keep tasks.parent_task_id and task_relationships in sync on parent deletion.
+    -- When a parent task is deleted, SQLite's FK engine sets children's parent_task_id
+    -- to NULL (ON DELETE SET NULL) and cascade-deletes task_relationships rows
+    -- (ON DELETE CASCADE). Both happen atomically in the same FK pass, but this
+    -- trigger makes the intent explicit and guards against any ordering ambiguity.
+    CREATE TRIGGER IF NOT EXISTS trg_task_delete_clear_parent_relationship
+    BEFORE DELETE ON tasks
+    FOR EACH ROW
+    BEGIN
+        -- Explicitly remove the task_relationships rows that record the parent link
+        -- for any child that points to the task being deleted, so the two sources
+        -- of truth (tasks.parent_task_id and task_relationships) stay in sync even
+        -- if the FK cascade order ever changes.
+        DELETE FROM task_relationships
+        WHERE kind = 'parent'
+          AND target_task_id = OLD.task_id;
+    END;
 ";
 
 #[allow(clippy::too_many_lines)]
@@ -485,6 +503,21 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
             created_at TEXT NOT NULL,
             FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
         );
+        ",
+    )?;
+
+    // Sync trigger: keep tasks.parent_task_id and task_relationships consistent
+    // on parent deletion. Existing databases need this migrated in.
+    conn.execute_batch(
+        r"
+        CREATE TRIGGER IF NOT EXISTS trg_task_delete_clear_parent_relationship
+        BEFORE DELETE ON tasks
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM task_relationships
+            WHERE kind = 'parent'
+              AND target_task_id = OLD.task_id;
+        END;
         ",
     )?;
 

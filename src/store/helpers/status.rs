@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(dead_code)]
 pub(crate) fn has_open_child_tasks_in_connection(
     conn: &Connection,
     task_id: &str,
@@ -27,6 +28,40 @@ pub(crate) fn has_open_child_tasks_in_connection(
         }
     }
     Ok(false)
+}
+
+/// Returns (task_id, title, status) for all direct open children of a task.
+///
+/// Only direct children are returned (not recursive descendants). This is used
+/// to produce actionable error messages when a parent cannot complete.
+pub(crate) fn list_open_children_in_connection(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<Vec<(String, String, TaskStatus)>> {
+    let mut stmt = conn.prepare(
+        r"
+        SELECT task_id, title, status
+        FROM tasks
+        WHERE parent_task_id = ?1
+        ORDER BY created_at ASC, task_id ASC
+        ",
+    )?;
+    let rows = stmt.query_map([task_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut open = Vec::new();
+    for row in rows {
+        let (id, title, status_str) = row?;
+        let status = parse_enum_value::<TaskStatus>(&status_str, 2)?;
+        if is_open_task_status(status) {
+            open.push((id, title, status));
+        }
+    }
+    Ok(open)
 }
 
 pub(crate) fn has_passing_script_verification_in_connection(

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use super::helpers::{
     assign_task_in_connection, create_task_in_connection, get_task_in_connection,
-    has_open_child_tasks_in_connection, has_passing_script_verification_in_connection,
-    is_open_task_status, map_task, maybe_auto_complete_task_tree_in_connection,
+    has_passing_script_verification_in_connection, is_open_task_status,
+    list_open_children_in_connection, map_task, maybe_auto_complete_task_tree_in_connection,
     record_parent_relationship_in_connection, record_task_event_in_connection,
     sync_owner_for_task_status, sync_task_workflow_in_connection,
 };
@@ -156,8 +156,9 @@ impl Store {
         requested_by: &str,
         options: &TaskCreationOptions,
     ) -> StoreResult<Task> {
-        self.ensure_task_exists(parent_task_id)?;
         self.in_transaction(|conn| {
+            // Parent existence check is inside the transaction to avoid a TOCTOU
+            // race between an external check and the moment the parent is fetched.
             let parent_task = get_task_in_connection(conn, parent_task_id)?;
             let child_task = create_task_in_connection(
                 conn,
@@ -290,10 +291,16 @@ impl Store {
             }
 
             if status == TaskStatus::Completed {
-                if has_open_child_tasks_in_connection(conn, task_id)? {
-                    return Err(StoreError::Validation(
-                        "tasks cannot complete while child tasks remain open".to_string(),
-                    ));
+                let open_children = list_open_children_in_connection(conn, task_id)?;
+                if !open_children.is_empty() {
+                    let blocking = open_children
+                        .iter()
+                        .map(|(id, title, st)| format!("{id} ({title}, status={st})"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(StoreError::Validation(format!(
+                        "tasks cannot complete while child tasks remain open: {blocking}"
+                    )));
                 }
                 if current.verification_required {
                     if next_verification != VerificationState::Passed {
