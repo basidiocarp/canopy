@@ -4902,13 +4902,19 @@ fn api_exposes_subtask_hierarchy_and_all_children_complete_attention() {
     let db_path = temp.path().join("canopy.db");
     let store = Store::open(&db_path).expect("open store");
 
+    // Parent has verification_required=true but no passing verification yet,
+    // so it stays open even after all children complete and the attention
+    // reason AllChildrenComplete fires.
     let parent = store
-        .create_task(
+        .create_task_with_options(
             "Parent orchestration task",
             None,
             "operator",
             "/tmp/project",
-            None,
+            &TaskCreationOptions {
+                verification_required: true,
+                ..TaskCreationOptions::default()
+            },
         )
         .expect("create parent task");
     let child_a = store

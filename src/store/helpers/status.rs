@@ -8,9 +8,15 @@ pub(crate) fn has_open_child_tasks_in_connection(
 ) -> StoreResult<bool> {
     let mut stmt = conn.prepare(
         r"
+        WITH RECURSIVE descendants(task_id) AS (
+            SELECT task_id FROM tasks WHERE parent_task_id = ?1
+            UNION ALL
+            SELECT t.task_id FROM tasks t
+            INNER JOIN descendants d ON t.parent_task_id = d.task_id
+        )
         SELECT tasks.status
-        FROM tasks
-        WHERE tasks.parent_task_id = ?1
+        FROM descendants
+        INNER JOIN tasks ON tasks.task_id = descendants.task_id
         ",
     )?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
@@ -102,7 +108,7 @@ fn maybe_auto_complete_task_in_connection(
     for row in rows {
         has_children = true;
         let status = parse_enum_value::<TaskStatus>(&row?, 0)?;
-        if status != TaskStatus::Completed {
+        if is_open_task_status(status) {
             return Ok(());
         }
     }
@@ -110,12 +116,9 @@ fn maybe_auto_complete_task_in_connection(
         return Ok(());
     }
 
-    if !task.verification_required {
-        return Ok(());
-    }
-
-    if task.verification_state != VerificationState::Passed
-        || !has_passing_script_verification_in_connection(conn, task_id)?
+    if task.verification_required
+        && (task.verification_state != VerificationState::Passed
+            || !has_passing_script_verification_in_connection(conn, task_id)?)
     {
         return Ok(());
     }
