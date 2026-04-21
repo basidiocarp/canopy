@@ -530,6 +530,10 @@ fn ensure_column(
     column: &str,
     definition: &str,
 ) -> StoreResult<()> {
+    // PRAGMA table_info does not support bound parameters — the table name must
+    // be interpolated directly. All call sites use internal constants, so this
+    // is safe in practice; the ALTER TABLE below quotes the identifier for
+    // defence-in-depth.
     let pragma = format!("PRAGMA table_info({table})");
     let mut stmt = conn.prepare(&pragma)?;
     let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -540,7 +544,9 @@ fn ensure_column(
         }
     }
 
-    let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+    // Quote the table identifier so that names with spaces or reserved words
+    // are handled correctly and to close any SQL-injection surface.
+    let alter = format!("ALTER TABLE \"{table}\" ADD COLUMN {column} {definition}");
     conn.execute(&alter, [])?;
     Ok(())
 }

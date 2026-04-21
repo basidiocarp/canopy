@@ -85,6 +85,11 @@ pub(crate) fn has_passing_script_verification_in_connection(
         let Some(summary) = row? else {
             continue;
         };
+        // The evidence_refs table stores only a free-text `summary` column;
+        // there is no structured boolean or enum field for verification outcome.
+        // Until the schema gains a dedicated outcome field, substring matching
+        // on the canonical phrase emitted by the script-verification tool is
+        // the only available signal.
         if summary.contains("script verification passed") {
             return Ok(true);
         }
@@ -97,23 +102,27 @@ pub(crate) fn maybe_auto_complete_task_tree_in_connection(
     task_id: &str,
     changed_by: &str,
 ) -> StoreResult<()> {
-    let mut current_task_id = Some(task_id.to_string());
-    while let Some(candidate_task_id) = current_task_id {
+    // Walk the ancestor chain with a recursive CTE so the full list of
+    // ancestors is fetched in a single query rather than one hop at a time.
+    // Start from the task itself and follow parent_task_id upward.
+    let mut stmt = conn.prepare(
+        r"
+        WITH RECURSIVE ancestors(task_id, parent_task_id) AS (
+            SELECT task_id, parent_task_id FROM tasks WHERE task_id = ?1
+            UNION ALL
+            SELECT t.task_id, t.parent_task_id FROM tasks t
+            INNER JOIN ancestors a ON t.task_id = a.parent_task_id
+        )
+        SELECT task_id FROM ancestors
+        ",
+    )?;
+    let ancestor_ids: Vec<String> = stmt
+        .query_map([task_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)?;
+
+    for candidate_task_id in ancestor_ids {
         maybe_auto_complete_task_in_connection(conn, &candidate_task_id, changed_by)?;
-        current_task_id = conn
-            .query_row(
-                r"
-                SELECT parent_task_id
-                FROM tasks
-                WHERE task_id = ?1
-                ORDER BY created_at DESC
-                LIMIT 1
-                ",
-                [candidate_task_id.as_str()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
     }
     Ok(())
 }

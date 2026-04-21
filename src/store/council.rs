@@ -11,7 +11,6 @@ use crate::models::{
 use rusqlite::{Connection, OptionalExtension, params};
 use ulid::Ulid;
 
-const DEFAULT_SUMMARY: &str = "Task-linked council session with reviewer and architect roles.";
 const DEFAULT_TIMELINE_REF_TEMPLATE: &str = "task:{task_id}:council_messages";
 
 #[derive(Debug)]
@@ -126,10 +125,11 @@ fn build_session(raw: StoredCouncilSession, messages: &[CouncilMessage]) -> Coun
         task_id: raw.task_id,
         worktree_id: raw.worktree_id,
         participants: raw.participants,
-        session_summary: raw
-            .session_summary
-            .or_else(|| (!messages.is_empty()).then(|| DEFAULT_SUMMARY.to_string()))
-            .or_else(|| Some(DEFAULT_SUMMARY.to_string())),
+        // Return None when no explicit summary has been set. Callers use
+        // Option<String> and can display a placeholder at the presentation layer.
+        // Synthesising a non-None value here made it impossible to distinguish
+        // "no summary yet" from an actual decision summary.
+        session_summary: raw.session_summary,
         state: raw.state,
         timeline,
         transcript_ref: raw.transcript_ref,
@@ -186,7 +186,10 @@ pub(crate) fn summon_task_council_in_connection(
             worktree_id,
             participants_json,
             CouncilSessionState::Open.to_string(),
-            DEFAULT_SUMMARY,
+            // Store NULL so build_session returns None until an explicit summary
+            // is set via close_council_session. This lets callers distinguish
+            // "no summary yet" from an actual decision.
+            None::<&str>,
             transcript_ref,
             timeline_ref,
         ],

@@ -910,6 +910,13 @@ impl Store {
             }
         }
         if let Some(lim) = limit {
+            // param_idx now equals limit_placeholder; assert this to catch any
+            // future filter additions that shift the offset without updating the
+            // placeholder arithmetic above.
+            debug_assert_eq!(
+                param_idx, limit_placeholder,
+                "limit_placeholder offset mismatch: expected {limit_placeholder}, got {param_idx}"
+            );
             stmt.raw_bind_parameter(param_idx, lim)?;
         }
 
@@ -1261,19 +1268,38 @@ impl Store {
 
     /// Lists open child tasks for a given parent task.
     ///
-    /// Returns a vec of (task_id, title, status) tuples for all child tasks
-    /// that are in an open status (not completed, closed, or cancelled).
+    /// Returns a vec of (task_id, title, status) tuples for all direct child
+    /// tasks that are in an open status (not completed, closed, or cancelled).
     ///
     /// # Errors
     ///
     /// Returns an error if the query fails.
     pub fn list_open_child_tasks(&self, parent_task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>> {
-        let children = self.get_children(parent_task_id)?;
-        Ok(children
-            .into_iter()
-            .filter(|c| is_open_task_status(c.status))
-            .map(|c| (c.task_id, c.title, c.status))
-            .collect())
+        // Single query instead of get_children + in-process filter to avoid
+        // the extra round-trip of ensure_task_exists + full children fetch.
+        let mut stmt = self.conn.prepare(
+            r"
+            SELECT task_id, title, status
+            FROM tasks
+            WHERE parent_task_id = ?1
+              AND status NOT IN ('completed', 'closed', 'cancelled')
+            ORDER BY created_at ASC, task_id ASC
+            ",
+        )?;
+        let rows = stmt.query_map([parent_task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let (id, title, status_str) = row?;
+            let status = parse_enum_value::<TaskStatus>(&status_str, 2)?;
+            result.push((id, title, status));
+        }
+        Ok(result)
     }
 }
 
