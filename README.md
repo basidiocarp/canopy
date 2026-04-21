@@ -67,6 +67,9 @@ canopy task assign <task_id> --agent-id will
 
 # Inspect what needs attention
 canopy api snapshot --preset attention
+
+# Quick agent and task snapshot
+canopy situation --agent-id will
 ```
 
 ---
@@ -148,8 +151,10 @@ canopy (single binary)
 canopy agent register ...   register an agent identity
 canopy task create ...      create work
 canopy task assign ...      assign ownership
+canopy task complete ...    mark task done (fails if children are open)
 canopy handoff create ...   request review or transfer work
-canopy api snapshot ...     render operator views
+canopy situation ...        view current agent and task snapshot
+canopy api snapshot ...     render operator views with filtering
 canopy serve                expose MCP tools
 ```
 
