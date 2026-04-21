@@ -4,7 +4,8 @@ use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
     CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
     OutcomeSummaryRow, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
-    TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord, ToolAdoptionScore,
+    TaskRelationshipKind, TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord,
+    ToolAdoptionScore,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -147,6 +148,13 @@ pub trait TaskRelationshipStore {
         &self,
         project_root: Option<&str>,
     ) -> StoreResult<Vec<TaskRelationship>>;
+    fn add_task_relationship(
+        &self,
+        source_task_id: &str,
+        target_task_id: &str,
+        kind: TaskRelationshipKind,
+        created_by: &str,
+    ) -> StoreResult<TaskRelationship>;
 }
 
 #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
@@ -582,6 +590,16 @@ impl TaskRelationshipStore for super::Store {
         project_root: Option<&str>,
     ) -> StoreResult<Vec<TaskRelationship>> {
         self.list_task_relationships_for_project(project_root)
+    }
+
+    fn add_task_relationship(
+        &self,
+        source_task_id: &str,
+        target_task_id: &str,
+        kind: TaskRelationshipKind,
+        created_by: &str,
+    ) -> StoreResult<TaskRelationship> {
+        self.add_task_relationship(source_task_id, target_task_id, kind, created_by)
     }
 }
 

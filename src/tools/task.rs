@@ -10,8 +10,8 @@
 
 use crate::api::{self, SnapshotOptions};
 use crate::models::{
-    AgentRole, SnapshotPreset, TaskAction, TaskPriority, TaskRelationshipRole, TaskSeverity,
-    TaskStatus,
+    AgentRole, SnapshotPreset, TaskAction, TaskPriority, TaskRelationshipKind,
+    TaskRelationshipRole, TaskSeverity, TaskStatus,
 };
 use crate::store::{
     CanopyStore, EvidenceLinkRefs, TaskCreationOptions, TaskGetStore, TaskStatusUpdate,
@@ -125,10 +125,21 @@ pub fn tool_task_decompose(
         };
 
         // Resolve blocked_by based on depends_on_index
+        // Note: Each subtask supports at most one dependency (depends_on_index is a single integer, not an array).
+        // This is intentional: decomposition creates a dependency chain, not a DAG.
         let mut blocked_by = Vec::new();
         if let Some(dep_index) = item.get("depends_on_index").and_then(Value::as_u64) {
             if let Some(dep) = usize::try_from(dep_index).ok().and_then(|i| created.get(i)) {
                 blocked_by.push(dep.task_id.clone());
+                // Persist the Blocks relationship: prior subtask (source) blocks new subtask (target)
+                if let Err(e) = store.add_task_relationship(
+                    &dep.task_id,
+                    &task.task_id,
+                    TaskRelationshipKind::Blocks,
+                    agent_id,
+                ) {
+                    return ToolResult::error(format!("failed to persist dependency relationship: {e}"));
+                }
             }
         }
 
