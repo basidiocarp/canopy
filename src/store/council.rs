@@ -314,44 +314,47 @@ impl Store {
     ) -> StoreResult<CouncilSession> {
         self.ensure_task_exists_by_session(session_id)?;
 
-        let current_state: String = self
-            .conn
-            .query_row(
-                "SELECT state FROM council_sessions WHERE council_session_id = ?1",
+        let task_id = self.in_transaction(|conn| {
+            let current_state: String = conn
+                .query_row(
+                    "SELECT state FROM council_sessions WHERE council_session_id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .map_err(|_| {
+                    StoreError::Validation(format!("council session not found: {session_id}"))
+                })?;
+
+            if current_state == CouncilSessionState::Closed.to_string() {
+                return Err(StoreError::Validation(format!(
+                    "council session {session_id} is already closed"
+                )));
+            }
+
+            conn.execute(
+                r"
+                UPDATE council_sessions
+                SET state = ?1,
+                    closed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP,
+                    session_summary = COALESCE(?2, session_summary)
+                WHERE council_session_id = ?3
+                ",
+                params![
+                    CouncilSessionState::Closed.to_string(),
+                    outcome,
+                    session_id,
+                ],
+            )?;
+
+            let task_id: String = conn.query_row(
+                "SELECT task_id FROM council_sessions WHERE council_session_id = ?1",
                 [session_id],
                 |row| row.get(0),
-            )
-            .map_err(|_| {
-                StoreError::Validation(format!("council session not found: {session_id}"))
-            })?;
+            )?;
 
-        if current_state == CouncilSessionState::Closed.to_string() {
-            return Err(StoreError::Validation(format!(
-                "council session {session_id} is already closed"
-            )));
-        }
-
-        self.conn.execute(
-            r"
-            UPDATE council_sessions
-            SET state = ?1,
-                closed_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP,
-                session_summary = COALESCE(?2, session_summary)
-            WHERE council_session_id = ?3
-            ",
-            params![
-                CouncilSessionState::Closed.to_string(),
-                outcome,
-                session_id,
-            ],
-        )?;
-
-        let task_id: String = self.conn.query_row(
-            "SELECT task_id FROM council_sessions WHERE council_session_id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )?;
+            Ok(task_id)
+        })?;
 
         self.get_council_session(&task_id)?.ok_or_else(|| {
             StoreError::Validation("council session was not found after close".to_string())
@@ -366,44 +369,47 @@ impl Store {
     ///
     /// Returns an error if the session does not exist or the write fails.
     pub fn join_council_session(&self, session_id: &str, agent_id: &str) -> StoreResult<()> {
-        // Fetch current participants JSON.
-        let (task_id, raw_participants_json): (String, String) = self
-            .conn
-            .query_row(
-                "SELECT task_id, participants_json FROM council_sessions WHERE council_session_id = ?1",
-                [session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|_| {
-                StoreError::Validation(format!("council session not found: {session_id}"))
-            })?;
+        let task_id = self.in_transaction(|conn| {
+            // Fetch current participants JSON.
+            let (task_id, raw_participants_json): (String, String) = conn
+                .query_row(
+                    "SELECT task_id, participants_json FROM council_sessions WHERE council_session_id = ?1",
+                    [session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| {
+                    StoreError::Validation(format!("council session not found: {session_id}"))
+                })?;
 
-        let mut participants: Vec<CouncilParticipant> =
-            serde_json::from_str(&raw_participants_json).map_err(|error| {
-                StoreError::Validation(format!("invalid participants JSON: {error}"))
-            })?;
+            let mut participants: Vec<CouncilParticipant> =
+                serde_json::from_str(&raw_participants_json).map_err(|error| {
+                    StoreError::Validation(format!("invalid participants JSON: {error}"))
+                })?;
 
-        // Only add if not already in the roster.
-        let already_present = participants
-            .iter()
-            .any(|p| p.agent_id.as_deref() == Some(agent_id));
-        if !already_present {
-            participants.push(CouncilParticipant {
-                role: CouncilParticipantRole::Reviewer,
-                agent_id: Some(agent_id.to_string()),
-                status: Some(CouncilParticipantStatus::Accepted),
-            });
-        }
+            // Only add if not already in the roster.
+            let already_present = participants
+                .iter()
+                .any(|p| p.agent_id.as_deref() == Some(agent_id));
+            if !already_present {
+                participants.push(CouncilParticipant {
+                    role: CouncilParticipantRole::Reviewer,
+                    agent_id: Some(agent_id.to_string()),
+                    status: Some(CouncilParticipantStatus::Accepted),
+                });
+            }
 
-        let updated_json = participants_json(&participants)?;
-        self.conn.execute(
-            r"
-            UPDATE council_sessions
-            SET participants_json = ?1, updated_at = CURRENT_TIMESTAMP
-            WHERE council_session_id = ?2
-            ",
-            params![updated_json, session_id],
-        )?;
+            let updated_json = participants_json(&participants)?;
+            conn.execute(
+                r"
+                UPDATE council_sessions
+                SET participants_json = ?1, updated_at = CURRENT_TIMESTAMP
+                WHERE council_session_id = ?2
+                ",
+                params![updated_json, session_id],
+            )?;
+
+            Ok(task_id)
+        })?;
 
         super::helpers::touch_task_in_connection(&self.conn, &task_id)?;
         Ok(())
