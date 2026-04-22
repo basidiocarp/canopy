@@ -1,14 +1,14 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
     AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState,
-    ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason, HandoffType,
+    DriftSignals, ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason, HandoffType,
     OperatorAction, OperatorActionKind, OperatorActionTargetKind, ReviewCycleState,
     SnapshotAttentionSummary, SnapshotPreset, SnapshotSlaSummary, Task, TaskAssignment,
     TaskAttention, TaskAttentionReason, TaskDeadlineKind, TaskDeadlineSummary, TaskDetail,
     TaskEvent, TaskEventType, TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary,
     TaskPriority, TaskQueueStatus, TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary,
     TaskSeverity, TaskSlaSummary, TaskSort, TaskStatus, TaskView, TaskWorkflowContext,
-    VerificationState, derive_review_cycle_context,
+    VerificationState, derive_review_cycle_context, EvidenceRef,
 };
 use crate::store::{CanopyStore, StoreError, StoreResult};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
@@ -94,6 +94,56 @@ struct OverdueTaskSlaQueues {
     accepted_handoff_follow_through: bool,
     review_handoff_follow_through: bool,
     review_decision_follow_through: bool,
+}
+
+/// Computes drift signals from evidence references.
+///
+/// Analyzes the evidence stream to detect patterns that indicate workflow degradation:
+/// - High correction rate in recent evidence
+/// - Consecutive test failure events
+/// - Gaps in evidence collection
+fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
+    let high_correction_rate = {
+        // Check the last 50 evidence refs for correction-related labels.
+        let recent = if evidence.len() > 50 {
+            &evidence[evidence.len() - 50..]
+        } else {
+            evidence
+        };
+        let correction_count = recent
+            .iter()
+            .filter(|e| e.label.to_lowercase().contains("correction"))
+            .count();
+        let rate = if recent.is_empty() {
+            0.0
+        } else {
+            correction_count as f64 / recent.len() as f64
+        };
+        rate > 0.30
+    };
+
+    let test_failure_streak = {
+        // Walk evidence refs from newest to oldest, counting consecutive test-failure events.
+        let mut streak = 0u32;
+        for evidence in evidence.iter().rev() {
+            let is_test_failure = evidence.label.to_lowercase().contains("test_failure")
+                || evidence.label.to_lowercase().contains("test-failure");
+            if is_test_failure {
+                streak += 1;
+            } else {
+                break;
+            }
+        }
+        streak
+    };
+
+    let evidence_gap_hours = None; // No created_at timestamp available in evidence_refs table
+
+    DriftSignals {
+        high_correction_rate,
+        test_failure_streak,
+        evidence_gap_hours,
+    }
 }
 
 /// Builds a stable read snapshot for operator surfaces.
@@ -252,6 +302,11 @@ pub fn snapshot(
         &operator_actions,
     );
     let sla_summary = summarize_sla(&filtered_task_sla_summaries);
+    let filtered_evidence: Vec<EvidenceRef> = project_evidence
+        .into_iter()
+        .filter(|evidence| task_ids.contains(&evidence.task_id))
+        .collect();
+    let drift_signals = compute_drift_signals(&filtered_evidence);
 
     Ok(ApiSnapshot {
         schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
@@ -271,10 +326,8 @@ pub fn snapshot(
         handoffs: filtered_handoffs,
         handoff_attention: filtered_handoff_attention,
         operator_actions,
-        evidence: project_evidence
-            .into_iter()
-            .filter(|evidence| task_ids.contains(&evidence.task_id))
-            .collect(),
+        evidence: filtered_evidence,
+        drift_signals,
         relationships,
         relationship_summaries: filtered_relationship_summaries,
         workflow_contexts,

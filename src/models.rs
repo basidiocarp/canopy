@@ -1349,7 +1349,18 @@ pub struct OperatorAction {
     pub expires_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DriftSignals {
+    /// True when correction-event rate in the last 50 evidence refs exceeds 30%.
+    pub high_correction_rate: bool,
+    /// Consecutive test-failure events with no intervening success.
+    pub test_failure_streak: u32,
+    /// Hours since the last evidence ref was attached to any active task.
+    /// `None` when no evidence exists yet.
+    pub evidence_gap_hours: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ApiSnapshot {
     pub schema_version: String,
     pub attention: SnapshotAttentionSummary,
@@ -1369,6 +1380,7 @@ pub struct ApiSnapshot {
     pub handoff_attention: Vec<HandoffAttention>,
     pub operator_actions: Vec<OperatorAction>,
     pub evidence: Vec<EvidenceRef>,
+    pub drift_signals: DriftSignals,
     pub relationships: Vec<TaskRelationship>,
     pub relationship_summaries: Vec<TaskRelationshipSummary>,
     pub workflow_contexts: Vec<TaskWorkflowContext>,
