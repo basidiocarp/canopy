@@ -10,12 +10,14 @@ pub mod notifications;
 mod operator_actions;
 mod orchestration;
 mod outcomes;
+mod policy_events;
 mod relationships;
 mod schema;
 mod tasks;
 pub mod tool_usage;
 mod traits;
 
+pub use policy_events::PolicyEventRow;
 pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
 
 use crate::models::{

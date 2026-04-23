@@ -132,9 +132,19 @@ pub fn dispatch_tool(
 ) -> ToolResult {
     // Policy check: look up the tool's annotations and evaluate the active policy.
     let annotations = policy::annotations_for_tool(name);
-    if let DispatchDecision::FlagForReview { reason } =
-        policy::DispatchPolicy::Default.evaluate(name, annotations)
-    {
+    let decision = policy::DispatchPolicy::Default.evaluate(name, annotations);
+
+    let (decision_str, reason_str) = match &decision {
+        DispatchDecision::Proceed => ("proceed", String::new()),
+        DispatchDecision::FlagForReview { reason } => ("flag", reason.clone()),
+    };
+
+    // Log the policy decision. Best-effort: warn but don't block on failure.
+    if let Err(e) = store.log_policy_event(agent_id, name, decision_str, &reason_str, None) {
+        tracing::warn!(error = %e, tool = name, "failed to log policy event");
+    }
+
+    if let DispatchDecision::FlagForReview { reason } = decision {
         return ToolResult::error(format!("policy blocked: {reason}"));
     }
 

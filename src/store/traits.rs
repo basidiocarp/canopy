@@ -327,6 +327,19 @@ pub trait ToolAdoptionStore {
     fn get_tool_adoption_score(&self, task_id: &str) -> StoreResult<Option<ToolAdoptionScore>>;
 }
 
+/// Policy events logging — records MCP tool dispatch decisions.
+#[allow(clippy::missing_errors_doc)]
+pub trait PolicyEventStore {
+    fn log_policy_event(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+        decision: &str,
+        reason: &str,
+        task_id: Option<&str>,
+    ) -> StoreResult<()>;
+}
+
 pub trait CanopyStore:
     AgentStore
     + TaskGetStore
@@ -343,6 +356,7 @@ pub trait CanopyStore:
     + HeartbeatStore
     + OutcomeStore
     + ToolAdoptionStore
+    + PolicyEventStore
 {
 }
 
@@ -362,6 +376,7 @@ impl<T> CanopyStore for T where
         + HeartbeatStore
         + OutcomeStore
         + ToolAdoptionStore
+        + PolicyEventStore
 {
 }
 
@@ -878,5 +893,40 @@ impl ToolAdoptionStore for super::Store {
 
     fn get_tool_adoption_score(&self, task_id: &str) -> StoreResult<Option<ToolAdoptionScore>> {
         super::tool_usage::load_tool_adoption_score(&self.conn, task_id)
+    }
+}
+
+impl PolicyEventStore for super::Store {
+    fn log_policy_event(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+        decision: &str,
+        reason: &str,
+        task_id: Option<&str>,
+    ) -> StoreResult<()> {
+        use ulid::Ulid;
+
+        let event_id = Ulid::new().to_string();
+        let ts_ms = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
+
+        super::policy_events::log_policy_event(
+            &self.conn,
+            &super::PolicyEventRow {
+                event_id: &event_id,
+                ts_ms,
+                agent_id,
+                tool_name,
+                decision,
+                reason,
+                task_id,
+            },
+        )
     }
 }

@@ -269,6 +269,16 @@ pub(crate) const BASE_SCHEMA: &str = r"
         FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS policy_events (
+        event_id    TEXT PRIMARY KEY,
+        ts          INTEGER NOT NULL,
+        agent_id    TEXT NOT NULL,
+        tool_name   TEXT NOT NULL,
+        decision    TEXT NOT NULL CHECK(decision IN ('proceed', 'flag')),
+        reason      TEXT NOT NULL,
+        task_id     TEXT
+    );
+
     -- Keep tasks.parent_task_id and task_relationships in sync on parent deletion.
     -- When a parent task is deleted, SQLite's FK engine sets children's parent_task_id
     -- to NULL (ON DELETE SET NULL) and cascade-deletes task_relationships rows
@@ -519,6 +529,19 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
               AND target_task_id = OLD.task_id;
         END;
         ",
+    )?;
+
+    // Policy events table for MCP tool dispatch decision logging.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS policy_events (
+            event_id    TEXT PRIMARY KEY,
+            ts          INTEGER NOT NULL,
+            agent_id    TEXT NOT NULL,
+            tool_name   TEXT NOT NULL,
+            decision    TEXT NOT NULL CHECK(decision IN ('proceed', 'flag')),
+            reason      TEXT NOT NULL,
+            task_id     TEXT
+        );",
     )?;
 
     Ok(())
