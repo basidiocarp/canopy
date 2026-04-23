@@ -30,7 +30,7 @@ pub(crate) fn has_open_child_tasks_in_connection(
     Ok(false)
 }
 
-/// Returns (task_id, title, status) for all direct open children of a task.
+/// Returns (`task_id`, title, status) for all direct open children of a task.
 ///
 /// Only direct children are returned (not recursive descendants). This is used
 /// to produce actionable error messages when a parent cannot complete.

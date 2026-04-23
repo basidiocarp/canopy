@@ -4,8 +4,8 @@ use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
     CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
     OutcomeSummaryRow, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
-    TaskRelationshipKind, TaskStatus, TaskSummary, TaskWorkflowContext, WorkflowOutcomeRecord,
-    ToolAdoptionScore,
+    TaskRelationshipKind, TaskStatus, TaskSummary, TaskWorkflowContext, ToolAdoptionScore,
+    WorkflowOutcomeRecord,
 };
 
 use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
@@ -58,7 +58,10 @@ pub trait TaskLookupStore: TaskGetStore {
     fn get_children(&self, task_id: &str) -> StoreResult<Vec<TaskSummary>>;
     fn get_parent_id(&self, task_id: &str) -> StoreResult<Option<String>>;
     fn list_related_tasks(&self, task_id: &str) -> StoreResult<Vec<RelatedTask>>;
-    fn list_open_child_tasks(&self, task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>>;
+    fn list_open_child_tasks(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<(String, String, TaskStatus)>>;
 }
 
 #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
@@ -321,10 +324,7 @@ pub trait ToolAdoptionStore {
         task_id: &str,
         score: &ToolAdoptionScore,
     ) -> StoreResult<()>;
-    fn get_tool_adoption_score(
-        &self,
-        task_id: &str,
-    ) -> StoreResult<Option<ToolAdoptionScore>>;
+    fn get_tool_adoption_score(&self, task_id: &str) -> StoreResult<Option<ToolAdoptionScore>>;
 }
 
 pub trait CanopyStore:
@@ -456,7 +456,10 @@ impl TaskLookupStore for super::Store {
         self.list_related_tasks(task_id)
     }
 
-    fn list_open_child_tasks(&self, task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>> {
+    fn list_open_child_tasks(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<(String, String, TaskStatus)>> {
         self.list_open_child_tasks(task_id)
     }
 }
@@ -873,10 +876,7 @@ impl ToolAdoptionStore for super::Store {
         super::tool_usage::store_tool_adoption_score(&self.conn, task_id, score)
     }
 
-    fn get_tool_adoption_score(
-        &self,
-        task_id: &str,
-    ) -> StoreResult<Option<ToolAdoptionScore>> {
+    fn get_tool_adoption_score(&self, task_id: &str) -> StoreResult<Option<ToolAdoptionScore>> {
         super::tool_usage::load_tool_adoption_score(&self.conn, task_id)
     }
 }

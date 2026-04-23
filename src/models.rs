@@ -1636,7 +1636,7 @@ impl ToolAdoptionScore {
 
 #[cfg(test)]
 mod tests {
-    use super::{capabilities_match, parse_capabilities, ToolAdoptionScore, ToolAdoptionStatus};
+    use super::{ToolAdoptionScore, ToolAdoptionStatus, capabilities_match, parse_capabilities};
 
     #[test]
     fn parse_capabilities_reads_json_arrays_and_falls_back_to_empty() {
@@ -1679,8 +1679,14 @@ mod tests {
     fn score_computes_ratio_correctly() {
         let score = ToolAdoptionScore::compute(
             &[("rhizome_get_definition", "rhizome")],
-            &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome")],
-            &[("rhizome_get_definition", "rhizome"), ("rhizome_find_references", "rhizome")],
+            &[
+                ("rhizome_get_definition", "rhizome"),
+                ("rhizome_find_references", "rhizome"),
+            ],
+            &[
+                ("rhizome_get_definition", "rhizome"),
+                ("rhizome_find_references", "rhizome"),
+            ],
         );
         assert!((score.score - 0.5).abs() < 0.001);
         assert_eq!(score.tools_used, 1);

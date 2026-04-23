@@ -7,13 +7,13 @@ mod files;
 mod handoffs;
 mod helpers;
 pub mod notifications;
-pub mod tool_usage;
 mod operator_actions;
 mod orchestration;
 mod outcomes;
 mod relationships;
 mod schema;
 mod tasks;
+pub mod tool_usage;
 mod traits;
 
 pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
@@ -574,10 +574,11 @@ impl Store {
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub fn list_notifications(&self, include_seen: bool) -> StoreResult<Vec<crate::models::Notification>> {
-        self.in_read_transaction(|conn| {
-            notifications::list_notifications(conn, include_seen)
-        })
+    pub fn list_notifications(
+        &self,
+        include_seen: bool,
+    ) -> StoreResult<Vec<crate::models::Notification>> {
+        self.in_read_transaction(|conn| notifications::list_notifications(conn, include_seen))
     }
 
     /// Marks a notification as seen.
@@ -586,9 +587,7 @@ impl Store {
     ///
     /// Returns an error if the write fails.
     pub fn mark_notification_seen(&self, notification_id: &str) -> StoreResult<()> {
-        self.in_transaction(|conn| {
-            notifications::mark_seen(conn, notification_id)
-        })
+        self.in_transaction(|conn| notifications::mark_seen(conn, notification_id))
     }
 
     /// Marks all unseen notifications as seen in a single update.
@@ -598,10 +597,7 @@ impl Store {
     /// Returns an error if the update fails.
     pub fn mark_all_notifications_seen(&self) -> StoreResult<usize> {
         self.in_transaction(|conn| {
-            let count = conn.execute(
-                "UPDATE notifications SET seen = 1 WHERE seen = 0",
-                [],
-            )?;
+            let count = conn.execute("UPDATE notifications SET seen = 1 WHERE seen = 0", [])?;
             Ok(count)
         })
     }

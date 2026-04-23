@@ -1,7 +1,7 @@
 #![allow(clippy::wildcard_imports)]
 
-use crate::models::{Notification, NotificationEventType};
 use super::*;
+use crate::models::{Notification, NotificationEventType};
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn create_task_in_connection(

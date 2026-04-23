@@ -65,9 +65,7 @@ fn tool_task_decompose_persists_relationship_on_dependency() {
 
     let reverse_relationship = second_relationships
         .iter()
-        .find(|rel| {
-            rel.source_task_id == first_task_id && rel.target_task_id == second_task_id
-        })
+        .find(|rel| rel.source_task_id == first_task_id && rel.target_task_id == second_task_id)
         .expect("should find relationship from second task's query");
 
     assert_eq!(reverse_relationship.kind, TaskRelationshipKind::Blocks);

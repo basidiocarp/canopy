@@ -19,6 +19,7 @@ use crate::store::{
 use crate::tools::{ToolResult, get_bool, get_str, get_string_array, validate_required_string};
 use serde::Serialize;
 use serde_json::Value;
+use std::fmt::Write;
 use std::str::FromStr;
 
 /// Create a new task.
@@ -138,7 +139,9 @@ pub fn tool_task_decompose(
                     TaskRelationshipKind::Blocks,
                     agent_id,
                 ) {
-                    return ToolResult::error(format!("failed to persist dependency relationship: {e}"));
+                    return ToolResult::error(format!(
+                        "failed to persist dependency relationship: {e}"
+                    ));
                 }
             }
         }
@@ -337,8 +340,9 @@ pub fn tool_task_update_status(
 /// completion criteria before allowing the transition. Tasks without a
 /// handoff path bypass the check for backward compatibility.
 ///
-/// If `verification_required=true`, checks for passing ScriptVerification evidence
+/// If `verification_required=true`, checks for passing `ScriptVerification` evidence
 /// before allowing completion. Can be overridden with `--force`.
+#[allow(clippy::too_many_lines)]
 pub fn tool_task_complete(
     store: &(impl CanopyStore + ?Sized),
     agent_id: &str,
@@ -379,13 +383,15 @@ pub fn tool_task_complete(
     };
 
     if task_record.verification_required && !force {
-        let evidence = match store.list_evidence(task_id) {
-            Ok(e) => e,
-            Err(_) => vec![],
-        };
+        let evidence: Vec<_> = store.list_evidence(task_id).unwrap_or_default();
         let has_passing_verification = evidence.iter().any(|e| {
-            matches!(e.source_kind, crate::models::EvidenceSourceKind::ScriptVerification)
-                && e.summary.as_deref().map_or(false, |s| s.contains("script verification passed"))
+            matches!(
+                e.source_kind,
+                crate::models::EvidenceSourceKind::ScriptVerification
+            ) && e
+                .summary
+                .as_deref()
+                .is_some_and(|s| s.contains("script verification passed"))
         });
         if !has_passing_verification {
             return ToolResult::error(format!(
@@ -408,7 +414,7 @@ pub fn tool_task_complete(
         if !open_children.is_empty() {
             let mut child_list = String::new();
             for (child_id, child_title, child_status) in &open_children {
-                child_list.push_str(&format!("  {}  {}  [{}]\n", child_id, child_title, child_status));
+                let _ = writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
             }
             return ToolResult::error(format!(
                 "task {task_id} has {} open sub-task(s).\n\n\
@@ -416,7 +422,8 @@ pub fn tool_task_complete(
                  Open sub-tasks:\n{}\n\
                  To override:\n  \
                  canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force",
-                open_children.len(), child_list
+                open_children.len(),
+                child_list
             ));
         }
     }

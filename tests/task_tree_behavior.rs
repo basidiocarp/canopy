@@ -30,7 +30,7 @@ fn complete_parent_with_open_children_is_rejected() {
     let parent = store
         .create_task("Parent", None, "operator", "/tmp/proj", None)
         .expect("create parent");
-    let _child = store
+    let child = store
         .create_subtask(&parent.task_id, "Open child", None, "operator", None)
         .expect("create child");
 
@@ -60,7 +60,7 @@ fn complete_parent_with_open_children_is_rejected() {
     );
     // The error message must include the child's task_id so MCP callers can act on it.
     assert!(
-        msg.contains(&_child.task_id),
+        msg.contains(&child.task_id),
         "error should include blocking child task_id: {msg}"
     );
 }

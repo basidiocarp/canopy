@@ -63,10 +63,7 @@ pub fn insert_notification(conn: &Connection, notification: &Notification) -> St
 /// # Errors
 ///
 /// Returns an error if the query or row mapping fails.
-pub fn list_notifications(
-    conn: &Connection,
-    include_seen: bool,
-) -> StoreResult<Vec<Notification>> {
+pub fn list_notifications(conn: &Connection, include_seen: bool) -> StoreResult<Vec<Notification>> {
     let sql = if include_seen {
         r"
         SELECT notification_id, event_type, task_id, agent_id, payload, seen, created_at
@@ -207,13 +204,7 @@ mod tests {
 
         // Create a task via the store
         let task = store
-            .create_task(
-                "Test Task",
-                None,
-                "test-user",
-                ".",
-                None,
-            )
+            .create_task("Test Task", None, "test-user", ".", None)
             .expect("create task");
 
         // Transition to InProgress first (allowed from Open)
@@ -260,6 +251,9 @@ mod tests {
         insert_notification(&conn, &notif).expect("insert block notification");
 
         let rows = list_notifications(&conn, true).expect("list all notifications");
-        assert!(rows.iter().any(|n| n.event_type == NotificationEventType::TaskBlocked));
+        assert!(
+            rows.iter()
+                .any(|n| n.event_type == NotificationEventType::TaskBlocked)
+        );
     }
 }

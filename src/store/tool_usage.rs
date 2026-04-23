@@ -1,5 +1,5 @@
-use crate::models::ToolAdoptionScore;
 use super::StoreResult;
+use crate::models::ToolAdoptionScore;
 use rusqlite::Connection;
 
 /// Stores a tool adoption score linked to a task.

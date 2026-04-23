@@ -28,6 +28,7 @@ use spore::logging::{
     workflow_span,
 };
 use spore::{Tool, discover};
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,11 +44,10 @@ pub fn run() -> Result<()> {
             .with_output(LogOutput::Stderr)
             .with_span_events(SpanEvents::Lifecycle),
     );
-    let _telemetry = spore::telemetry::init_tracer("canopy")
-        .unwrap_or_else(|e| {
-            tracing::debug!("OTel init skipped: {}", e);
-            spore::telemetry::TelemetryInit::disabled("canopy")
-        });
+    let _telemetry = spore::telemetry::init_tracer("canopy").unwrap_or_else(|e| {
+        tracing::debug!("OTel init skipped: {}", e);
+        spore::telemetry::TelemetryInit::disabled("canopy")
+    });
     let span_context = command_span_context(&cli);
     let _root_span = root_span(&span_context).entered();
     let _workflow_span = workflow_span(command_name(&cli.command), &span_context).entered();
@@ -325,12 +325,13 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 let relationships = store.list_task_relationships(None)?;
 
                 // Build parent->child map
-                let mut children_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                let mut children_map: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
                 for rel in &relationships {
                     if rel.kind == TaskRelationshipKind::Parent {
                         children_map
                             .entry(rel.target_task_id.clone())
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(rel.source_task_id.clone());
                     }
                 }
@@ -349,10 +350,17 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 for (idx, root_id) in root_ids.iter().enumerate() {
                     let is_last = idx == root_ids.len() - 1;
                     if let Some(root_task) = tasks.iter().find(|t| t.task_id == *root_id) {
-                        render_task_tree(&mut output, root_task, &tasks, &children_map, "", is_last);
+                        render_task_tree(
+                            &mut output,
+                            root_task,
+                            &tasks,
+                            &children_map,
+                            "",
+                            is_last,
+                        );
                     }
                 }
-                println!("{}", output);
+                println!("{output}");
             } else {
                 print_json(&store.list_tasks()?)?;
             }
@@ -483,17 +491,18 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 let evidence = store.list_evidence(&task_id).unwrap_or_default();
                 let has_passing_verification = evidence.iter().any(|e| {
                     matches!(e.source_kind, EvidenceSourceKind::ScriptVerification)
-                        && e.summary.as_deref().map_or(false, |s| s.contains("script verification passed"))
+                        && e.summary
+                            .as_deref()
+                            .is_some_and(|s| s.contains("script verification passed"))
                 });
                 if !has_passing_verification {
                     return Err(anyhow::anyhow!(
-                        "task {} requires script verification before completion.\n\n\
+                        "task {task_id} requires script verification before completion.\n\n\
                          Attach a passing verification result:\n  \
-                         canopy evidence add --task-id {} --source-kind script_verification \\\n    \
+                         canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
                          --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
                          Or override (operators only):\n  \
-                         canopy task complete {} --agent-id {} --summary '{}' --force",
-                        task_id, task_id, task_id, agent_id, summary
+                         canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force"
                     ));
                 }
             }
@@ -504,15 +513,16 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 if !open_children.is_empty() {
                     let mut child_list = String::new();
                     for (child_id, child_title, child_status) in &open_children {
-                        child_list.push_str(&format!("  {}  {}  [{}]\n", child_id, child_title, child_status));
+                        let _ =
+                            writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
                     }
                     return Err(anyhow::anyhow!(
-                        "task {} has {} open sub-task(s).\n\n\
+                        "task {task_id} has {} open sub-task(s).\n\n\
                          Complete or cancel all sub-tasks first, or use --force to override.\n\n\
-                         Open sub-tasks:\n{}\n\
+                         Open sub-tasks:\n{child_list}\n\
                          To override:\n  \
-                         canopy task complete {} --agent-id {} --summary '{}' --force",
-                        task_id, open_children.len(), child_list, task_id, agent_id, summary
+                         canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force",
+                        open_children.len()
                     ));
                 }
             }
@@ -549,7 +559,12 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 )?;
             }
 
-            if force && !store.list_open_child_tasks(&task_id).unwrap_or_default().is_empty() {
+            if force
+                && !store
+                    .list_open_child_tasks(&task_id)
+                    .unwrap_or_default()
+                    .is_empty()
+            {
                 store.add_evidence(
                     &task_id,
                     EvidenceSourceKind::ManualNote,
@@ -577,10 +592,11 @@ fn render_task_tree(
 ) {
     // Add current task
     let current_prefix = if is_last { "└─ " } else { "├─ " };
-    output.push_str(&format!(
-        "{}{}{} [{}]      {}\n",
-        prefix, current_prefix, task.task_id, task.status, task.title
-    ));
+    let _ = writeln!(
+        output,
+        "{prefix}{current_prefix}{} [{}]      {}",
+        task.task_id, task.status, task.title
+    );
 
     // Add children
     if let Some(child_ids) = children_map.get(&task.task_id) {
@@ -588,7 +604,14 @@ fn render_task_tree(
         for (idx, child_id) in child_ids.iter().enumerate() {
             if let Some(child_task) = all_tasks.iter().find(|t| &t.task_id == child_id) {
                 let is_last_child = idx == child_ids.len() - 1;
-                render_task_tree(output, child_task, all_tasks, children_map, &format!("{}{}", prefix, next_prefix), is_last_child);
+                render_task_tree(
+                    output,
+                    child_task,
+                    all_tasks,
+                    children_map,
+                    &format!("{prefix}{next_prefix}"),
+                    is_last_child,
+                );
             }
         }
     }
@@ -1577,10 +1600,7 @@ fn emit_council_record_artifact(session: &CouncilSession) {
         }
     };
 
-    let topic = format!(
-        "artifact/council_record/{}",
-        session.council_session_id
-    );
+    let topic = format!("artifact/council_record/{}", session.council_session_id);
 
     let Some(info) = discover(Tool::Hyphae) else {
         warn!("hyphae binary not found; skipping council_record artifact emission");
@@ -1892,7 +1912,10 @@ fn handle_notification_command(store: &Store, command: NotificationCommand) -> R
             } else {
                 for n in &notifs {
                     let read_mark = if n.seen { "[read]" } else { "[unread]" };
-                    println!("{} {} {} {}", read_mark, n.notification_id, n.event_type, n.created_at);
+                    println!(
+                        "{} {} {} {}",
+                        read_mark, n.notification_id, n.event_type, n.created_at
+                    );
                 }
             }
             Ok(())
@@ -2148,7 +2171,9 @@ Implement the second step.
         assert_eq!(value["opened_at"], "2026-04-15T10:00:00Z");
         assert_eq!(value["closed_at"], "2026-04-15T11:00:00Z");
 
-        let parts = value["participants"].as_array().expect("participants array");
+        let parts = value["participants"]
+            .as_array()
+            .expect("participants array");
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0]["role"], "reviewer");
         assert_eq!(parts[0]["agent_id"], "agent-alpha");

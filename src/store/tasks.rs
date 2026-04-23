@@ -17,9 +17,9 @@ use super::{
     TaskOperatorActionInput, TaskStatusUpdate, TaskTriageUpdate,
 };
 use crate::models::{
-    AgentRole, HandoffStatus, HandoffType, Notification, NotificationEventType, OperatorActionKind, Task, TaskAction, TaskEventType,
-    TaskRelationship, TaskRelationshipRole, TaskStatus, TaskSummary, VerificationState,
-    capabilities_match, derive_review_cycle_context,
+    AgentRole, HandoffStatus, HandoffType, Notification, NotificationEventType, OperatorActionKind,
+    Task, TaskAction, TaskEventType, TaskRelationship, TaskRelationshipRole, TaskStatus,
+    TaskSummary, VerificationState, capabilities_match, derive_review_cycle_context,
 };
 
 use super::helpers::{handoff_is_expired, parse_enum_value};
@@ -1268,13 +1268,16 @@ impl Store {
 
     /// Lists open child tasks for a given parent task.
     ///
-    /// Returns a vec of (task_id, title, status) tuples for all direct child
+    /// Returns a vec of (`task_id`, title, status) tuples for all direct child
     /// tasks that are in an open status (not completed, closed, or cancelled).
     ///
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    pub fn list_open_child_tasks(&self, parent_task_id: &str) -> StoreResult<Vec<(String, String, TaskStatus)>> {
+    pub fn list_open_child_tasks(
+        &self,
+        parent_task_id: &str,
+    ) -> StoreResult<Vec<(String, String, TaskStatus)>> {
         // Single query instead of get_children + in-process filter to avoid
         // the extra round-trip of ensure_task_exists + full children fetch.
         let mut stmt = self.conn.prepare(

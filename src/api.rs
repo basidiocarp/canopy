@@ -1,14 +1,14 @@
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
-    AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState,
-    DriftSignals, ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason, HandoffType,
-    OperatorAction, OperatorActionKind, OperatorActionTargetKind, ReviewCycleState,
+    AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState, DriftSignals,
+    EvidenceRef, ExecutionActionKind, Freshness, Handoff, HandoffAttention, HandoffAttentionReason,
+    HandoffType, OperatorAction, OperatorActionKind, OperatorActionTargetKind, ReviewCycleState,
     SnapshotAttentionSummary, SnapshotPreset, SnapshotSlaSummary, Task, TaskAssignment,
     TaskAttention, TaskAttentionReason, TaskDeadlineKind, TaskDeadlineSummary, TaskDetail,
     TaskEvent, TaskEventType, TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary,
     TaskPriority, TaskQueueStatus, TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary,
     TaskSeverity, TaskSlaSummary, TaskSort, TaskStatus, TaskView, TaskWorkflowContext,
-    VerificationState, derive_review_cycle_context, EvidenceRef,
+    VerificationState, derive_review_cycle_context,
 };
 use crate::store::{CanopyStore, StoreError, StoreResult};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
@@ -117,7 +117,10 @@ fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
         let rate = if recent.is_empty() {
             0.0
         } else {
-            correction_count as f64 / recent.len() as f64
+            #[allow(clippy::cast_precision_loss)]
+            {
+                correction_count as f64 / recent.len() as f64
+            }
         };
         rate > 0.30
     };

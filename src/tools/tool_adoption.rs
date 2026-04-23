@@ -3,10 +3,10 @@
 //! Provides one MCP tool:
 //! - `canopy_record_tool_usage` — parse and store a `tool-usage-event-v1` JSON blob
 
-use serde_json::{json, Value};
 use crate::models::ToolAdoptionScore;
 use crate::store::CanopyStore;
 use crate::tools::ToolResult;
+use serde_json::{Value, json};
 
 /// Represents a tool entry from the tool-usage-event-v1 payload.
 #[derive(Debug, Clone)]
@@ -29,9 +29,7 @@ pub fn tool_record_tool_usage(
         match serde_json::from_str(s) {
             Ok(obj) => obj,
             Err(e) => {
-                return ToolResult::error(format!(
-                    "failed to parse 'json' parameter as JSON: {e}"
-                ))
+                return ToolResult::error(format!("failed to parse 'json' parameter as JSON: {e}"));
             }
         }
     } else if let Some(obj) = args.get("json_object") {
@@ -84,20 +82,19 @@ pub fn tool_record_tool_usage(
     all_relevant.extend(called_tuples.iter().copied());
 
     // Compute the adoption score
-    let adoption_score = ToolAdoptionScore::compute(&called_tuples, &all_relevant, &available_tuples);
+    let adoption_score =
+        ToolAdoptionScore::compute(&called_tuples, &all_relevant, &available_tuples);
 
     // Store it
     match store.record_tool_adoption_score(task_id, &adoption_score) {
-        Ok(()) => {
-            ToolResult::json(&json!({
-                "message": "tool adoption score computed and stored",
-                "task_id": task_id,
-                "score": adoption_score.score,
-                "tools_used": adoption_score.tools_used,
-                "tools_relevant": adoption_score.tools_relevant,
-                "tools_available": adoption_score.tools_available,
-            }))
-        }
+        Ok(()) => ToolResult::json(&json!({
+            "message": "tool adoption score computed and stored",
+            "task_id": task_id,
+            "score": adoption_score.score,
+            "tools_used": adoption_score.tools_used,
+            "tools_relevant": adoption_score.tools_relevant,
+            "tools_available": adoption_score.tools_available,
+        })),
         Err(e) => ToolResult::error(format!(
             "failed to store tool adoption score for task {task_id}: {e}"
         )),

@@ -343,11 +343,7 @@ impl Store {
                     session_summary = COALESCE(?2, session_summary)
                 WHERE council_session_id = ?3
                 ",
-                params![
-                    CouncilSessionState::Closed.to_string(),
-                    outcome,
-                    session_id,
-                ],
+                params![CouncilSessionState::Closed.to_string(), outcome, session_id,],
             )?;
 
             let task_id: String = conn.query_row(
@@ -423,10 +419,7 @@ impl Store {
     /// # Errors
     ///
     /// Returns an error if the task does not exist or the query fails.
-    pub fn get_open_council_sessions(
-        &self,
-        task_id: &str,
-    ) -> StoreResult<Vec<CouncilSession>> {
+    pub fn get_open_council_sessions(&self, task_id: &str) -> StoreResult<Vec<CouncilSession>> {
         self.ensure_task_exists(task_id)?;
         let raw_rows = {
             let mut stmt = self.conn.prepare(
@@ -802,9 +795,7 @@ mod tests {
     fn get_open_council_sessions_excludes_closed() {
         let store = test_store();
         let task_id = seed_task(&store, "agent-12");
-        let session = store
-            .open_council_session(&task_id)
-            .expect("open");
+        let session = store.open_council_session(&task_id).expect("open");
 
         let open = store
             .get_open_council_sessions(&task_id)
