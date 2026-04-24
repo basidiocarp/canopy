@@ -1,6 +1,7 @@
 mod agents;
 mod assignments;
 mod council;
+mod dag;
 mod events;
 mod evidence;
 mod files;
@@ -17,6 +18,10 @@ mod tasks;
 pub mod tool_usage;
 mod traits;
 
+pub use dag::{
+    DagEdge, DagGraph, DagNode, add_edge, add_node, create_graph, get_ready_nodes,
+    update_node_status,
+};
 pub use policy_events::PolicyEventRow;
 pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
 
@@ -522,7 +527,6 @@ impl Store {
     }
 
     /// Read-only transaction using BEGIN DEFERRED (no write lock).
-    #[allow(dead_code)]
     fn in_read_transaction<T, F>(&self, f: F) -> StoreResult<T>
     where
         F: FnOnce(&Connection) -> StoreResult<T>,
@@ -602,6 +606,56 @@ impl Store {
             let count = conn.execute("UPDATE notifications SET seen = 1 WHERE seen = 0", [])?;
             Ok(count)
         })
+    }
+
+    /// Create a new DAG task graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn dag_create_graph(&self, graph: &dag::DagGraph) -> StoreResult<()> {
+        self.in_transaction(|conn| dag::create_graph(conn, graph))
+    }
+
+    /// Add a node to a DAG graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn dag_add_node(&self, node: &dag::DagNode) -> StoreResult<()> {
+        self.in_transaction(|conn| dag::add_node(conn, node))
+    }
+
+    /// Add an edge (dependency) between two nodes in a DAG graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn dag_add_edge(&self, edge: &dag::DagEdge) -> StoreResult<()> {
+        self.in_transaction(|conn| dag::add_edge(conn, edge))
+    }
+
+    /// Get all nodes in a graph that are ready to run (no blocking dependencies).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn dag_get_ready_nodes(&self, graph_id: &str) -> StoreResult<Vec<dag::DagNode>> {
+        self.in_read_transaction(|conn| dag::get_ready_nodes(conn, graph_id))
+    }
+
+    /// Update a node's status and optionally its completion time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails.
+    pub fn dag_update_node_status(
+        &self,
+        node_id: &str,
+        status: &str,
+        completed_at: Option<i64>,
+    ) -> StoreResult<()> {
+        self.in_transaction(|conn| dag::update_node_status(conn, node_id, status, completed_at))
     }
 }
 

@@ -279,6 +279,37 @@ pub(crate) const BASE_SCHEMA: &str = r"
         task_id     TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS dag_graphs (
+        graph_id    TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'open'
+                        CHECK(status IN ('open', 'complete', 'failed')),
+        created_at  INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dag_nodes (
+        node_id      TEXT PRIMARY KEY,
+        graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
+        label        TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'pending'
+                         CHECK(status IN ('pending', 'ready', 'running', 'complete', 'failed')),
+        task_id      TEXT,
+        created_at   INTEGER NOT NULL,
+        completed_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS dag_edges (
+        edge_id      TEXT PRIMARY KEY,
+        graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
+        from_node_id TEXT NOT NULL REFERENCES dag_nodes(node_id),
+        to_node_id   TEXT NOT NULL REFERENCES dag_nodes(node_id),
+        edge_type    TEXT NOT NULL DEFAULT 'blocks'
+                         CHECK(edge_type IN ('blocks', 'informs'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dag_nodes_graph ON dag_nodes(graph_id);
+    CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
+
     -- Keep tasks.parent_task_id and task_relationships in sync on parent deletion.
     -- When a parent task is deleted, SQLite's FK engine sets children's parent_task_id
     -- to NULL (ON DELETE SET NULL) and cascade-deletes task_relationships rows
@@ -542,6 +573,39 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
             reason      TEXT NOT NULL,
             task_id     TEXT
         );",
+    )?;
+
+    // DAG-based task graph tables
+    conn.execute_batch(
+        r"
+        CREATE TABLE IF NOT EXISTS dag_graphs (
+            graph_id    TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'open'
+                            CHECK(status IN ('open', 'complete', 'failed')),
+            created_at  INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS dag_nodes (
+            node_id      TEXT PRIMARY KEY,
+            graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
+            label        TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending'
+                             CHECK(status IN ('pending', 'ready', 'running', 'complete', 'failed')),
+            task_id      TEXT,
+            created_at   INTEGER NOT NULL,
+            completed_at INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS dag_edges (
+            edge_id      TEXT PRIMARY KEY,
+            graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
+            from_node_id TEXT NOT NULL REFERENCES dag_nodes(node_id),
+            to_node_id   TEXT NOT NULL REFERENCES dag_nodes(node_id),
+            edge_type    TEXT NOT NULL DEFAULT 'blocks'
+                             CHECK(edge_type IN ('blocks', 'informs'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_dag_nodes_graph ON dag_nodes(graph_id);
+        CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
+        ",
     )?;
 
     Ok(())

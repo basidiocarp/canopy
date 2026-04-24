@@ -1066,6 +1066,106 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
     ));
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // DAG Task Graph (5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_dag_create",
+        "Create a new DAG task graph. Returns a graph_id that must be passed to subsequent dag calls.",
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable name for this task graph"
+                }
+            },
+            "required": ["name"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_dag_add_node",
+        "Add a node to a DAG graph. Returns a node_id. Nodes represent work items in the graph.",
+        json!({
+            "type": "object",
+            "properties": {
+                "graph_id": {
+                    "type": "string",
+                    "description": "The graph_id returned by canopy_dag_create"
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Human-readable label for this node"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional task_id to associate with this node"
+                }
+            },
+            "required": ["graph_id", "label"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_dag_add_edge",
+        "Add a dependency edge between two nodes in a DAG graph. Use edge_type 'blocks' (default) to gate a node on its predecessors, or 'informs' for a non-blocking informational link.",
+        json!({
+            "type": "object",
+            "properties": {
+                "graph_id": {
+                    "type": "string",
+                    "description": "The graph_id returned by canopy_dag_create"
+                },
+                "from_node_id": {
+                    "type": "string",
+                    "description": "The source node_id (the dependency)"
+                },
+                "to_node_id": {
+                    "type": "string",
+                    "description": "The target node_id (the dependent)"
+                },
+                "edge_type": {
+                    "type": "string",
+                    "enum": ["blocks", "informs"],
+                    "description": "Dependency type: 'blocks' gates the target on the source; 'informs' is non-blocking"
+                }
+            },
+            "required": ["graph_id", "from_node_id", "to_node_id"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_dag_ready_nodes",
+        "Get all nodes in a graph that are ready to run — status 'pending' with all blocking predecessors complete.",
+        json!({
+            "type": "object",
+            "properties": {
+                "graph_id": {
+                    "type": "string",
+                    "description": "The graph_id returned by canopy_dag_create"
+                }
+            },
+            "required": ["graph_id"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_dag_complete_node",
+        "Mark a node as complete, freeing any nodes it blocks. Returns the node_id and updated status.",
+        json!({
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "string",
+                    "description": "The node_id to mark complete"
+                }
+            },
+            "required": ["node_id"]
+        }),
+    ));
+
     tools
 }
 

@@ -8,7 +8,9 @@ use crate::models::{
     WorkflowOutcomeRecord,
 };
 
-use super::{EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate};
+use super::{
+    EvidenceLinkRefs, HandoffTiming, StoreResult, TaskCreationOptions, TaskStatusUpdate, dag,
+};
 
 #[allow(clippy::missing_errors_doc)]
 pub trait AgentStore {
@@ -340,6 +342,20 @@ pub trait PolicyEventStore {
     ) -> StoreResult<()>;
 }
 
+#[allow(clippy::missing_errors_doc)]
+pub trait DagStore {
+    fn dag_create_graph(&self, graph: &dag::DagGraph) -> StoreResult<()>;
+    fn dag_add_node(&self, node: &dag::DagNode) -> StoreResult<()>;
+    fn dag_add_edge(&self, edge: &dag::DagEdge) -> StoreResult<()>;
+    fn dag_get_ready_nodes(&self, graph_id: &str) -> StoreResult<Vec<dag::DagNode>>;
+    fn dag_update_node_status(
+        &self,
+        node_id: &str,
+        status: &str,
+        completed_at: Option<i64>,
+    ) -> StoreResult<()>;
+}
+
 pub trait CanopyStore:
     AgentStore
     + TaskGetStore
@@ -357,6 +373,7 @@ pub trait CanopyStore:
     + OutcomeStore
     + ToolAdoptionStore
     + PolicyEventStore
+    + DagStore
 {
 }
 
@@ -377,6 +394,7 @@ impl<T> CanopyStore for T where
         + OutcomeStore
         + ToolAdoptionStore
         + PolicyEventStore
+        + DagStore
 {
 }
 
@@ -928,5 +946,32 @@ impl PolicyEventStore for super::Store {
                 task_id,
             },
         )
+    }
+}
+
+impl DagStore for super::Store {
+    fn dag_create_graph(&self, graph: &dag::DagGraph) -> StoreResult<()> {
+        self.dag_create_graph(graph)
+    }
+
+    fn dag_add_node(&self, node: &dag::DagNode) -> StoreResult<()> {
+        self.dag_add_node(node)
+    }
+
+    fn dag_add_edge(&self, edge: &dag::DagEdge) -> StoreResult<()> {
+        self.dag_add_edge(edge)
+    }
+
+    fn dag_get_ready_nodes(&self, graph_id: &str) -> StoreResult<Vec<dag::DagNode>> {
+        self.dag_get_ready_nodes(graph_id)
+    }
+
+    fn dag_update_node_status(
+        &self,
+        node_id: &str,
+        status: &str,
+        completed_at: Option<i64>,
+    ) -> StoreResult<()> {
+        self.dag_update_node_status(node_id, status, completed_at)
     }
 }

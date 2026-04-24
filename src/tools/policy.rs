@@ -128,7 +128,8 @@ pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
         | "canopy_outcome_list"
         | "canopy_outcome_show"
         | "canopy_outcome_summary"
-        | "canopy_check_handoff_completeness" => ToolAnnotations {
+        | "canopy_check_handoff_completeness"
+        | "canopy_dag_ready_nodes" => ToolAnnotations {
             read_only_hint: true,
             destructive_hint: false,
             idempotent_hint: true,
@@ -138,7 +139,8 @@ pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
         "canopy_task_complete"
         | "canopy_handoff_complete"
         | "canopy_handoff_reject"
-        | "canopy_task_update_status" => ToolAnnotations {
+        | "canopy_task_update_status"
+        | "canopy_dag_complete_node" => ToolAnnotations {
             read_only_hint: false,
             destructive_hint: true,
             idempotent_hint: false,
@@ -150,7 +152,10 @@ pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
         | "canopy_files_unlock"
         | "canopy_task_claim"
         | "canopy_task_yield"
-        | "canopy_outcome_record" => ToolAnnotations {
+        | "canopy_outcome_record"
+        | "canopy_dag_create"
+        | "canopy_dag_add_node"
+        | "canopy_dag_add_edge" => ToolAnnotations {
             read_only_hint: false,
             destructive_hint: false,
             idempotent_hint: true,
