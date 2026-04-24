@@ -342,6 +342,17 @@ pub trait PolicyEventStore {
     ) -> StoreResult<()>;
 }
 
+/// Persistent permission rules for dispatch gate — one-time operator approvals become reusable rules.
+#[allow(clippy::missing_errors_doc)]
+pub trait PermissionRuleStore {
+    fn lookup_permission_rule(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+    ) -> StoreResult<Option<super::PermissionRule>>;
+    fn upsert_permission_rule(&self, rule: &super::PermissionRule) -> StoreResult<()>;
+}
+
 #[allow(clippy::missing_errors_doc)]
 pub trait DagStore {
     fn dag_create_graph(&self, graph: &dag::DagGraph) -> StoreResult<()>;
@@ -373,6 +384,7 @@ pub trait CanopyStore:
     + OutcomeStore
     + ToolAdoptionStore
     + PolicyEventStore
+    + PermissionRuleStore
     + DagStore
 {
 }
@@ -394,6 +406,7 @@ impl<T> CanopyStore for T where
         + OutcomeStore
         + ToolAdoptionStore
         + PolicyEventStore
+        + PermissionRuleStore
         + DagStore
 {
 }
@@ -946,6 +959,28 @@ impl PolicyEventStore for super::Store {
                 task_id,
             },
         )
+    }
+}
+
+impl PermissionRuleStore for super::Store {
+    fn lookup_permission_rule(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+    ) -> StoreResult<Option<super::PermissionRule>> {
+        let now_ms = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
+
+        self.in_read_transaction(|conn| super::lookup_rule(conn, agent_id, tool_name, now_ms))
+    }
+
+    fn upsert_permission_rule(&self, rule: &super::PermissionRule) -> StoreResult<()> {
+        self.in_transaction(|conn| super::upsert_rule(conn, rule))
     }
 }
 

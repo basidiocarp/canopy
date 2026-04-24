@@ -310,6 +310,20 @@ pub(crate) const BASE_SCHEMA: &str = r"
     CREATE INDEX IF NOT EXISTS idx_dag_nodes_graph ON dag_nodes(graph_id);
     CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
 
+    CREATE TABLE IF NOT EXISTS permission_rules (
+        rule_id     TEXT PRIMARY KEY,
+        agent_id    TEXT NOT NULL,
+        tool_name   TEXT NOT NULL,
+        action      TEXT NOT NULL CHECK(action IN ('allow', 'deny')),
+        scope       TEXT NOT NULL CHECK(scope IN ('session', 'permanent')),
+        reason      TEXT NOT NULL DEFAULT '',
+        created_at  INTEGER NOT NULL,
+        expires_at  INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
+        ON permission_rules(agent_id, tool_name);
+
     -- Keep tasks.parent_task_id and task_relationships in sync on parent deletion.
     -- When a parent task is deleted, SQLite's FK engine sets children's parent_task_id
     -- to NULL (ON DELETE SET NULL) and cascade-deletes task_relationships rows
@@ -605,6 +619,24 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_dag_nodes_graph ON dag_nodes(graph_id);
         CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
+        ",
+    )?;
+
+    // Permission rules for persistent dispatch policy (W1a)
+    conn.execute_batch(
+        r"
+        CREATE TABLE IF NOT EXISTS permission_rules (
+            rule_id     TEXT PRIMARY KEY,
+            agent_id    TEXT NOT NULL,
+            tool_name   TEXT NOT NULL,
+            action      TEXT NOT NULL CHECK(action IN ('allow', 'deny')),
+            scope       TEXT NOT NULL CHECK(scope IN ('session', 'permanent')),
+            reason      TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL,
+            expires_at  INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
+            ON permission_rules(agent_id, tool_name);
         ",
     )?;
 

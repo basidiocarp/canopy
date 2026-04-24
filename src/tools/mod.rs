@@ -123,7 +123,8 @@ pub fn get_string_array(args: &Value, key: &str) -> Vec<String> {
 
 /// Dispatch a tool call to the appropriate handler.
 ///
-/// Before routing to the handler, the active [`policy::DispatchPolicy`] is
+/// Before routing to the handler, persisted permission rules are checked first.
+/// If no persisted rule matches, the active [`policy::DispatchPolicy`] is
 /// evaluated against the tool's annotations.  A [`DispatchDecision::FlagForReview`]
 /// result causes an error [`ToolResult`] to be returned immediately so the
 /// MCP server can surface the block to the operator.
@@ -134,9 +135,24 @@ pub fn dispatch_tool(
     name: &str,
     args: &Value,
 ) -> ToolResult {
-    // Policy check: look up the tool's annotations and evaluate the active policy.
-    let annotations = policy::annotations_for_tool(name);
-    let decision = policy::DispatchPolicy::Default.evaluate(name, annotations);
+    // Check persisted permission rules first
+    let persisted_decision = match store.lookup_permission_rule(agent_id, name) {
+        Ok(Some(rule)) if rule.action == "allow" => Some(DispatchDecision::Proceed),
+        Ok(Some(rule)) if rule.action == "deny" => Some(DispatchDecision::FlagForReview {
+            reason: format!("permission rule denied: {}", rule.reason),
+        }),
+        Ok(_) => None, // no rule — fall through to static policy
+        Err(e) => {
+            tracing::warn!(error = %e, tool = name, "failed to read permission rules; falling through to static policy");
+            None // fail open
+        }
+    };
+
+    let decision = persisted_decision.unwrap_or_else(|| {
+        // Static policy check: look up the tool's annotations and evaluate the active policy.
+        let annotations = policy::annotations_for_tool(name);
+        policy::DispatchPolicy::Default.evaluate(name, annotations)
+    });
 
     let (decision_str, reason_str) = match &decision {
         DispatchDecision::Proceed => ("proceed", String::new()),

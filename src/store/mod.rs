@@ -11,6 +11,7 @@ pub mod notifications;
 mod operator_actions;
 mod orchestration;
 mod outcomes;
+mod permission_rules;
 mod policy_events;
 mod relationships;
 mod schema;
@@ -22,6 +23,7 @@ pub use dag::{
     DagEdge, DagGraph, DagNode, add_edge, add_node, create_graph, get_ready_nodes,
     update_node_status,
 };
+pub use permission_rules::{PermissionRule, lookup_rule, upsert_rule};
 pub use policy_events::PolicyEventRow;
 pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
 
