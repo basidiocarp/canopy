@@ -5,12 +5,15 @@ pub mod files;
 pub mod handoff;
 pub mod identity;
 pub mod import;
+pub mod metadata;
 pub mod outcomes;
 pub mod policy;
 pub mod queue;
 pub mod scope;
 pub mod task;
 pub mod tool_adoption;
+
+pub use metadata::{ToolMetadata, register_tool_metadata};
 
 use serde::Serialize;
 use serde_json::Value;

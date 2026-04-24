@@ -95,11 +95,21 @@ fn default_policy(tool_name: &str, annotations: ToolAnnotations) -> DispatchDeci
 
 /// Return the [`ToolAnnotations`] for a named canopy MCP tool.
 ///
-/// Tools not found in the registry (unknown names) return the zero-value
-/// `ToolAnnotations` — no hints set — so they default to `Proceed` under the
-/// standard policy.
+/// Resolution order:
+/// 1. Check the [`super::metadata::lookup_tool_annotations`] registry (populated
+///    at startup via `register_tool_metadata`).
+/// 2. Fall back to the hardcoded name-based match below.
+///
+/// Tools not found in either source return the zero-value `ToolAnnotations` —
+/// no hints set — so they default to `Proceed` under the standard policy.
 #[must_use]
 pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
+    // Registry-based lookup first: supports tools registered via ToolMetadata
+    // without requiring a source change to this file.
+    if let Some(annotations) = super::metadata::lookup_tool_annotations(name) {
+        return annotations;
+    }
+
     match name {
         // ── Read-only ──────────────────────────────────────────────────────
         "canopy_whoami"
