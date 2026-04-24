@@ -475,6 +475,13 @@ pub fn tool_task_complete(
         }
     }
 
+    // Persist output if provided
+    if let Some(output_value) = args.get("output") {
+        if let Ok(output_json) = serde_json::to_string(output_value) {
+            let _ = store.set_task_output(task_id, &output_json);
+        }
+    }
+
     ToolResult::json(&task)
 }
 
@@ -542,5 +549,26 @@ pub fn tool_task_snapshot(
     match api::snapshot(store, options) {
         Ok(snapshot) => ToolResult::json(&snapshot),
         Err(e) => ToolResult::error(format!("failed to build snapshot: {e}")),
+    }
+}
+
+/// Retrieve structured output from a completed task.
+pub fn tool_task_output(
+    store: &(impl CanopyStore + ?Sized),
+    _agent_id: &str,
+    args: &Value,
+) -> ToolResult {
+    let task_id = match validate_required_string(args, "task_id") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    match store.get_task_output(task_id) {
+        Ok(Some(output_json)) => match serde_json::from_str::<serde_json::Value>(&output_json) {
+            Ok(parsed) => ToolResult::json(&parsed),
+            Err(e) => ToolResult::error(format!("failed to parse output JSON: {e}")),
+        },
+        Ok(None) => ToolResult::json(&serde_json::Value::Null),
+        Err(e) => ToolResult::error(format!("failed to retrieve task output: {e}")),
     }
 }

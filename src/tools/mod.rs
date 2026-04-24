@@ -188,6 +188,7 @@ pub fn dispatch_tool(
         "canopy_task_complete" => task::tool_task_complete(store, agent_id, args),
         "canopy_task_block" => task::tool_task_block(store, agent_id, args),
         "canopy_task_snapshot" => task::tool_task_snapshot(store, agent_id, args),
+        "canopy_task_output" => task::tool_task_output(store, agent_id, args),
         "canopy_report_scope_gap" => scope::tool_report_scope_gap(store, agent_id, args),
         "canopy_get_handoff_scope" => scope::tool_get_handoff_scope(store, agent_id, args),
         "canopy_handoff_create" => handoff::tool_handoff_create(store, agent_id, args),

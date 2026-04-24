@@ -120,6 +120,8 @@ pub trait TaskMutationStore {
         concurrency_cap: i64,
     ) -> StoreResult<Option<Task>>;
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()>;
+    fn set_task_output(&self, task_id: &str, output_json: &str) -> StoreResult<()>;
+    fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -588,6 +590,14 @@ impl TaskMutationStore for super::Store {
 
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()> {
         self.clear_task_assignment(task_id)
+    }
+
+    fn set_task_output(&self, task_id: &str, output_json: &str) -> StoreResult<()> {
+        self.set_task_output(task_id, output_json)
+    }
+
+    fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>> {
+        self.get_task_output(task_id)
     }
 }
 

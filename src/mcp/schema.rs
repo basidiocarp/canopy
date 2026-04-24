@@ -405,6 +405,10 @@ pub fn tool_definitions() -> Vec<Value> {
                 "handoff_path": {
                     "type": "string",
                     "description": "Optional path to a handoff document. When provided, completion is rejected if checklist items remain unchecked or paste markers are empty."
+                },
+                "output": {
+                    "type": "object",
+                    "description": "Optional structured task output containing raw output, parsed JSON, and token usage"
                 }
             },
             "required": ["task_id", "agent_id", "summary"]
@@ -474,6 +478,21 @@ pub fn tool_definitions() -> Vec<Value> {
                     "description": "Minimum priority to include"
                 }
             }
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_task_output",
+        "Retrieve structured output from a completed task.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ULID of the task"
+                }
+            },
+            "required": ["task_id"]
         }),
     ));
 

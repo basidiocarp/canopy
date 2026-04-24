@@ -1304,6 +1304,37 @@ impl Store {
         }
         Ok(result)
     }
+
+    /// Persist structured task output to a task's output column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn set_task_output(&self, task_id: &str, output_json: &str) -> StoreResult<()> {
+        self.conn.execute(
+            "UPDATE tasks SET output = ?1, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?2",
+            params![output_json, task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve structured task output from a task's output column.
+    ///
+    /// Returns `None` if output is NULL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT output FROM tasks WHERE task_id = ?1")?;
+        let result = stmt
+            .query_row([task_id], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten();
+        Ok(result)
+    }
 }
 
 /// Returns `true` when `err` is a `SQLite` UNIQUE constraint violation.

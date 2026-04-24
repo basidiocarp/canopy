@@ -373,6 +373,7 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "review_cycle_id", "TEXT NULL")?;
     ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
     ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
+    ensure_column(conn, "tasks", "output", "TEXT NULL")?;
     conn.execute(
         r"
         UPDATE tasks
