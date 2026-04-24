@@ -451,6 +451,7 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
 
     ensure_column(conn, "council_sessions", "session_summary", "TEXT NULL")?;
     ensure_column(conn, "council_sessions", "updated_at", "TEXT NULL")?;
+    ensure_column(conn, "council_sessions", "conversation_id", "TEXT NULL")?;
     conn.execute(
         r"
         UPDATE council_sessions
