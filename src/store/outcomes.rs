@@ -19,6 +19,7 @@ use crate::models::{OutcomeSummaryRow, WorkflowOutcomeRecord};
 /// through `route_taken_json` / `runtime_identity_json`.
 #[derive(Debug, serde::Deserialize)]
 struct OutcomeWireShape {
+    schema_version: String,
     workflow_id: String,
     template_id: String,
     handoff_path: String,
@@ -47,6 +48,13 @@ impl Store {
         let wire: OutcomeWireShape = serde_json::from_slice(raw_json).map_err(|e| {
             StoreError::Validation(format!("workflow outcome JSON is invalid: {e}"))
         })?;
+
+        if wire.schema_version != "1.0" {
+            return Err(StoreError::Validation(format!(
+                "unsupported workflow outcome schema version: {} (expected 1.0)",
+                wire.schema_version
+            )));
+        }
 
         let route_taken_json = serde_json::to_string(&wire.route_taken).map_err(|e| {
             StoreError::Validation(format!("route_taken serialisation failed: {e}"))

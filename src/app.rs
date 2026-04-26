@@ -1676,8 +1676,7 @@ fn handle_council_command(store: &Store, command: CouncilCommand) -> Result<()> 
                 .into_iter()
                 .map(|s| {
                     let open_seconds = chrono::DateTime::parse_from_rfc3339(&s.created_at)
-                        .map(|ts| (now - ts.with_timezone(&chrono::Utc)).num_seconds())
-                        .unwrap_or(0);
+                        .map_or(0, |ts| (now - ts.with_timezone(&chrono::Utc)).num_seconds());
                     CouncilSessionStatus {
                         council_session_id: s.council_session_id,
                         state: s.state.to_string(),
