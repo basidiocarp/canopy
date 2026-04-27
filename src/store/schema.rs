@@ -193,13 +193,6 @@ pub(crate) const BASE_SCHEMA: &str = r"
     ON task_relationships(source_task_id)
     WHERE kind = 'parent';
 
-    -- Prevent duplicate queued tasks for the same scope.
-    -- Only applies when scope is non-empty ('[]' means unscoped).
-    -- Completed, closed, and cancelled tasks for the same scope are not affected.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_queued_scope_dedup
-    ON tasks(scope)
-    WHERE status = 'open' AND scope != '[]';
-
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
@@ -625,6 +618,12 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
         ",
     )?;
+
+    // Drop the old partial unique index that only covered status='open'.
+    // Duplicate-scope enforcement is now application-level and covers all five
+    // non-terminal statuses. Existing databases must shed this index so it does
+    // not conflict with the new semantics or confuse future debugging.
+    conn.execute_batch("DROP INDEX IF EXISTS idx_tasks_queued_scope_dedup;")?;
 
     // Permission rules for persistent dispatch policy (W1a)
     conn.execute_batch(

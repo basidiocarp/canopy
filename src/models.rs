@@ -882,6 +882,10 @@ pub struct Task {
     pub updated_at: String,
     /// File paths or globs this task will modify
     pub scope: Vec<String>,
+    /// When enqueuing a scoped task with the same scope as a recently completed task,
+    /// this field points to the most recently completed task's ID, allowing idempotent
+    /// rediscovery of prior work.
+    pub prior_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

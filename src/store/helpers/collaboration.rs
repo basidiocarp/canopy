@@ -48,6 +48,7 @@ pub(crate) fn create_task_in_connection(
         scope: options.scope.clone(),
         created_at: String::new(),
         updated_at: String::new(),
+        prior_task_id: None,
     };
     conn.execute(
         r"
@@ -313,6 +314,24 @@ pub(crate) fn add_evidence_in_connection(
     )?;
     touch_task_in_connection(conn, task_id)?;
     sync_task_workflow_in_connection(conn, task_id)?;
+
+    // Emit task event for evidence attachment.
+    let task = get_task_in_connection(conn, task_id)?;
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id,
+            event_type: TaskEventType::EvidenceAttached,
+            actor: "system",
+            from_status: None,
+            to_status: task.status,
+            verification_state: None,
+            owner_agent_id: None,
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(&evidence.label),
+        },
+    )?;
 
     // Emit notification for evidence receipt — ignore errors so evidence insert is not rolled back
     let notif = Notification {

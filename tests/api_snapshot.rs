@@ -371,9 +371,12 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
             .len(),
         1
     );
+    // Evidence was attached, so the review cycle advances to in_review.
+    // Prior to A35 this was "pending" because EvidenceAttached events were not
+    // emitted; the state machine now correctly reflects attached evidence.
     assert_eq!(
         snapshot["workflow_contexts"][0]["review_cycle"]["state"],
-        "pending"
+        "in_review"
     );
     assert_eq!(snapshot["evidence"].as_array().expect("evidence").len(), 1);
     assert_eq!(
@@ -443,10 +446,13 @@ fn api_snapshot_includes_agents_tasks_handoffs_and_evidence() {
         .iter()
         .map(|event| event["event_type"].as_str().expect("event type"))
         .collect::<Vec<_>>();
-    assert_eq!(event_types.len(), 6);
+    // EvidenceAttached event is now emitted at the store layer (A35), adding one
+    // event to the timeline vs the prior 6.
+    assert_eq!(event_types.len(), 7);
     assert!(event_types.contains(&"created"));
     assert!(event_types.contains(&"assigned"));
     assert!(event_types.contains(&"status_changed"));
+    assert!(event_types.contains(&"evidence_attached"));
     assert!(event_types.contains(&"follow_up_task_created"));
     assert_eq!(
         event_types

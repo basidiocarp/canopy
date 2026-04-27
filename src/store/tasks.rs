@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{ErrorCode, OptionalExtension, params};
+use rusqlite::{OptionalExtension, params};
 use std::collections::HashMap;
 
 use super::helpers::{
@@ -75,19 +75,23 @@ impl Store {
         })
     }
 
-    /// Enqueues a new scoped task, preventing duplicates at the database level.
+    /// Enqueues a new scoped task, preventing duplicates across non-terminal states.
     ///
-    /// When `scope` is non-empty, a partial unique index ensures only one task
-    /// with that scope can be in `open` (queued) status at a time. A second
-    /// enqueue attempt for the same scope returns
-    /// [`StoreError::DuplicateQueuedTask`] instead of a raw database error.
+    /// When `scope` is non-empty, this function checks for any existing task with
+    /// the same scope that is NOT in a terminal state (`open`, `assigned`, `in_progress`,
+    /// `blocked`, `review_required`). If such a task is found, returns
+    /// [`StoreError::DuplicateQueuedTask`] with the blocking task's ID and status.
+    ///
+    /// If a scoped task is found in a terminal state (`completed`, `closed`, `cancelled`),
+    /// creation is allowed, and the created task's `prior_task_id` is set to point
+    /// to the most recently completed task, enabling idempotent rediscovery of work.
     ///
     /// Tasks with an empty scope (`options.scope` is empty) are created without
     /// uniqueness enforcement — multiple unscoped tasks can coexist.
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::DuplicateQueuedTask`] when a queued task for the
+    /// Returns [`StoreError::DuplicateQueuedTask`] when a non-terminal task for the
     /// same scope already exists. Returns other [`StoreError`] variants on
     /// database or validation failures.
     pub fn enqueue_task(
@@ -98,21 +102,58 @@ impl Store {
         project_root: &str,
         options: &TaskCreationOptions,
     ) -> StoreResult<Task> {
-        let scope_display = if options.scope.is_empty() {
-            String::new()
+        if options.scope.is_empty() {
+            // Unscoped task; create directly without checks.
+            self.create_task_with_options(title, description, requested_by, project_root, options)
         } else {
-            options.scope.join(", ")
-        };
-        self.create_task_with_options(title, description, requested_by, project_root, options)
-            .map_err(|err| {
-                if is_unique_constraint_error(&err) && !scope_display.is_empty() {
-                    StoreError::DuplicateQueuedTask {
-                        scope: scope_display.clone(),
+            // Check for any existing task with the same scope in a non-terminal state.
+            let scope_json = serde_json::to_string(&options.scope)
+                .map_err(|e| StoreError::Validation(format!("failed to serialize scope: {e}")))?;
+
+            self.in_transaction(|conn| {
+                let mut stmt = conn.prepare(
+                    r"
+                    SELECT task_id, status
+                    FROM tasks
+                    WHERE scope = ?1
+                    ORDER BY created_at DESC, task_id DESC
+                    ",
+                )?;
+                let mut rows = stmt.query([&scope_json])?;
+
+                let mut most_recent_terminal: Option<String> = None;
+
+                while let Some(row) = rows.next()? {
+                    let task_id: String = row.get(0)?;
+                    let status_str: String = row.get(1)?;
+                    let status = parse_enum_value::<TaskStatus>(&status_str, 1)?;
+
+                    if is_open_task_status(status) {
+                        // Found a non-terminal task blocking this scope.
+                        let scope_display = options.scope.join(", ");
+                        return Err(StoreError::DuplicateQueuedTask {
+                            scope: scope_display,
+                        });
                     }
-                } else {
-                    err
+
+                    // Found a terminal task; remember it (the first/most recent one).
+                    if most_recent_terminal.is_none() {
+                        most_recent_terminal = Some(task_id);
+                    }
                 }
+
+                // No blocking tasks found; proceed with creation.
+                let mut created =
+                    create_task_in_connection(conn, title, description, requested_by, project_root, options)?;
+
+                // If we found a recently completed task, link it as prior_task_id.
+                if let Some(prior_id) = most_recent_terminal {
+                    created.prior_task_id = Some(prior_id);
+                }
+
+                Ok(created)
             })
+        }
     }
 
     /// Creates a new task and links it as a child of an existing parent task.
@@ -257,6 +298,10 @@ impl Store {
 
     /// Updates task lifecycle, verification, and closure metadata.
     ///
+    /// When updating a terminal status (completed, closed, cancelled) to the same status,
+    /// this is a no-op: the task is returned without updating the row or emitting an event.
+    /// This ensures idempotent terminal state writes.
+    ///
     /// # Errors
     ///
     /// Returns an error if the task does not exist, the requested transition is
@@ -277,6 +322,16 @@ impl Store {
             let next_verification = update
                 .verification_state
                 .unwrap_or(current.verification_state);
+
+            let is_terminal = matches!(
+                status,
+                TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+            );
+
+            // Idempotent terminal state writes: no-op if already in this terminal state.
+            if is_terminal && from_status == status {
+                return Ok(current);
+            }
 
             if from_status != status && !from_status.allowed_transitions().contains(&status) {
                 return Err(StoreError::Validation(format!(
@@ -321,11 +376,6 @@ impl Store {
             } else {
                 (current.verified_by.as_deref(), None)
             };
-
-            let is_terminal = matches!(
-                status,
-                TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
-            );
 
             conn.execute(
                 r"
@@ -540,6 +590,8 @@ impl Store {
                     note: note.as_deref(),
                 },
             )?;
+            // Resync queue state after triage changes (priority/severity may affect queue position).
+            sync_task_workflow_in_connection(conn, task_id)?;
             Ok(updated)
         })
     }
@@ -1360,18 +1412,5 @@ impl Store {
             params![task_id],
         )?;
         Ok(())
-    }
-}
-
-/// Returns `true` when `err` is a `SQLite` UNIQUE constraint violation.
-///
-/// Used by [`Store::enqueue_task`] to distinguish duplicate-scope rejections
-/// from unrelated database failures.
-fn is_unique_constraint_error(err: &StoreError) -> bool {
-    match err {
-        StoreError::Database(rusqlite::Error::SqliteFailure(failure, _)) => {
-            failure.code == ErrorCode::ConstraintViolation
-        }
-        _ => false,
     }
 }

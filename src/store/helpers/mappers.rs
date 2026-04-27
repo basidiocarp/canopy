@@ -62,6 +62,7 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
         created_at: row.get(33)?,
         updated_at: row.get(34)?,
+        prior_task_id: None,
     })
 }
 

@@ -426,7 +426,8 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let events = store
         .list_task_events(&task.task_id)
         .expect("list task events");
-    assert_eq!(events.len(), 9);
+    assert_eq!(events.len(), 10, "events should include Created, Assigned, OwnershipTransferred, HandoffUpdated, EvidenceAttached, StatusChanged (ReviewRequired), StatusChanged (Blocked), StatusChanged (Assigned), StatusChanged (InProgress), StatusChanged (Completed)");
+    assert_eq!(events[0].event_type, TaskEventType::Created);
     assert_eq!(events[1].event_type, TaskEventType::Assigned);
     assert_eq!(events[1].to_status, TaskStatus::Assigned);
     assert_eq!(
@@ -443,30 +444,32 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let handoff_note = events[3].note.as_deref().expect("handoff note");
     assert!(handoff_note.starts_with("handoff_action=resolve; handoff_id="));
     assert!(handoff_note.ends_with("; status:open->accepted"));
-    assert_eq!(events[4].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[4].to_status, TaskStatus::ReviewRequired);
+    // events[4] is the EvidenceAttached event from the add_evidence call
+    assert_eq!(events[4].event_type, TaskEventType::EvidenceAttached);
+    assert_eq!(events[5].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[5].to_status, TaskStatus::ReviewRequired);
     assert_eq!(
-        events[4].verification_state,
+        events[5].verification_state,
         Some(VerificationState::Pending)
     );
-    assert_eq!(events[5].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[5].to_status, TaskStatus::Blocked);
+    assert_eq!(events[6].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[6].to_status, TaskStatus::Blocked);
     assert_eq!(
-        events[5].note.as_deref(),
+        events[6].note.as_deref(),
         Some("waiting on a second opinion")
     );
-    assert_eq!(events[6].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[6].to_status, TaskStatus::Assigned);
     assert_eq!(events[7].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[7].to_status, TaskStatus::InProgress);
+    assert_eq!(events[7].to_status, TaskStatus::Assigned);
     assert_eq!(events[8].event_type, TaskEventType::StatusChanged);
-    assert_eq!(events[8].to_status, TaskStatus::Completed);
+    assert_eq!(events[8].to_status, TaskStatus::InProgress);
+    assert_eq!(events[9].event_type, TaskEventType::StatusChanged);
+    assert_eq!(events[9].to_status, TaskStatus::Completed);
     assert_eq!(
-        events[8].verification_state,
+        events[9].verification_state,
         Some(VerificationState::Passed)
     );
     assert_eq!(
-        events[8].note.as_deref(),
+        events[9].note.as_deref(),
         Some("review completed and accepted")
     );
 
@@ -1480,12 +1483,10 @@ fn task_creation_actions_create_artifacts_and_record_history() {
                 .as_deref()
                 .is_some_and(|note| note.contains("message_id="))
     }));
+    // Note is now the evidence label (emitted by add_evidence_in_connection).
     assert!(events.iter().any(|event| {
         event.event_type == TaskEventType::EvidenceAttached
-            && event
-                .note
-                .as_deref()
-                .is_some_and(|note| note.contains("evidence_id="))
+            && event.note.as_deref() == Some("Hyphae session")
     }));
     assert!(events.iter().any(|event| {
         event.event_type == TaskEventType::FollowUpTaskCreated
@@ -2835,5 +2836,291 @@ fn two_simultaneous_claims_produce_exactly_one_successful_claim() {
     assert!(
         final_task.owner_agent_id.is_some(),
         "task must have an owner"
+    );
+}
+
+#[test]
+fn enqueue_task_scope_duplicate_returns_prior_task_id_if_terminal() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .register_agent(&make_agent("agent-1"))
+        .expect("register agent");
+
+    let scope = vec!["src/main.rs".to_string()];
+    let opts = TaskCreationOptions {
+        scope: scope.clone(),
+        ..TaskCreationOptions::default()
+    };
+
+    // Create, advance, and complete a scoped task.
+    let first = store
+        .enqueue_task("implement feature", None, "op", "/tmp/project", &opts)
+        .expect("first enqueue");
+    assert_eq!(first.prior_task_id, None, "first task has no prior");
+
+    store
+        .atomic_claim_task("agent-1", &first.task_id)
+        .expect("claim");
+    store
+        .update_task_status(
+            &first.task_id,
+            TaskStatus::InProgress,
+            "agent-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start");
+    store
+        .update_task_status(
+            &first.task_id,
+            TaskStatus::Completed,
+            "agent-1",
+            TaskStatusUpdate::default(),
+        )
+        .expect("complete");
+
+    // Enqueue a second task with the same scope — should succeed and point to the first.
+    let second = store
+        .enqueue_task("implement feature again", None, "op", "/tmp/project", &opts)
+        .expect("second enqueue must succeed");
+    assert_eq!(
+        second.prior_task_id,
+        Some(first.task_id.clone()),
+        "second task should point to completed first task"
+    );
+    assert_eq!(second.status, TaskStatus::Open);
+}
+
+#[test]
+fn enqueue_task_scope_blocks_on_in_progress_status() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let scope = vec!["src/lib.rs".to_string()];
+    let opts = TaskCreationOptions {
+        scope: scope.clone(),
+        ..TaskCreationOptions::default()
+    };
+
+    // Enqueue a scoped task and advance it to in_progress.
+    let task = store
+        .enqueue_task("work on task", None, "op", "/tmp/project", &opts)
+        .expect("first enqueue");
+    // Advance the task through Assigned → InProgress manually.
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Assigned,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("assign");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start");
+
+    // Try to enqueue with the same scope — should fail with DuplicateQueuedTask.
+    let result = store.enqueue_task(
+        "try to work on same scope",
+        None,
+        "op",
+        "/tmp/project",
+        &opts,
+    );
+    match result {
+        Err(StoreError::DuplicateQueuedTask { scope: s }) => {
+            assert!(s.contains("src/lib.rs"));
+        }
+        other => panic!("expected DuplicateQueuedTask, got: {other:?}"),
+    }
+}
+
+#[test]
+fn update_task_status_same_terminal_is_noop() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("task to complete", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    // Transition through states to reach Completed.
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Assigned,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("assign");
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("start");
+
+    // Complete the task.
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("first completion");
+
+    // Verify the event was recorded.
+    let events_before = store
+        .list_task_events(&task.task_id)
+        .expect("list events");
+    let completion_count_before = events_before
+        .iter()
+        .filter(|e| e.to_status == TaskStatus::Completed)
+        .count();
+    assert_eq!(completion_count_before, 1);
+
+    // Complete again — should be a no-op.
+    let result = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "op",
+            TaskStatusUpdate::default(),
+        )
+        .expect("second completion");
+    assert_eq!(result.status, TaskStatus::Completed);
+
+    // Verify no additional event was recorded.
+    let events_after = store
+        .list_task_events(&task.task_id)
+        .expect("list events");
+    let completion_count_after = events_after
+        .iter()
+        .filter(|e| e.to_status == TaskStatus::Completed)
+        .count();
+    assert_eq!(
+        completion_count_after, completion_count_before,
+        "no additional completion event should be recorded"
+    );
+}
+
+#[test]
+fn evidence_attach_emits_exactly_one_event() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("task with evidence", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    // No events yet.
+    let events_before = store
+        .list_task_events(&task.task_id)
+        .expect("list events");
+    let evidence_events_before = events_before
+        .iter()
+        .filter(|e| e.event_type == TaskEventType::EvidenceAttached)
+        .count();
+    assert_eq!(evidence_events_before, 0);
+
+    // Attach evidence.
+    store
+        .add_evidence(
+            &task.task_id,
+            EvidenceSourceKind::ManualNote,
+            "proof-123",
+            "Verification passed",
+            Some("Manual verification confirms the fix"),
+            EvidenceLinkRefs::default(),
+        )
+        .expect("attach evidence");
+
+    // Verify exactly one EvidenceAttached event exists.
+    let events_after = store
+        .list_task_events(&task.task_id)
+        .expect("list events");
+    let evidence_events_after = events_after
+        .iter()
+        .filter(|e| e.event_type == TaskEventType::EvidenceAttached)
+        .count();
+    assert_eq!(
+        evidence_events_after, 1,
+        "exactly one EvidenceAttached event should be recorded"
+    );
+
+    // Verify the event has the correct details.
+    let evidence_event = events_after
+        .iter()
+        .find(|e| e.event_type == TaskEventType::EvidenceAttached)
+        .expect("find evidence event");
+    assert_eq!(evidence_event.actor, "system");
+    assert_eq!(evidence_event.note, Some("Verification passed".to_string()));
+}
+
+#[test]
+fn task_action_attach_evidence_emits_exactly_one_event() {
+    // Verifies the operator action path does not double-emit EvidenceAttached.
+    // The store layer (add_evidence_in_connection) is the single authoritative emitter;
+    // operator_actions.rs must not also call record_task_event_in_connection.
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("task via operator action", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    // No EvidenceAttached events yet.
+    let events_before = store
+        .list_task_events(&task.task_id)
+        .expect("list events before attach");
+    let count_before = events_before
+        .iter()
+        .filter(|e| e.event_type == TaskEventType::EvidenceAttached)
+        .count();
+    assert_eq!(count_before, 0);
+
+    // Attach via the operator action path.
+    store
+        .apply_task_operator_action(
+            &task.task_id,
+            "operator",
+            TaskAction::AttachEvidence {
+                source_kind: EvidenceSourceKind::ManualNote,
+                source_ref: "proof-op-001",
+                label: "Operator-attached evidence",
+                summary: Some("Confirming via operator action path"),
+                related_handoff_id: None,
+                related_session_id: None,
+                related_memory_query: None,
+                related_symbol: None,
+                related_file: None,
+            },
+        )
+        .expect("attach evidence via operator action");
+
+    // Exactly one EvidenceAttached event must exist — not two.
+    let events_after = store
+        .list_task_events(&task.task_id)
+        .expect("list events after attach");
+    let count_after = events_after
+        .iter()
+        .filter(|e| e.event_type == TaskEventType::EvidenceAttached)
+        .count();
+    assert_eq!(
+        count_after, 1,
+        "operator action path must emit exactly one EvidenceAttached event"
     );
 }

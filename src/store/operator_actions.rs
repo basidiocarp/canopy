@@ -293,26 +293,9 @@ impl Store {
                         file: input.related_file,
                     },
                 )?;
-                let task = get_task_in_connection(conn, task_id)?;
-                let note = format!(
-                    "evidence_id={}; source_kind={}; source_ref={}; label={}",
-                    evidence.evidence_id, evidence.source_kind, evidence.source_ref, evidence.label
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::EvidenceAttached,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
+                // EvidenceAttached event is emitted inside add_evidence_in_connection.
+                // Do not emit a second event here — one emission per attachment.
+                let _ = evidence;
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::CreateFollowUpTask => self.in_transaction(|conn| {
