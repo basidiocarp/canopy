@@ -62,6 +62,28 @@ impl Store {
         Ok(u64::try_from(rows_affected).unwrap_or(0))
     }
 
+    /// Release only the file locks for a task that are owned by `agent_id`.
+    ///
+    /// Returns the number of locks released. A zero return means the agent
+    /// held no active locks for that task (either already released or never
+    /// acquired by this agent).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn unlock_files_for_agent(&self, task_id: &str, agent_id: &str) -> StoreResult<u64> {
+        let now = Utc::now().to_rfc3339();
+        let rows_affected = self.conn.execute(
+            r"
+            UPDATE file_locks
+            SET released_at = ?1
+            WHERE task_id = ?2 AND agent_id = ?3 AND released_at IS NULL
+            ",
+            params![now, task_id, agent_id],
+        )?;
+        Ok(u64::try_from(rows_affected).unwrap_or(0))
+    }
+
     /// Check which files are locked by other agents (without locking).
     ///
     /// # Errors

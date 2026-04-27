@@ -591,6 +591,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Specific file paths to unlock. Omit to release all locks for this task."
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "When true, release locks even if they are held by a different agent. Operator override — releases locks regardless of owner. Default: false."
                 }
             },
             "required": ["task_id", "agent_id"]
@@ -1002,6 +1006,10 @@ pub fn tool_definitions() -> Vec<Value> {
                 "handoff_path": {
                     "type": "string",
                     "description": "Absolute path to the handoff markdown document"
+                },
+                "run_verify_script": {
+                    "type": "boolean",
+                    "description": "When true, execute the paired verify script and include its output. Default: false."
                 }
             },
             "required": ["handoff_path"]

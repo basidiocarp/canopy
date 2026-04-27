@@ -212,7 +212,7 @@ pub(crate) const BASE_SCHEMA: &str = r"
 
     CREATE TABLE IF NOT EXISTS file_locks (
         lock_id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL REFERENCES tasks(task_id),
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
         agent_id TEXT NOT NULL,
         file_path TEXT NOT NULL,
         worktree_id TEXT NOT NULL,
@@ -511,12 +511,14 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
     ensure_column(conn, "tasks", "files_hint", "TEXT NULL")?;
     ensure_column(conn, "agents", "last_heartbeat_at", "TEXT NULL")?;
 
-    // Ensure file_locks table and indexes exist for older databases
+    // Ensure file_locks table and indexes exist for older databases.
+    // The task_id FK uses ON DELETE CASCADE so that delete_task removes all
+    // associated locks atomically without requiring an explicit pre-delete step.
     conn.execute_batch(
         r"
         CREATE TABLE IF NOT EXISTS file_locks (
             lock_id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL REFERENCES tasks(task_id),
+            task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
             agent_id TEXT NOT NULL,
             file_path TEXT NOT NULL,
             worktree_id TEXT NOT NULL,

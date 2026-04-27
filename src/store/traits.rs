@@ -122,6 +122,9 @@ pub trait TaskMutationStore {
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()>;
     fn set_task_output(&self, task_id: &str, output_json: &str) -> StoreResult<()>;
     fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>>;
+    /// Delete a task and cascade-remove all related records.
+    /// Intended only for rollback of partially-created task trees.
+    fn delete_task(&self, task_id: &str) -> StoreResult<()>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -218,6 +221,8 @@ pub trait FileLockStore {
         worktree_id: &str,
     ) -> StoreResult<Vec<FileLock>>;
     fn unlock_files(&self, task_id: &str) -> StoreResult<u64>;
+    /// Release only the locks for `task_id` that are owned by `agent_id`.
+    fn unlock_files_for_agent(&self, task_id: &str, agent_id: &str) -> StoreResult<u64>;
     fn check_file_conflicts(
         &self,
         files: &[String],
@@ -599,6 +604,10 @@ impl TaskMutationStore for super::Store {
     fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>> {
         self.get_task_output(task_id)
     }
+
+    fn delete_task(&self, task_id: &str) -> StoreResult<()> {
+        self.delete_task(task_id)
+    }
 }
 
 impl TaskEventStore for super::Store {
@@ -760,6 +769,10 @@ impl FileLockStore for super::Store {
 
     fn unlock_files(&self, task_id: &str) -> StoreResult<u64> {
         self.unlock_files(task_id)
+    }
+
+    fn unlock_files_for_agent(&self, task_id: &str, agent_id: &str) -> StoreResult<u64> {
+        self.unlock_files_for_agent(task_id, agent_id)
     }
 
     fn check_file_conflicts(

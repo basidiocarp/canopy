@@ -1335,6 +1335,32 @@ impl Store {
             .flatten();
         Ok(result)
     }
+
+    /// Delete a task and all its related records via foreign-key cascade.
+    ///
+    /// Tables with `ON DELETE CASCADE` on `task_id` are removed automatically
+    /// by the `SQLite` FK engine when `PRAGMA foreign_keys = ON` is active.
+    /// This includes `task_queue_states`, `task_worktree_bindings`,
+    /// `task_review_cycles`, `task_assignments`, `handoffs`,
+    /// `council_messages`, `council_sessions`, `evidence_refs`, `task_events`,
+    /// `task_relationships`, `file_locks`, `tool_adoption_scores`, and
+    /// `notifications`. All active file locks for the task are released
+    /// atomically as part of this cascade.
+    ///
+    /// This is a destructive operation intended only for rollback scenarios
+    /// (e.g., cleaning up a partially-created task tree). Prefer status
+    /// transitions (`cancelled`, `closed`) for normal lifecycle management.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn delete_task(&self, task_id: &str) -> StoreResult<()> {
+        self.conn.execute(
+            "DELETE FROM tasks WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        Ok(())
+    }
 }
 
 /// Returns `true` when `err` is a `SQLite` UNIQUE constraint violation.

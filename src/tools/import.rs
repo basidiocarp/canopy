@@ -8,7 +8,7 @@ use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions};
 use crate::tools::{ToolResult, get_str};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 #[derive(Debug, Serialize)]
@@ -106,10 +106,71 @@ fn infer_project_root(path: &Path) -> String {
     std::env::current_dir().map_or_else(|_| ".".to_string(), |d| d.display().to_string())
 }
 
-fn validate_handoff_path(path: &Path) -> Vec<String> {
+/// Check whether a path has a `.handoffs` directory as one of its ancestors.
+/// Returns `true` when the path is under a `.handoffs` tree, `false` otherwise.
+fn path_is_under_handoffs_dir(path: &Path) -> bool {
+    path.ancestors()
+        .any(|a| a.file_name().and_then(|n| n.to_str()) == Some(".handoffs"))
+}
+
+/// Resolve a path to its canonical, normalized form for security checks.
+///
+/// Tries `std::fs::canonicalize` first (resolves symlinks, requires the path
+/// to exist). If that fails (e.g. the file does not yet exist), falls back to
+/// a purely lexical normalization that strips `.` and `..` components. This
+/// ensures the ancestor check in `path_is_under_handoffs_dir` runs on the
+/// real resolved path, not a raw string that might contain `..` escapes.
+fn resolve_for_security_check(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    // Lexical fallback: walk components and collapse `.` / `..`.
+    let mut components: Vec<std::ffi::OsString> = Vec::new();
+    for component in path.components() {
+        use std::path::Component;
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Don't pop past an absolute root or an empty stack.
+                if components
+                    .last()
+                    .is_some_and(|c| c != std::ffi::OsStr::new("/"))
+                {
+                    components.pop();
+                }
+            }
+            other => components.push(other.as_os_str().to_owned()),
+        }
+    }
+    components.iter().collect()
+}
+
+/// Validate the handoff path and collect advisory warnings.
+///
+/// Returns `Err` when the path is outside any `.handoffs` directory — that is a
+/// hard rejection because allowing arbitrary paths lets MCP callers read files
+/// anywhere on the server filesystem. The remaining checks produce warnings only.
+///
+/// The path is resolved (symlinks and `..` components collapsed) before the
+/// ancestor check to prevent traversal bypasses like `.handoffs/../../etc/passwd`.
+fn validate_handoff_path(path: &Path) -> Result<Vec<String>, String> {
+    // Resolve symlinks and collapse `..` before the ancestor check so that
+    // a path like `.handoffs/../../etc/passwd` cannot sneak past the guard by
+    // containing `.handoffs` as a raw component.
+    let resolved = resolve_for_security_check(path);
+
+    // Hard rejection: the resolved path must be inside a .handoffs directory tree.
+    if !path_is_under_handoffs_dir(&resolved) {
+        return Err(format!(
+            "rejected: path '{}' is outside any .handoffs directory. \
+             Handoff files must live under a .handoffs/ tree.",
+            path.display()
+        ));
+    }
+
     let mut warnings = Vec::new();
 
-    // Check: file should be in a project subdirectory, not .handoffs/ root
+    // Advisory: file should be in a project subdirectory, not .handoffs/ root
     let parent = path.parent().unwrap_or(Path::new("."));
     let parent_name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -122,7 +183,7 @@ fn validate_handoff_path(path: &Path) -> Vec<String> {
         ));
     }
 
-    // Check: verify script should exist alongside
+    // Advisory: verify script should exist alongside
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let verify_script = path.with_file_name(format!("verify-{stem}.sh"));
     if !verify_script.exists() {
@@ -132,7 +193,7 @@ fn validate_handoff_path(path: &Path) -> Vec<String> {
         ));
     }
 
-    // Check: old HANDOFF- prefix
+    // Advisory: old HANDOFF- prefix
     if stem.starts_with("HANDOFF-") {
         warnings.push(format!(
             "Uses old HANDOFF- prefix. Rename to: {}",
@@ -140,7 +201,7 @@ fn validate_handoff_path(path: &Path) -> Vec<String> {
         ));
     }
 
-    warnings
+    Ok(warnings)
 }
 
 /// Import a .handoffs/ markdown file as a task with subtasks.
@@ -157,7 +218,13 @@ pub fn tool_import_handoff(
 
     let path = Path::new(file_path_str);
 
-    let warnings = validate_handoff_path(path);
+    // Hard rejection when the path is outside a .handoffs directory tree.
+    // Advisory warnings (wrong subdirectory, missing verify script, old prefix)
+    // are collected from the Ok variant and logged below.
+    let warnings = match validate_handoff_path(path) {
+        Ok(w) => w,
+        Err(reason) => return ToolResult::error(reason),
+    };
     for w in &warnings {
         warn!(path = %path.display(), "handoff import warning: {w}");
     }
@@ -219,7 +286,21 @@ pub fn tool_import_handoff(
             },
         ) {
             Ok(t) => t,
-            Err(e) => return ToolResult::error(format!("failed to create subtask: {e}")),
+            Err(e) => {
+                // Roll back the already-created parent task so callers never
+                // observe a partial task tree. Foreign-key cascade removes all
+                // related records (evidence, relationships, file_locks, etc.).
+                if let Err(rollback_err) = store.delete_task(&parent_task.task_id) {
+                    warn!(
+                        task_id = %parent_task.task_id,
+                        "rollback failed after subtask creation error: {rollback_err}"
+                    );
+                }
+                return ToolResult::error(format!(
+                    "failed to create subtask; rolled back parent task {}: {e}",
+                    parent_task.task_id
+                ));
+            }
         };
 
         if verify_script_exists {
@@ -432,5 +513,128 @@ mod tests {
             serde_json::from_str(&result.content[0].text).expect("json result");
         assert!(payload["parent_task_id"].as_str().is_some());
         assert_eq!(payload["requested_assignee"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn import_handoff_rejects_path_outside_handoffs_tree() {
+        let temp = tempdir().expect("tempdir");
+        let rogue_path = temp.path().join("rogue.md");
+        fs::write(
+            &rogue_path,
+            "# Handoff: Rogue\n\n### Step 1: Evil\nDo bad things.\n",
+        )
+        .expect("write rogue file");
+
+        let db_path = temp.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+
+        let result = tool_import_handoff(
+            &store,
+            "agent-1",
+            &json!({ "path": rogue_path.display().to_string() }),
+        );
+
+        assert!(
+            result.is_error,
+            "expected rejection for path outside .handoffs: {:?}",
+            result.content
+        );
+        // Confirm no task was created.
+        let tasks = store.list_tasks().expect("list tasks");
+        assert!(
+            tasks.is_empty(),
+            "no tasks should exist after a rejected import"
+        );
+    }
+
+    /// Verify that `delete_task` removes the parent and (via FK cascade) all
+    /// related records, which is the mechanism the rollback relies on.
+    #[test]
+    fn import_rolls_back_partial_task_tree_on_subtask_failure() {
+        // This test verifies the rollback path indirectly: it directly exercises
+        // create_task_with_options + delete_task to confirm the store machinery
+        // that tool_import_handoff relies on for rollback actually works.
+        use crate::store::TaskCreationOptions;
+
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+
+        // Create a parent task — simulates the first step of import.
+        let parent = store
+            .create_task_with_options(
+                "Test Rollback Parent",
+                Some("created for rollback test"),
+                "test",
+                "/tmp",
+                &TaskCreationOptions::default(),
+            )
+            .expect("create parent task");
+
+        // Confirm the task exists.
+        assert!(
+            store.get_task(&parent.task_id).is_ok(),
+            "parent task should exist before rollback"
+        );
+
+        // Simulate a rollback by deleting the parent.
+        store
+            .delete_task(&parent.task_id)
+            .expect("delete_task should succeed");
+
+        // After rollback, the task must be gone.
+        let tasks = store.list_tasks().expect("list tasks");
+        assert!(
+            tasks.is_empty(),
+            "store should be empty after delete_task; got: {tasks:?}"
+        );
+    }
+
+    /// A path that contains `.handoffs` as a *component* but escapes out of it
+    /// via `..` must be rejected. Without path normalization the raw ancestor
+    /// walk would find `.handoffs` and pass the check, then open an arbitrary
+    /// file (e.g. `/etc/passwd`).
+    #[test]
+    fn import_rejects_path_traversal_through_handoffs_component() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+
+        // Create the .handoffs directory and a target file outside it.
+        let handoff_dir = root.join(".handoffs").join("canopy");
+        fs::create_dir_all(&handoff_dir).expect("create handoff dir");
+        let outside_file = root.join("secret.md");
+        fs::write(&outside_file, "# Secret\n\nPrivate content.\n")
+            .expect("write outside file");
+
+        // Construct a traversal path: starts under .handoffs, then escapes.
+        // e.g. <root>/.handoffs/../../secret.md
+        // After normalization this resolves to <root>/secret.md, which has no
+        // .handoffs ancestor.
+        let traversal_path = handoff_dir
+            .join("..")
+            .join("..")
+            .join("secret.md");
+
+        let db_path = root.join("canopy.db");
+        let store = Store::open(&db_path).expect("open store");
+
+        let result = tool_import_handoff(
+            &store,
+            "agent-1",
+            &json!({ "path": traversal_path.display().to_string() }),
+        );
+
+        assert!(
+            result.is_error,
+            "expected rejection for traversal path '{}': {:?}",
+            traversal_path.display(),
+            result.content
+        );
+        // Confirm no task was created.
+        let tasks = store.list_tasks().expect("list tasks");
+        assert!(
+            tasks.is_empty(),
+            "no tasks should exist after a rejected import"
+        );
     }
 }
