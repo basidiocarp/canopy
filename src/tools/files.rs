@@ -197,13 +197,7 @@ mod tests {
     /// Create a task and return its task_id string.
     fn create_task(store: &Store, title: &str) -> String {
         store
-            .create_task_with_options(
-                title,
-                None,
-                "test",
-                "/tmp",
-                &TaskCreationOptions::default(),
-            )
+            .create_task_with_options(title, None, "test", "/tmp", &TaskCreationOptions::default())
             .expect("create task")
             .task_id
     }
@@ -318,11 +312,7 @@ mod tests {
         );
 
         // Agent B tries to unlock without force — must be rejected (owns no locks).
-        let unlock_result = tool_files_unlock(
-            &store,
-            "agent-b",
-            &json!({ "task_id": task_id }),
-        );
+        let unlock_result = tool_files_unlock(&store, "agent-b", &json!({ "task_id": task_id }));
         assert!(
             unlock_result.is_error,
             "agent-b must not be able to unlock agent-a's locks without force"

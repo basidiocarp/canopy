@@ -1,6 +1,7 @@
 pub mod api;
 pub mod capability;
 pub mod cli;
+pub mod dispatch;
 pub mod handoff_check;
 pub mod mcp;
 pub mod models;

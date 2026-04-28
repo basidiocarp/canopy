@@ -90,8 +90,7 @@ mod tests {
     fn completeness_does_not_run_verify_script_without_explicit_flag() {
         let dir = tempdir().expect("tempdir");
         let handoff_path = dir.path().join("demo.md");
-        fs::write(&handoff_path, "# Handoff: Demo\n\n- [x] Step done\n")
-            .expect("write handoff");
+        fs::write(&handoff_path, "# Handoff: Demo\n\n- [x] Step done\n").expect("write handoff");
 
         // Create a verify script that would produce a detectable sentinel file
         // if executed, so the test can confirm it was NOT run.
@@ -143,8 +142,7 @@ mod tests {
     fn completeness_runs_verify_script_when_flag_is_true() {
         let dir = tempdir().expect("tempdir");
         let handoff_path = dir.path().join("demo.md");
-        fs::write(&handoff_path, "# Handoff: Demo\n\n- [x] Step done\n")
-            .expect("write handoff");
+        fs::write(&handoff_path, "# Handoff: Demo\n\n- [x] Step done\n").expect("write handoff");
 
         let verify_path = dir.path().join("verify-demo.sh");
         fs::write(
@@ -175,8 +173,7 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_str(&result.content[0].text).expect("json result");
         assert_eq!(
-            payload["verify_passed"],
-            true,
+            payload["verify_passed"], true,
             "verify_passed should be true when script succeeds"
         );
         assert!(

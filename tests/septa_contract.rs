@@ -5,7 +5,7 @@
 //! correctly (e.g., allowed_actions as objects, not strings).
 
 use canopy::models::{
-    OperatorAction, OperatorActionKind, OperatorActionTargetKind, AttentionLevel,
+    AttentionLevel, OperatorAction, OperatorActionKind, OperatorActionTargetKind,
     SnapshotAttentionSummary,
 };
 
@@ -34,8 +34,7 @@ fn test_snapshot_attention_summary_has_needs_verification_count() {
         "needs_verification_count must be present"
     );
     assert_eq!(
-        obj.get("needs_verification_count")
-            .and_then(|v| v.as_u64()),
+        obj.get("needs_verification_count").and_then(|v| v.as_u64()),
         Some(5),
         "needs_verification_count must serialize as integer"
     );
@@ -74,15 +73,11 @@ fn test_operator_action_serialization_is_object_not_string() {
 
     // Verify kinds serialize as strings (snake_case)
     assert!(
-        obj.get("kind")
-            .and_then(|k| k.as_str())
-            .is_some(),
+        obj.get("kind").and_then(|k| k.as_str()).is_some(),
         "kind must serialize as string"
     );
     assert!(
-        obj.get("target_kind")
-            .and_then(|tk| tk.as_str())
-            .is_some(),
+        obj.get("target_kind").and_then(|tk| tk.as_str()).is_some(),
         "target_kind must serialize as string"
     );
     let level_str = obj

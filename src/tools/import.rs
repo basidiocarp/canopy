@@ -603,17 +603,13 @@ mod tests {
         let handoff_dir = root.join(".handoffs").join("canopy");
         fs::create_dir_all(&handoff_dir).expect("create handoff dir");
         let outside_file = root.join("secret.md");
-        fs::write(&outside_file, "# Secret\n\nPrivate content.\n")
-            .expect("write outside file");
+        fs::write(&outside_file, "# Secret\n\nPrivate content.\n").expect("write outside file");
 
         // Construct a traversal path: starts under .handoffs, then escapes.
         // e.g. <root>/.handoffs/../../secret.md
         // After normalization this resolves to <root>/secret.md, which has no
         // .handoffs ancestor.
-        let traversal_path = handoff_dir
-            .join("..")
-            .join("..")
-            .join("secret.md");
+        let traversal_path = handoff_dir.join("..").join("..").join("secret.md");
 
         let db_path = root.join("canopy.db");
         let store = Store::open(&db_path).expect("open store");

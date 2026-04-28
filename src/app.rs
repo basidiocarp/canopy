@@ -5,8 +5,8 @@ use crate::db;
 use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
-    AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, EvidenceCommand, FilesCommand,
-    HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand, TaskCommand,
+    AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, DispatchCommand, EvidenceCommand,
+    FilesCommand, HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand, TaskCommand,
 };
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
@@ -1542,6 +1542,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Serve { .. } => "serve",
         Commands::Notification { .. } => "notification",
         Commands::Policy { .. } => "policy",
+        Commands::Dispatch { .. } => "dispatch",
     }
 }
 
@@ -1946,6 +1947,17 @@ fn handle_policy_command(command: &PolicyCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn handle_dispatch_command(store: &Store, command: DispatchCommand) -> Result<()> {
+    match command {
+        DispatchCommand::Submit { path, requested_by } => {
+            let request = canopy::dispatch::read_request(&path)?;
+            let response = canopy::dispatch::intake(store, &request, &requested_by)?;
+            print_json(&response)?;
+        }
+    }
+    Ok(())
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<()> {

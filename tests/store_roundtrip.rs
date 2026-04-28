@@ -426,7 +426,11 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
     let events = store
         .list_task_events(&task.task_id)
         .expect("list task events");
-    assert_eq!(events.len(), 10, "events should include Created, Assigned, OwnershipTransferred, HandoffUpdated, EvidenceAttached, StatusChanged (ReviewRequired), StatusChanged (Blocked), StatusChanged (Assigned), StatusChanged (InProgress), StatusChanged (Completed)");
+    assert_eq!(
+        events.len(),
+        10,
+        "events should include Created, Assigned, OwnershipTransferred, HandoffUpdated, EvidenceAttached, StatusChanged (ReviewRequired), StatusChanged (Blocked), StatusChanged (Assigned), StatusChanged (InProgress), StatusChanged (Completed)"
+    );
     assert_eq!(events[0].event_type, TaskEventType::Created);
     assert_eq!(events[1].event_type, TaskEventType::Assigned);
     assert_eq!(events[1].to_status, TaskStatus::Assigned);
@@ -2981,9 +2985,7 @@ fn update_task_status_same_terminal_is_noop() {
         .expect("first completion");
 
     // Verify the event was recorded.
-    let events_before = store
-        .list_task_events(&task.task_id)
-        .expect("list events");
+    let events_before = store.list_task_events(&task.task_id).expect("list events");
     let completion_count_before = events_before
         .iter()
         .filter(|e| e.to_status == TaskStatus::Completed)
@@ -3002,9 +3004,7 @@ fn update_task_status_same_terminal_is_noop() {
     assert_eq!(result.status, TaskStatus::Completed);
 
     // Verify no additional event was recorded.
-    let events_after = store
-        .list_task_events(&task.task_id)
-        .expect("list events");
+    let events_after = store.list_task_events(&task.task_id).expect("list events");
     let completion_count_after = events_after
         .iter()
         .filter(|e| e.to_status == TaskStatus::Completed)
@@ -3026,9 +3026,7 @@ fn evidence_attach_emits_exactly_one_event() {
         .expect("create task");
 
     // No events yet.
-    let events_before = store
-        .list_task_events(&task.task_id)
-        .expect("list events");
+    let events_before = store.list_task_events(&task.task_id).expect("list events");
     let evidence_events_before = events_before
         .iter()
         .filter(|e| e.event_type == TaskEventType::EvidenceAttached)
@@ -3048,9 +3046,7 @@ fn evidence_attach_emits_exactly_one_event() {
         .expect("attach evidence");
 
     // Verify exactly one EvidenceAttached event exists.
-    let events_after = store
-        .list_task_events(&task.task_id)
-        .expect("list events");
+    let events_after = store.list_task_events(&task.task_id).expect("list events");
     let evidence_events_after = events_after
         .iter()
         .filter(|e| e.event_type == TaskEventType::EvidenceAttached)

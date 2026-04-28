@@ -43,6 +43,9 @@ pub(super) fn run(store: &Store, command: Commands) -> Result<()> {
         Commands::Policy { command } => {
             handle_policy_command(&command)?;
         }
+        Commands::Dispatch { command } => {
+            handle_dispatch_command(store, command)?;
+        }
     }
 
     Ok(())

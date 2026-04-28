@@ -143,8 +143,14 @@ impl Store {
                 }
 
                 // No blocking tasks found; proceed with creation.
-                let mut created =
-                    create_task_in_connection(conn, title, description, requested_by, project_root, options)?;
+                let mut created = create_task_in_connection(
+                    conn,
+                    title,
+                    description,
+                    requested_by,
+                    project_root,
+                    options,
+                )?;
 
                 // If we found a recently completed task, link it as prior_task_id.
                 if let Some(prior_id) = most_recent_terminal {
@@ -1407,10 +1413,8 @@ impl Store {
     ///
     /// Returns an error if the database operation fails.
     pub fn delete_task(&self, task_id: &str) -> StoreResult<()> {
-        self.conn.execute(
-            "DELETE FROM tasks WHERE task_id = ?1",
-            params![task_id],
-        )?;
+        self.conn
+            .execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])?;
         Ok(())
     }
 }

@@ -34,10 +34,7 @@ fn notification_serialization_contract() {
     );
 
     // Verify seen field is present and is a boolean
-    assert!(
-        value.get("seen").is_some(),
-        "seen field must be present"
-    );
+    assert!(value.get("seen").is_some(), "seen field must be present");
     assert_eq!(
         value.get("seen").and_then(serde_json::Value::as_bool),
         Some(false),
@@ -59,7 +56,10 @@ fn notification_serialization_contract() {
 
     // Verify payload is present
     assert_eq!(
-        value.get("payload").and_then(|v| v.get("reason")).and_then(|v| v.as_str()),
+        value
+            .get("payload")
+            .and_then(|v| v.get("reason"))
+            .and_then(|v| v.as_str()),
         Some("Superseded by higher-priority handoff"),
         "payload field must be present with correct reason"
     );
@@ -72,8 +72,14 @@ fn notification_serialization_contract() {
     );
 
     // Verify optional fields (task_id, agent_id) are present
-    assert!(value.get("task_id").is_some(), "task_id field must be present");
-    assert!(value.get("agent_id").is_some(), "agent_id field must be present");
+    assert!(
+        value.get("task_id").is_some(),
+        "task_id field must be present"
+    );
+    assert!(
+        value.get("agent_id").is_some(),
+        "agent_id field must be present"
+    );
 }
 
 #[test]
@@ -90,12 +96,22 @@ fn notification_deserialization_contract() {
         "seen": false
     });
 
-    let notification: Notification = serde_json::from_value(json).expect("Failed to deserialize notification");
+    let notification: Notification =
+        serde_json::from_value(json).expect("Failed to deserialize notification");
 
     assert_eq!(notification.notification_id, "01HZ1234567890ABCDEF012345");
-    assert_eq!(notification.event_type, NotificationEventType::TaskCancelled);
-    assert_eq!(notification.task_id, Some("01HZ0987654321FEDCBA987654".to_string()));
-    assert_eq!(notification.agent_id, Some("claude-code-session-abc".to_string()));
+    assert_eq!(
+        notification.event_type,
+        NotificationEventType::TaskCancelled
+    );
+    assert_eq!(
+        notification.task_id,
+        Some("01HZ0987654321FEDCBA987654".to_string())
+    );
+    assert_eq!(
+        notification.agent_id,
+        Some("claude-code-session-abc".to_string())
+    );
     assert!(!notification.seen);
     assert_eq!(notification.created_at, "2026-04-16T12:00:00Z");
 }

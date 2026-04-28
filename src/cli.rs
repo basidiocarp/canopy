@@ -95,6 +95,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: PolicyCommand,
     },
+    /// Accept a dispatch-request-v1 payload and create a coordination task.
+    Dispatch {
+        #[command(subcommand)]
+        command: DispatchCommand,
+    },
+}
+
+/// Subcommands for `canopy dispatch`.
+#[derive(Debug, Subcommand)]
+pub enum DispatchCommand {
+    /// Read a dispatch-request-v1 JSON file (or `-` for stdin) and create a task.
+    Submit {
+        /// Path to a JSON file, or `-` to read from stdin.
+        #[arg(value_name = "PATH_OR_DASH")]
+        path: String,
+        /// Caller identity recorded as `requested_by` on the created task.
+        #[arg(long, default_value = "dispatch")]
+        requested_by: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
