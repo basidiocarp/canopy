@@ -13,8 +13,14 @@ pub fn tool_work_queue(
     agent_id: &str,
     args: &Value,
 ) -> ToolResult {
+    use crate::models::TaskStatus;
+
     let limit = get_bounded_i64(args, "limit", 5, 1, 20);
     let project_root = get_str(args, "project_root");
+    let include_assigned = args
+        .get("include_assigned")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // Get agent to know role/capabilities
     let (role_str, capabilities) = match store.get_agent(agent_id) {
@@ -25,7 +31,7 @@ pub fn tool_work_queue(
         Err(_) => (None, Vec::new()),
     };
 
-    let tasks = match store.query_available_tasks(
+    let mut tasks = match store.query_available_tasks(
         role_str.as_deref(),
         &capabilities,
         project_root,
@@ -34,6 +40,38 @@ pub fn tool_work_queue(
         Ok(t) => t,
         Err(err) => return ToolResult::error(format!("failed to query tasks: {err}")),
     };
+
+    if include_assigned {
+        let assigned_tasks = match store.list_tasks_for_agent(agent_id) {
+            Ok(t) => t,
+            Err(err) => return ToolResult::error(format!("failed to query assigned tasks: {err}")),
+        };
+
+        // Filter assigned tasks to active statuses (exclude Completed, Closed, Cancelled)
+        let active_assigned: Vec<_> = assigned_tasks
+            .into_iter()
+            .filter(|task| {
+                !matches!(
+                    task.status,
+                    TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+                )
+            })
+            .collect();
+
+        // Merge with claimable tasks, deduplicating by task_id
+        let mut seen_ids = std::collections::HashSet::new();
+        for task in &tasks {
+            seen_ids.insert(task.task_id.clone());
+        }
+
+        for task in active_assigned {
+            if !seen_ids.contains(&task.task_id) {
+                seen_ids.insert(task.task_id.clone());
+                tasks.push(task);
+            }
+        }
+    }
+
     let mut orchestration = Vec::with_capacity(tasks.len());
     for task in &tasks {
         match store.get_task_workflow_context(&task.task_id) {
@@ -153,7 +191,7 @@ pub fn tool_task_yield(
 #[cfg(test)]
 mod tests {
     use super::{tool_task_claim, tool_work_queue};
-    use crate::models::{AgentRegistration, AgentStatus};
+    use crate::models::{AgentRegistration, AgentStatus, TaskStatus};
     use crate::store::Store;
     use crate::store::TaskCreationOptions;
     use rusqlite::Connection;
@@ -358,6 +396,206 @@ mod tests {
             !result.is_error,
             "claim should succeed for no-requirement task; error: {}",
             result.content[0].text
+        );
+    }
+
+    // -- include_assigned tests ------------------------------------------------
+
+    #[test]
+    fn assigned_task_not_visible_in_default_work_queue() {
+        let (store, _temp) = open_store();
+        let agent = register_agent_with_caps(&store, "assigned-agent", vec![]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task("Assigned task", None, "operator", "/repo", None)
+            .expect("create task");
+
+        // Assign the task to the agent
+        store
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .expect("assign task");
+
+        // Query work queue without include_assigned - should not see the assigned task
+        let result = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "include_assigned": false }),
+        );
+        assert!(
+            !result.is_error,
+            "work_queue should succeed; error: {}",
+            result.content[0].text
+        );
+        // Parse the response to check task count
+        let response_text = &result.content[0].text;
+        let parsed: serde_json::Value =
+            serde_json::from_str(response_text).expect("response should be valid JSON");
+        let available_tasks = parsed["available_tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            available_tasks.len(),
+            0,
+            "assigned task should not appear in default work queue"
+        );
+    }
+
+    #[test]
+    fn assigned_task_visible_with_include_assigned_flag() {
+        let (store, _temp) = open_store();
+        let agent = register_agent_with_caps(&store, "assigned-agent-2", vec![]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task("Assigned task 2", None, "operator", "/repo", None)
+            .expect("create task");
+
+        // Assign the task to the agent
+        store
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .expect("assign task");
+
+        // Query work queue with include_assigned=true - should see the assigned task
+        let result = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "include_assigned": true }),
+        );
+        assert!(
+            !result.is_error,
+            "work_queue should succeed; error: {}",
+            result.content[0].text
+        );
+        let response_text = &result.content[0].text;
+        let parsed: serde_json::Value =
+            serde_json::from_str(response_text).expect("response should be valid JSON");
+        let available_tasks = parsed["available_tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            available_tasks.len(),
+            1,
+            "assigned task should appear in work queue with include_assigned=true"
+        );
+        assert_eq!(
+            available_tasks[0]["task_id"].as_str(),
+            Some(task.task_id.as_str()),
+            "the returned task should match the assigned task"
+        );
+    }
+
+    #[test]
+    fn claimable_tasks_appear_in_both_modes() {
+        let (store, _temp) = open_store();
+        let agent = register_agent_with_caps(&store, "queue-agent", vec![]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        // Create an open (claimable) task
+        let open_task = store
+            .create_task("Open task", None, "operator", "/repo", None)
+            .expect("create task");
+
+        // Create and assign another task
+        let assigned_task = store
+            .create_task("Assigned task", None, "operator", "/repo", None)
+            .expect("create task");
+        store
+            .assign_task(&assigned_task.task_id, &agent.agent_id, "operator", None)
+            .expect("assign task");
+
+        // Default mode should only show the open task
+        let result_default = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "include_assigned": false }),
+        );
+        let response_default = &result_default.content[0].text;
+        let parsed_default: serde_json::Value =
+            serde_json::from_str(response_default).expect("valid JSON");
+        let default_tasks = parsed_default["available_tasks"].as_array().expect("tasks");
+        assert_eq!(
+            default_tasks.len(),
+            1,
+            "default mode should show only claimable task"
+        );
+        assert_eq!(
+            default_tasks[0]["task_id"].as_str(),
+            Some(open_task.task_id.as_str())
+        );
+
+        // Mode with include_assigned=true should show both
+        let result_include = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "include_assigned": true }),
+        );
+        let response_include = &result_include.content[0].text;
+        let parsed_include: serde_json::Value =
+            serde_json::from_str(response_include).expect("valid JSON");
+        let include_tasks = parsed_include["available_tasks"].as_array().expect("tasks");
+        assert_eq!(
+            include_tasks.len(),
+            2,
+            "include_assigned=true should show both claimable and assigned tasks"
+        );
+    }
+
+    #[test]
+    fn completed_assigned_task_excluded_with_include_assigned() {
+        let (store, _temp) = open_store();
+        let agent = register_agent_with_caps(&store, "terminal-agent", vec![]);
+        store
+            .heartbeat_agent(&agent.agent_id, AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let task = store
+            .create_task("Terminal task", None, "operator", "/repo", None)
+            .expect("create task");
+
+        // Assign, start, then complete the task so it reaches a terminal status.
+        // The state machine requires: assigned → in_progress → completed.
+        store
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .expect("assign task");
+        store
+            .update_task_status(
+                &task.task_id,
+                TaskStatus::InProgress,
+                "operator",
+                crate::store::TaskStatusUpdate::default(),
+            )
+            .expect("start task");
+        store
+            .update_task_status(
+                &task.task_id,
+                TaskStatus::Completed,
+                "operator",
+                crate::store::TaskStatusUpdate::default(),
+            )
+            .expect("complete task");
+
+        // Completed tasks must not appear even with include_assigned=true
+        let result = tool_work_queue(
+            &store,
+            &agent.agent_id,
+            &json!({ "include_assigned": true }),
+        );
+        assert!(
+            !result.is_error,
+            "work_queue should succeed; error: {}",
+            result.content[0].text
+        );
+        let response_text = &result.content[0].text;
+        let parsed: serde_json::Value =
+            serde_json::from_str(response_text).expect("response should be valid JSON");
+        let available_tasks = parsed["available_tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            available_tasks.len(),
+            0,
+            "completed task must be excluded even with include_assigned=true"
         );
     }
 }

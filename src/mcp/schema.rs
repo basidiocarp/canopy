@@ -142,6 +142,11 @@ pub fn tool_definitions() -> Vec<Value> {
                     "maximum": 50,
                     "default": 10,
                     "description": "Maximum number of tasks to return"
+                },
+                "include_assigned": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, also includes tasks currently assigned to this agent (assigned, in_progress, blocked, or review_required) alongside tasks available to claim"
                 }
             },
             "required": ["agent_id"]

@@ -59,6 +59,8 @@ pub enum Commands {
         project_root: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
+        #[arg(long, default_value_t = false)]
+        include_assigned: bool,
     },
     Files {
         #[command(subcommand)]

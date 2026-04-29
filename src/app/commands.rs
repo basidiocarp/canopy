@@ -19,8 +19,16 @@ pub(super) fn run(store: &Store, command: Commands) -> Result<()> {
             limit,
             project_root,
             json,
+            include_assigned,
         } => {
-            handle_work_queue(store, &agent_id, limit, project_root.as_deref(), json)?;
+            handle_work_queue(
+                store,
+                &agent_id,
+                limit,
+                project_root.as_deref(),
+                json,
+                include_assigned,
+            )?;
         }
         Commands::Files { command } => handle_files_command(store, command)?,
         Commands::Situation {

@@ -1738,29 +1738,64 @@ fn handle_work_queue(
     limit: i64,
     project_root: Option<&str>,
     json: bool,
+    include_assigned: bool,
 ) -> Result<()> {
     let agent = store.get_agent(agent_id)?;
     let role = agent.role.as_ref().map(ToString::to_string);
     let capabilities = agent.capabilities.clone();
 
-    let tasks = store.query_available_tasks(role.as_deref(), &capabilities, project_root, limit)?;
+    let mut tasks = store.query_available_tasks(role.as_deref(), &capabilities, project_root, limit)?;
+
+    if include_assigned {
+        let assigned_tasks = store.list_tasks_for_agent(agent_id)?;
+        // Filter assigned tasks to active statuses (exclude Completed, Closed, Cancelled)
+        let active_assigned: Vec<Task> = assigned_tasks
+            .into_iter()
+            .filter(|task| {
+                !matches!(
+                    task.status,
+                    TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+                )
+            })
+            .collect();
+
+        // Merge with claimable tasks, deduplicating by task_id
+        let mut seen_ids = std::collections::HashSet::new();
+        for task in &tasks {
+            seen_ids.insert(task.task_id.clone());
+        }
+
+        for task in active_assigned {
+            if !seen_ids.contains(&task.task_id) {
+                seen_ids.insert(task.task_id.clone());
+                tasks.push(task);
+            }
+        }
+    }
 
     if json {
         print_json(&tasks)?;
     } else {
-        print_work_queue_table(&tasks);
+        print_work_queue_table(&tasks, include_assigned);
     }
 
     Ok(())
 }
 
-fn print_work_queue_table(tasks: &[Task]) {
+fn print_work_queue_table(tasks: &[Task], include_assigned: bool) {
     if tasks.is_empty() {
         println!("No tasks available");
         return;
     }
 
-    println!("Available tasks ({}):", tasks.len());
+    // When assigned tasks are merged in, the list is a mix of claimable and
+    // already-owned tasks, so use a neutral header.
+    let header = if include_assigned {
+        "Tasks (claimable + assigned)".to_string()
+    } else {
+        "Available tasks".to_string()
+    };
+    println!("{} ({}):", header, tasks.len());
     for (idx, task) in tasks.iter().enumerate() {
         let priority_str = task.priority.to_string();
         println!("  {:02}. [{}] {}", idx + 1, priority_str, task.title);
