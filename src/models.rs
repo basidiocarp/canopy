@@ -1390,6 +1390,85 @@ pub struct ApiSnapshot {
     pub workflow_contexts: Vec<TaskWorkflowContext>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskAttentionWire {
+    pub task_id: String,
+    pub level: AttentionLevel,
+    pub reasons: Vec<TaskAttentionReason>,
+}
+
+/// Wire-format representation of a task-detail payload. Contains ONLY the
+/// fields declared in `septa/canopy-task-detail-v1.schema.json` so that the
+/// emitted JSON satisfies the schema's `additionalProperties: false`
+/// constraint. Every internal canopy bookkeeping field stays on `TaskDetail`
+/// and is dropped at the wire boundary by `From<TaskDetail> for TaskDetailWire`.
+///
+/// If a new field needs to flow to consumers, FIRST add it to the schema and
+/// fixture, THEN add it here. Adding a field here without updating the schema
+/// will produce a schema-non-compliant payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskDetailWire {
+    pub schema_version: String,
+    pub task: Task,
+    pub attention: TaskAttentionWire,
+    pub sla_summary: TaskSlaSummary,
+    pub allowed_actions: Vec<OperatorAction>,
+    pub evidence: Vec<EvidenceRef>,
+    pub related_tasks: Vec<RelatedTask>,
+    pub relationships: Vec<TaskRelationship>,
+    pub events: Vec<TaskEvent>,
+    pub heartbeats: Vec<AgentHeartbeatEvent>,
+    pub heartbeat_summary: TaskHeartbeatSummary,
+    pub agent_heartbeat_summaries: Vec<AgentHeartbeatSummary>,
+    pub ownership: TaskOwnershipSummary,
+    pub assignments: Vec<TaskAssignment>,
+    pub handoffs: Vec<Handoff>,
+    pub handoff_attention: Vec<HandoffAttention>,
+    pub operator_actions: Vec<OperatorAction>,
+    pub workflow_context: Option<TaskWorkflowContext>,
+    pub relationship_summary: TaskRelationshipSummary,
+    pub children: Vec<TaskSummary>,
+    pub children_complete: bool,
+    pub parent_id: Option<String>,
+}
+
+impl From<TaskDetail> for TaskDetailWire {
+    fn from(detail: TaskDetail) -> Self {
+        // Pure-internal fields explicitly dropped at the wire boundary:
+        // agent_attention, deadline_summary, execution_summary, messages,
+        // council_session, tool_adoption_score. These live on TaskDetail
+        // for in-memory bookkeeping but never flow over the wire.
+        Self {
+            schema_version: detail.schema_version,
+            task: detail.task,
+            attention: TaskAttentionWire {
+                task_id: detail.attention.task_id,
+                level: detail.attention.level,
+                reasons: detail.attention.reasons,
+            },
+            sla_summary: detail.sla_summary,
+            allowed_actions: detail.allowed_actions,
+            evidence: detail.evidence,
+            related_tasks: detail.related_tasks,
+            relationships: detail.relationships,
+            events: detail.events,
+            heartbeats: detail.heartbeats,
+            heartbeat_summary: detail.heartbeat_summary,
+            agent_heartbeat_summaries: detail.agent_heartbeat_summaries,
+            ownership: detail.ownership,
+            assignments: detail.assignments,
+            handoffs: detail.handoffs,
+            handoff_attention: detail.handoff_attention,
+            operator_actions: detail.operator_actions,
+            workflow_context: detail.workflow_context,
+            relationship_summary: detail.relationship_summary,
+            children: detail.children,
+            children_complete: detail.children_complete,
+            parent_id: detail.parent_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskDetail {
     pub schema_version: String,

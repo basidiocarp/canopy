@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use crate::models::{
     AgentAttention, AgentAttentionReason, AgentHeartbeatEvent, AgentHeartbeatSummary,
     AgentRegistration, ApiSnapshot, AttentionLevel, BreachSeverity, DeadlineState, DriftSignals,
@@ -9,6 +10,8 @@ use crate::models::{
     TaskPriority, TaskQueueStatus, TaskRelationship, TaskRelationshipKind, TaskRelationshipSummary,
     TaskSeverity, TaskSlaSummary, TaskSort, TaskStatus, TaskView, TaskWorkflowContext,
     VerificationState, derive_review_cycle_context,
+    // Wire struct types for schema-strict serialization (F2.14, F2.15)
+    TaskAttentionWire, TaskDetailWire,
 };
 use crate::store::{CanopyStore, StoreError, StoreResult};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};

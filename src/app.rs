@@ -11,7 +11,7 @@ use canopy::cli::{
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
-    TaskAction, TaskRelationshipKind, TaskStatus, VerificationState,
+    TaskAction, TaskDetailWire, TaskRelationshipKind, TaskStatus, VerificationState,
 };
 use canopy::runtime::{DispatchDecision, pre_dispatch_check};
 use canopy::store::{
@@ -1725,7 +1725,9 @@ fn handle_api_command(store: &Store, command: ApiCommand) -> Result<()> {
             )?)?;
         }
         ApiCommand::Task { task_id } => {
-            print_json(&api::task_detail(store, &task_id)?)?;
+            let detail = api::task_detail(store, &task_id)?;
+            let wire: TaskDetailWire = detail.into();
+            print_json(&wire)?;
         }
     }
 
