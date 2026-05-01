@@ -194,7 +194,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    /// Create a task and return its task_id string.
+    /// Create a task and return its `task_id` string.
     fn create_task(store: &Store, title: &str) -> String {
         store
             .create_task_with_options(title, None, "test", "/tmp", &TaskCreationOptions::default())
@@ -229,6 +229,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn lock_normalizes_paths_so_aliases_map_to_same_slot() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("canopy.db");
@@ -281,7 +282,7 @@ mod tests {
         assert!(
             payload_b["conflicts"]
                 .as_array()
-                .map_or(false, |c| !c.is_empty()),
+                .is_some_and(|c| !c.is_empty()),
             "conflicts must be reported"
         );
     }

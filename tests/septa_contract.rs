@@ -2,7 +2,7 @@
 //!
 //! Validates that `ApiSnapshot` and task detail serializations conform to
 //! septa contracts: required fields are present and rich types are serialized
-//! correctly (e.g., allowed_actions as objects, not strings).
+//! correctly (e.g., `allowed_actions` as objects, not strings).
 
 use canopy::models::{
     AttentionLevel, OperatorAction, OperatorActionKind, OperatorActionTargetKind,
@@ -34,7 +34,7 @@ fn test_snapshot_attention_summary_has_needs_verification_count() {
         "needs_verification_count must be present"
     );
     assert_eq!(
-        obj.get("needs_verification_count").and_then(|v| v.as_u64()),
+        obj.get("needs_verification_count").and_then(serde_json::Value::as_u64),
         Some(5),
         "needs_verification_count must serialize as integer"
     );
@@ -86,8 +86,7 @@ fn test_operator_action_serialization_is_object_not_string() {
         .expect("level must be present and a string");
     assert!(
         ["normal", "needs_attention", "critical"].contains(&level_str),
-        "level must be a valid AttentionLevel value, got: {}",
-        level_str
+        "level must be a valid AttentionLevel value, got: {level_str}",
     );
 }
 

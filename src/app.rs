@@ -1746,7 +1746,8 @@ fn handle_work_queue(
     let role = agent.role.as_ref().map(ToString::to_string);
     let capabilities = agent.capabilities.clone();
 
-    let mut tasks = store.query_available_tasks(role.as_deref(), &capabilities, project_root, limit)?;
+    let mut tasks =
+        store.query_available_tasks(role.as_deref(), &capabilities, project_root, limit)?;
 
     if include_assigned {
         let assigned_tasks = store.list_tasks_for_agent(agent_id)?;
