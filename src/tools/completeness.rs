@@ -138,6 +138,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn completeness_runs_verify_script_when_flag_is_true() {
         let dir = tempdir().expect("tempdir");
