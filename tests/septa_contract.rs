@@ -34,7 +34,8 @@ fn test_snapshot_attention_summary_has_needs_verification_count() {
         "needs_verification_count must be present"
     );
     assert_eq!(
-        obj.get("needs_verification_count").and_then(serde_json::Value::as_u64),
+        obj.get("needs_verification_count")
+            .and_then(serde_json::Value::as_u64),
         Some(5),
         "needs_verification_count must serialize as integer"
     );
