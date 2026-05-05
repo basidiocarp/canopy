@@ -54,6 +54,8 @@ pub(super) fn run(store: &Store, command: Commands) -> Result<()> {
         Commands::Dispatch { command } => {
             handle_dispatch_command(store, command)?;
         }
+        #[cfg(unix)]
+        Commands::ServeSocket => crate::socket_server::run_socket_server()?,
     }
 
     Ok(())

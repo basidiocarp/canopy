@@ -504,6 +504,12 @@ pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
         "UPDATE agents SET capabilities = COALESCE(capabilities, '[]')",
         [],
     )?;
+    ensure_column(conn, "agents", "tier", "TEXT NULL")?;
+    ensure_column(conn, "agents", "specializations", "TEXT NOT NULL DEFAULT '[]'")?;
+    conn.execute(
+        "UPDATE agents SET specializations = COALESCE(specializations, '[]')",
+        [],
+    )?;
     conn.execute_batch(
         r"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source

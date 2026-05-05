@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::models::{
-    AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
+    AgentHeartbeatEvent, AgentRankEntry, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
     CouncilSession, EvidenceRef, EvidenceSourceKind, FactScope, FactType, FileLock, Handoff,
     HandoffStatus, HandoffType, KnownFact, OutcomeSummaryRow, RelatedTask, Task, TaskAction,
     TaskAssignment, TaskEvent, TaskRelationship, TaskRelationshipKind, TaskStatus, TaskSummary,
@@ -29,6 +29,7 @@ pub trait AgentStore {
         &self,
         project_root: Option<&str>,
     ) -> StoreResult<Vec<AgentRegistration>>;
+    fn rank_agents_for_task(&self, task_id: &str, required_tags: &[String]) -> StoreResult<Vec<AgentRankEntry>>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -479,6 +480,10 @@ impl AgentStore for super::Store {
         project_root: Option<&str>,
     ) -> StoreResult<Vec<AgentRegistration>> {
         self.list_agents_filtered(project_root)
+    }
+
+    fn rank_agents_for_task(&self, task_id: &str, required_tags: &[String]) -> StoreResult<Vec<AgentRankEntry>> {
+        self.rank_agents_for_task(task_id, required_tags)
     }
 }
 

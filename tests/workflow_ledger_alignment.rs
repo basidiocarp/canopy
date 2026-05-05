@@ -22,6 +22,8 @@ fn register_agent(store: &Store, agent_id: &str) -> AgentRegistration {
         worktree_id: "wt-1".to_string(),
         status: AgentStatus::Idle,
         current_task_id: None,
+            tier: None,
+            specializations: Vec::new(),
         heartbeat_at: None,
         capabilities: Vec::new(),
         role: None,

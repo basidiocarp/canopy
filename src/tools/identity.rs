@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::models::{AgentRegistration, AgentRole, AgentStatus, SituationResult, WhoAmIResult};
+use crate::models::{AgentRegistration, AgentRole, AgentStatus, AgentTier, SituationResult, WhoAmIResult};
 use crate::store::CanopyStore;
 
 use super::{ToolResult, get_str, get_string_array};
@@ -15,6 +15,8 @@ pub fn tool_register(
 ) -> ToolResult {
     let role = get_str(args, "role").and_then(|r| r.parse::<AgentRole>().ok());
     let capabilities = get_string_array(args, "capabilities");
+    let tier = get_str(args, "tier").and_then(|t| t.parse::<AgentTier>().ok());
+    let specializations = get_string_array(args, "specializations");
     let model = get_str(args, "model").unwrap_or("unknown").to_string();
     let project_root = get_str(args, "project_root").unwrap_or("").to_string();
     let worktree_id = get_str(args, "worktree_id").unwrap_or("main").to_string();
@@ -37,6 +39,8 @@ pub fn tool_register(
         worktree_id,
         role,
         capabilities,
+        tier,
+        specializations,
         status: AgentStatus::Idle,
         current_task_id: None,
         heartbeat_at: None,
@@ -192,6 +196,8 @@ mod tests {
             worktree_id: "wt-1".to_string(),
             role: None,
             capabilities: Vec::new(),
+            tier: None,
+            specializations: Vec::new(),
             status: AgentStatus::Idle,
             current_task_id: None,
             heartbeat_at: None,

@@ -121,6 +121,7 @@ src/
 | `handoff-context-v1` | Receiving agent, Canopy, Cap | Handoff creation flow | `septa/handoff-context-v1.schema.json` |
 | `canopy-snapshot-v1` | Cap | CLI `canopy api snapshot` | `septa/canopy-snapshot-v1.schema.json` |
 | `canopy-task-detail-v1` | Cap | CLI `canopy api task --task-id <id>` | `septa/canopy-task-detail-v1.schema.json` |
+| `canopy-notification-v1` | Cap and Annulus | Notification events | `septa/canopy-notification-v1.schema.json` |
 
 **Source files:**
 - `src/models.rs`: evidence and handoff types

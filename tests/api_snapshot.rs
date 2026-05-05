@@ -642,6 +642,8 @@ fn api_snapshot_includes_agent_capabilities_and_task_required_capabilities() {
             capabilities: vec!["rust".to_string(), "hyphae".to_string()],
             status: AgentStatus::Idle,
             current_task_id: None,
+            tier: None,
+            specializations: Vec::new(),
             heartbeat_at: None,
         })
         .expect("register agent");
@@ -4590,6 +4592,8 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
             worktree_id: "wt-1".to_string(),
             status: AgentStatus::Idle,
             current_task_id: None,
+            tier: None,
+            specializations: Vec::new(),
             heartbeat_at: None,
             capabilities: Vec::new(),
             role: None,

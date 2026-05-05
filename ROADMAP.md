@@ -4,8 +4,8 @@ This page is the Canopy-specific backlog. The workspace [ROADMAP.md](../docs/wor
 
 ## Recently Shipped
 
-- Canopy now has a real local orchestration foundation instead of a repo stub. The first pass covers the ledger, agent registry, task and handoff records, council messages, evidence references, and the read models needed for operator views.
-- The naming split is settled. `Canopy` is the runtime and repository, while `Council` names the orchestration model that sits inside it.
+- Canopy now has a real local coordination foundation instead of a repo stub. The first pass covers the ledger, agent registry, task and handoff records, council messages, evidence references, and the read models needed for operator views.
+- The naming split is settled. `Canopy` is the coordination runtime and repository, while `Council` names the orchestration model that sits inside it. Dispatch, retry, and routing are owned by Hymenium.
 - Task state is no longer just a queue. The current schema tracks verification state, blocking reason, closure metadata, triage fields, due and expiry semantics, ownership history, heartbeat summaries, and operator action hints.
 - The first CLI and test surface is in place. That gives the project a stable base for operator queries and workflow mutations instead of forcing everything through direct database inspection.
 
@@ -21,7 +21,7 @@ The CLI needs to move past basic scaffolding. The immediate priority is deeper t
 
 ### Read transport for Cap
 
-Canopy already has an explicit read boundary. The open product question is whether the next operator surface stays CLI-backed for a while or graduates to a local HTTP layer that `cap` can consume directly.
+Canopy's read contracts are partially answered: `canopy-snapshot-v1` and `canopy-task-detail-v1` septa schemas already exist and target Cap. The open question is Cap actively consuming these contracts to render orchestration state in the operator UI.
 
 ### Evidence integration
 
@@ -29,7 +29,7 @@ Canopy should attach evidence from Hyphae, Cortina, Mycelium, and Rhizome withou
 
 ### Cap operator integration
 
-Canopy becomes useful when operators can see it. The near-term goal is to expose active agents, active tasks, blocked work, pending handoffs, and council summaries in `cap` without building a second orchestration model in the UI.
+Canopy becomes useful when operators can see it. The near-term goal is for Cap to consume `canopy-snapshot-v1` and `canopy-task-detail-v1` contracts and render active agents, active tasks, blocked work, pending handoffs, and council summaries in the UI without building a second orchestration model.
 
 ## Later
 

@@ -78,6 +78,8 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
                 worktree_id,
                 role,
                 capabilities,
+                tier: None,
+                specializations: Vec::new(),
                 status: AgentStatus::Idle,
                 current_task_id: None,
                 heartbeat_at: None,
@@ -1514,6 +1516,8 @@ fn command_span_context(cli: &Cli) -> SpanContext {
                 .as_ref()
                 .and_then(|path| path.parent().map(Path::to_path_buf)),
         },
+        #[cfg(unix)]
+        Commands::ServeSocket => None,
         _ => cli
             .db
             .as_ref()
@@ -1543,6 +1547,8 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Notification { .. } => "notification",
         Commands::Policy { .. } => "policy",
         Commands::Dispatch { .. } => "dispatch",
+        #[cfg(unix)]
+        Commands::ServeSocket => "serve_socket",
     }
 }
 

@@ -54,6 +54,16 @@ pub fn tool_definitions() -> Vec<Value> {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Skill tags this agent can handle (e.g. rust, frontend)"
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["planner", "worker", "grunt"],
+                    "description": "Agent tier for capability-based routing (planner, worker, or grunt)"
+                },
+                "specializations": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Specialization tags for this agent (e.g. code_review, test_writing)"
                 }
             },
             "required": ["agent_id", "host_id", "host_type", "host_instance", "model", "project_root", "worktree_id"]
@@ -495,6 +505,30 @@ pub fn tool_definitions() -> Vec<Value> {
                 "task_id": {
                     "type": "string",
                     "description": "ULID of the task"
+                }
+            },
+            "required": ["task_id"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_task_assign_ranked",
+        "Rank agents for a task or assign it explicitly. Pass agent_id to assign directly, or leave empty to get ranked recommendations.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "ULID of the task to assign or rank for"
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Optional agent ID to assign directly. If omitted, returns ranking."
+                },
+                "required_tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional tags to match (e.g., 'requires_planning', 'code_review')"
                 }
             },
             "required": ["task_id"]

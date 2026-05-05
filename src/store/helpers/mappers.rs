@@ -15,9 +15,13 @@ pub(crate) fn map_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRegist
         capabilities: row
             .get::<_, Option<String>>(8)?
             .map_or_else(Vec::new, |json| parse_capabilities(&json)),
-        status: parse_enum_column(row, 9)?,
-        current_task_id: row.get(10)?,
-        heartbeat_at: row.get(11)?,
+        tier: parse_optional_enum_column(row, 9)?,
+        specializations: row
+            .get::<_, Option<String>>(10)?
+            .map_or_else(Vec::new, |json| parse_capabilities(&json)),
+        status: parse_enum_column(row, 11)?,
+        current_task_id: row.get(12)?,
+        heartbeat_at: row.get(13)?,
     })
 }
 

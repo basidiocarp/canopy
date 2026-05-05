@@ -22,8 +22,8 @@ impl Store {
                 r"
                 INSERT INTO agents (
                     agent_id, host_id, host_type, host_instance, model,
-                    project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP)
+                    project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP)
                 ON CONFLICT(agent_id) DO UPDATE SET
                     host_id = excluded.host_id,
                     host_type = excluded.host_type,
@@ -33,6 +33,8 @@ impl Store {
                     worktree_id = excluded.worktree_id,
                     role = excluded.role,
                     capabilities = excluded.capabilities,
+                    tier = excluded.tier,
+                    specializations = excluded.specializations,
                     status = excluded.status,
                     current_task_id = excluded.current_task_id,
                     heartbeat_at = CURRENT_TIMESTAMP
@@ -47,6 +49,8 @@ impl Store {
                     agent.worktree_id,
                     agent.role.map(|value| value.to_string()),
                     serialize_capabilities(&agent.capabilities)?,
+                    agent.tier.map(|value| value.to_string()),
+                    serialize_capabilities(&agent.specializations)?,
                     agent.status.to_string(),
                     agent.current_task_id,
                 ],
@@ -77,7 +81,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT agent_id, host_id, host_type, host_instance, model,
-                   project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+                   project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
             FROM agents
             ORDER BY agent_id
             ",
@@ -193,7 +197,7 @@ impl Store {
             let mut stmt = self.conn.prepare(
                 r"
                 SELECT agent_id, host_id, host_type, host_instance, model,
-                       project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+                       project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
                 FROM agents
                 WHERE project_root = ?1
                 ORDER BY agent_id
@@ -219,7 +223,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT agent_id, host_id, host_type, host_instance, model,
-                   project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+                   project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
             FROM agents
             WHERE heartbeat_at IS NOT NULL
               AND (julianday('now') - julianday(heartbeat_at)) * 86400 > ?1
@@ -241,7 +245,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r"
             SELECT agent_id, host_id, host_type, host_instance, model,
-                   project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+                   project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
             FROM agents
             WHERE heartbeat_at IS NOT NULL
               AND (julianday('now') - julianday(heartbeat_at)) * 86400 <= 300
@@ -459,5 +463,89 @@ impl Store {
             .optional()?;
         exists.ok_or(StoreError::NotFound("agent"))?;
         Ok(())
+    }
+
+    /// Rank agents for task assignment based on capability match and tier.
+    ///
+    /// Scoring logic:
+    /// - Base score: 50.0
+    /// - If task has `requires_planning` tag and agent tier is Planner: +30.0
+    /// - If task has `requires_planning` tag and agent tier is Grunt: -30.0
+    /// - Per matching specialization in `required_tags`: +10.0
+    /// - Active agents (heartbeat in last 5 minutes): +20.0
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn rank_agents_for_task(
+        &self,
+        _task_id: &str,
+        required_tags: &[String],
+    ) -> StoreResult<Vec<crate::models::AgentRankEntry>> {
+        let agents = self.list_active_agents().unwrap_or_default();
+        let has_planning_tag = required_tags.iter().any(|tag| tag == "requires_planning");
+
+        let mut ranked: Vec<_> = agents
+            .into_iter()
+            .map(|agent| {
+                let mut score = 50.0_f32;
+                let mut reasons = Vec::new();
+
+                // Tier-based scoring for planning tasks
+                if has_planning_tag {
+                    match agent.tier {
+                        Some(crate::models::AgentTier::Planner) => {
+                            score += 30.0;
+                            reasons.push("matches_planning_tier".to_string());
+                        }
+                        Some(crate::models::AgentTier::Grunt) => {
+                            score -= 30.0;
+                            reasons.push("grunt_not_suitable_for_planning".to_string());
+                        }
+                        Some(crate::models::AgentTier::Worker) => {
+                            reasons.push("worker_tier".to_string());
+                        }
+                        None => {
+                            reasons.push("tier_unspecified".to_string());
+                        }
+                    }
+                }
+
+                // Specialization matching
+                let specialization_matches = agent
+                    .specializations
+                    .iter()
+                    .filter(|spec| required_tags.contains(spec))
+                    .count();
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    score += (specialization_matches as f32) * 10.0;
+                }
+                if specialization_matches > 0 {
+                    reasons.push(format!("{specialization_matches}_specializations_match"));
+                }
+
+                // Active status bonus
+                if agent.heartbeat_at.is_some() {
+                    score += 20.0;
+                    reasons.push("recently_active".to_string());
+                }
+
+                crate::models::AgentRankEntry {
+                    agent_id: agent.agent_id,
+                    score,
+                    reasons,
+                }
+            })
+            .collect();
+
+        ranked.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+        });
+
+        Ok(ranked)
     }
 }

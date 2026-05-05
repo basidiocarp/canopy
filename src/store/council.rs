@@ -530,6 +530,8 @@ mod tests {
                 worktree_id: worktree_id.to_string(),
                 role: Some(AgentRole::Implementer),
                 capabilities: vec!["rust".to_string()],
+                tier: None,
+                specializations: Vec::new(),
                 status: AgentStatus::Idle,
                 current_task_id: None,
                 heartbeat_at: None,

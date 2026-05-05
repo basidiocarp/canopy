@@ -102,6 +102,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: DispatchCommand,
     },
+    /// Start local unix-socket service endpoint (for cap and other local clients)
+    #[cfg(unix)]
+    #[command(hide = true)]
+    ServeSocket,
 }
 
 /// Subcommands for `canopy dispatch`.

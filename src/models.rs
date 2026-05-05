@@ -818,6 +818,22 @@ pub enum AgentAttentionReason {
     ReviewRequiredStatus,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AgentTier {
+    Planner,
+    Worker,
+    Grunt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRankEntry {
+    pub agent_id: String,
+    pub score: f32,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRegistration {
     pub agent_id: String,
@@ -829,6 +845,8 @@ pub struct AgentRegistration {
     pub worktree_id: String,
     pub role: Option<AgentRole>,
     pub capabilities: Vec<String>,
+    pub tier: Option<AgentTier>,
+    pub specializations: Vec<String>,
     pub status: AgentStatus,
     pub current_task_id: Option<String>,
     pub heartbeat_at: Option<String>,

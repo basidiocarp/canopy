@@ -59,17 +59,38 @@ chat logs or reconstructing state from memory.
 cargo install --path .
 
 # Register yourself as the orchestrator
-canopy agent register --host-id will --host-type claude-code --role orchestrator
+canopy agent register \
+  --agent-id orchestrator-1 \
+  --host-id will \
+  --host-type claude-code \
+  --host-instance local-machine \
+  --model opus \
+  --project-root /home/user/myproject \
+  --worktree-id main \
+  --role orchestrator
 
-# Create and assign work
-canopy task create --title "Fix hyphae decay formula" --priority high
-canopy task assign <task_id> --agent-id will
+# Create work
+canopy task create \
+  --title "Fix hyphae decay formula" \
+  --requested-by orchestrator-1
+
+# Set priority and severity
+canopy task triage \
+  --task-id <task_id> \
+  --changed-by orchestrator-1 \
+  --priority high
+
+# Assign work
+canopy task assign \
+  --task-id <task_id> \
+  --assigned-to implementer-1 \
+  --assigned-by orchestrator-1
 
 # Inspect what needs attention
 canopy api snapshot --preset attention
 
 # Quick agent and task snapshot
-canopy situation --agent-id will
+canopy situation --agent-id orchestrator-1
 ```
 
 ---
@@ -148,14 +169,74 @@ canopy (single binary)
 ```
 
 ```text
-canopy agent register ...   register an agent identity
-canopy task create ...      create work
-canopy task assign ...      assign ownership
-canopy task complete ...    mark task done (fails if children are open)
-canopy handoff create ...   request review or transfer work
-canopy situation ...        view current agent and task snapshot
-canopy api snapshot ...     render operator views with filtering
-canopy serve                expose MCP tools
+Agent Management
+  canopy agent register       register an agent with identity and capabilities
+  canopy agent heartbeat      send a liveness signal and update current task
+  canopy agent history        view agent activity history
+  canopy agent list           list all registered agents
+
+Task Lifecycle
+  canopy task create          create a new task
+  canopy task assign          assign a task to an agent
+  canopy task claim           claim a task as the current agent
+  canopy task complete        mark task done (fails if children are open)
+  canopy task status          update task status and verification state
+  canopy task triage          set priority, severity, and owner notes
+  canopy task action          multi-purpose task action (bundled changes)
+  canopy task verify          run a verification script against a task
+  canopy task list            list all tasks in tree or flat view
+  canopy task list-view       list tasks with filtering and presets
+  canopy task show            display detailed task information
+
+Handoff Management
+  canopy handoff create       request review or transfer work to another agent
+  canopy handoff resolve      accept, reject, or defer a handoff
+  canopy handoff action       perform operator actions on a handoff
+  canopy handoff list         list handoffs for a task
+
+Evidence & Verification
+  canopy evidence add         link external evidence to a task
+  canopy evidence list        list all evidence for a task
+  canopy evidence verify      check evidence validity
+
+Council Sessions (Decision Threads)
+  canopy council summon       open a council session for task discussion
+  canopy council post         post a message to a council session
+  canopy council show         display council messages for a task
+  canopy council open         open a new council session
+  canopy council close        close a council session with optional outcome
+  canopy council status       list open sessions for a task
+  canopy council join         add an agent to a council session
+
+Workflow & Outcomes
+  canopy outcome record       store a workflow-outcome-v1 JSON result
+  canopy outcome list         list all recorded outcomes
+  canopy outcome show         display outcome by workflow ID
+  canopy outcome summary      print outcome counts by template and failure type
+
+Dispatch & Policy
+  canopy dispatch submit      create a task from a dispatch-request-v1 payload
+  canopy policy show          display active MCP dispatch policy
+
+File Coordination
+  canopy files lock           lock files for exclusive agent access
+  canopy files unlock         release locks for a task
+  canopy files check          check for lock conflicts on files
+  canopy files list           list all locked files
+
+Notifications
+  canopy notification list    list unread notifications (or all with --all)
+  canopy notification mark-read mark a single notification as read
+  canopy notification mark-all-read mark all notifications as read
+
+Queues & Coordination
+  canopy work-queue           show priority queue for an agent
+  canopy import-handoff       import a handoff from a Markdown or JSON file
+  canopy situation            view agent and task snapshot at a glance
+
+Server & Snapshots
+  canopy api snapshot         render operator views with filtering
+  canopy serve                expose MCP tools for Claude Code
 ```
 
 ---

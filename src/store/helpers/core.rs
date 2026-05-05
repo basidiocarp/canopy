@@ -30,7 +30,7 @@ pub(crate) fn get_agent_in_connection(
     conn.query_row(
         r"
         SELECT agent_id, host_id, host_type, host_instance, model,
-               project_root, worktree_id, role, capabilities, status, current_task_id, heartbeat_at
+               project_root, worktree_id, role, capabilities, tier, specializations, status, current_task_id, heartbeat_at
         FROM agents
         WHERE agent_id = ?1
         ",
