@@ -229,6 +229,9 @@ pub(super) fn derive_task_attention(
             if is_open && relationship_summary.is_some_and(|summary| summary.children_complete) {
                 reasons.push(TaskAttentionReason::AllChildrenComplete);
             }
+            if is_open && relationship_summary.is_some_and(|summary| summary.open_child_count > 0) {
+                reasons.push(TaskAttentionReason::BlockedOnChildren);
+            }
             if context
                 .assigned_awaiting_claim_task_ids
                 .contains(&task.task_id)

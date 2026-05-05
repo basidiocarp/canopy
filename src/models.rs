@@ -522,6 +522,7 @@ pub enum TaskAttentionReason {
     ReviewReadyForCloseout,
     HasOpenFollowUps,
     AllChildrenComplete,
+    BlockedOnChildren,
     AssignedAwaitingClaim,
     ClaimedNotStarted,
     PausedResumable,

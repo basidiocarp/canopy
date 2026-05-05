@@ -385,21 +385,25 @@ pub fn tool_task_complete(
 
     if task_record.verification_required && !force {
         let evidence: Vec<_> = store.list_evidence(task_id).unwrap_or_default();
-        let has_passing_verification = evidence.iter().any(|e| {
-            matches!(
-                e.source_kind,
-                crate::models::EvidenceSourceKind::ScriptVerification
-            ) && e
+        let has_passing_verification = evidence.iter().any(|e| match e.source_kind {
+            crate::models::EvidenceSourceKind::ScriptVerification => e
                 .summary
                 .as_deref()
-                .is_some_and(|s| s.contains("script verification passed"))
+                .is_some_and(|s| s.contains("script verification passed")),
+            crate::models::EvidenceSourceKind::RhizomeImpact
+            | crate::models::EvidenceSourceKind::CortinaEvent => true,
+            _ => false,
         });
         if !has_passing_verification {
             return ToolResult::error(format!(
-                "task {task_id} requires script verification before completion.\n\n\
-                 Attach a passing verification result:\n  \
+                "task {task_id} requires verification evidence before completion.\n\n\
+                 Attach one of:\n  \
                  canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
-                 --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
+                 --source-ref <ref> --label verification --summary 'script verification passed'\n  \
+                 canopy evidence add --task-id {task_id} --source-kind rhizome_impact \\\n    \
+                 --source-ref <ref> --label verification\n  \
+                 canopy evidence add --task-id {task_id} --source-kind cortina_event \\\n    \
+                 --source-ref <ref> --label verification\n\n\
                  Or override (operators only):\n  \
                  canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force"
             ));
