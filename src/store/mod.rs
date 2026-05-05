@@ -498,6 +498,8 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
         conn.execute_batch(BASE_SCHEMA)?;
 
         migrate_schema(&conn)?;
