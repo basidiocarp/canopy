@@ -133,11 +133,10 @@ mod tests {
     use rusqlite::Connection;
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().expect("in-memory db");
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
         conn.pragma_update(None, "foreign_keys", "ON")
             .expect("foreign_keys");
-        conn.execute_batch(BASE_SCHEMA).expect("base schema");
-        migrate_schema(&conn).expect("migrate");
+        migrate_schema(&mut conn).expect("migrate");
         conn
     }
 

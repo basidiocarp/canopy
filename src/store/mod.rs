@@ -41,7 +41,7 @@ use std::fs;
 use std::path::Path;
 use thiserror::Error;
 
-use schema::{BASE_SCHEMA, migrate_schema};
+use schema::migrate_schema;
 
 pub(crate) const EVIDENCE_REF_SCHEMA_VERSION: &str = "1.0";
 pub const CLAIM_STALE_THRESHOLD_SECS: i64 = 300;
@@ -497,15 +497,14 @@ impl Store {
                 .map_err(|error| StoreError::Validation(error.to_string()))?;
         }
 
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
-        conn.execute_batch(BASE_SCHEMA)?;
 
-        migrate_schema(&conn)?;
+        migrate_schema(&mut conn)?;
 
         Ok(Self { conn })
     }

@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use rusqlite_migration::{Migrations, M};
 
 use super::StoreResult;
 
@@ -15,7 +16,10 @@ pub(crate) const BASE_SCHEMA: &str = r"
         capabilities TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         current_task_id TEXT NULL,
-        heartbeat_at TEXT NULL
+        heartbeat_at TEXT NULL,
+        tier TEXT NULL,
+        specializations TEXT NOT NULL DEFAULT '[]',
+        last_heartbeat_at TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS tasks (
@@ -53,7 +57,10 @@ pub(crate) const BASE_SCHEMA: &str = r"
         review_due_at TEXT NULL,
         scope TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        output TEXT NULL,
+        claimed_at TEXT NULL,
+        files_hint TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS task_queue_states (
@@ -145,7 +152,8 @@ pub(crate) const BASE_SCHEMA: &str = r"
         timeline_ref TEXT NOT NULL,
         opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        closed_at TEXT NULL
+        closed_at TEXT NULL,
+        conversation_id TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS evidence_refs (
@@ -192,6 +200,8 @@ pub(crate) const BASE_SCHEMA: &str = r"
     CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source
     ON task_relationships(source_task_id)
     WHERE kind = 'parent';
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 
     CREATE TABLE IF NOT EXISTS agent_heartbeat_events (
         heartbeat_id TEXT PRIMARY KEY,
@@ -354,345 +364,56 @@ pub(crate) const BASE_SCHEMA: &str = r"
     END;
 ";
 
-#[allow(clippy::too_many_lines)]
-pub(crate) fn migrate_schema(conn: &Connection) -> StoreResult<()> {
-    ensure_column(conn, "tasks", "priority", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "severity", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "required_role", "TEXT NULL")?;
-    ensure_column(
-        conn,
-        "tasks",
-        "required_capabilities",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    ensure_column(conn, "tasks", "auto_review", "INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(
-        conn,
-        "tasks",
-        "verification_required",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    ensure_column(conn, "tasks", "owner_note", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "acknowledged_by", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "acknowledged_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "due_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "review_due_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "parent_task_id", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "queue_state_id", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "worktree_binding_id", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "execution_session_ref", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "review_cycle_id", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "created_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "updated_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "output", "TEXT NULL")?;
-    conn.execute(
-        r"
-        UPDATE tasks
-        SET priority = COALESCE(priority, 'medium'),
-            severity = COALESCE(severity, 'none'),
-            required_capabilities = COALESCE(required_capabilities, '[]'),
-            auto_review = COALESCE(auto_review, 0),
-            verification_required = COALESCE(verification_required, 0),
-            created_at = COALESCE(
-                created_at,
-                (SELECT MIN(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
-                CURRENT_TIMESTAMP
-            ),
-            updated_at = COALESCE(
-                updated_at,
-                (SELECT MAX(created_at) FROM task_events WHERE task_events.task_id = tasks.task_id),
-                closed_at,
-                verified_at,
-                created_at,
-                CURRENT_TIMESTAMP
-            )
-        ",
-        [],
-    )?;
-    conn.execute(
-        r"
-        UPDATE tasks
-        SET parent_task_id = COALESCE(
-                parent_task_id,
-                (
-                    SELECT target_task_id
-                    FROM task_relationships
-                    WHERE task_relationships.source_task_id = tasks.task_id
-                      AND task_relationships.kind = 'parent'
-                    ORDER BY task_relationships.created_at DESC
-                    LIMIT 1
-                )
-            )
-        ",
-        [],
-    )?;
+fn migrations() -> Migrations<'static> {
+    Migrations::new(vec![
+        M::up(BASE_SCHEMA),
+    ])
+}
 
-    ensure_column(conn, "handoffs", "due_at", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "expires_at", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "created_at", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "updated_at", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "resolved_at", "TEXT NULL")?;
-    conn.execute(
-        r"
-        UPDATE handoffs
-        SET created_at = COALESCE(
-                created_at,
-                (SELECT created_at FROM tasks WHERE tasks.task_id = handoffs.task_id),
-                CURRENT_TIMESTAMP
-            ),
-            updated_at = COALESCE(
-                updated_at,
-                resolved_at,
-                (SELECT updated_at FROM tasks WHERE tasks.task_id = handoffs.task_id),
-                created_at,
-                CURRENT_TIMESTAMP
-            )
-        ",
-        [],
-    )?;
+fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
+    let user_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // If user_version is already set, migrations have been applied; skip bootstrap.
+    if user_version != 0 {
+        return Ok(());
+    }
+    // Check if tasks table exists
+    let tasks_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .is_ok_and(|c| c > 0);
+    if tasks_exists {
+        // Legacy databases may be missing columns. Use ALTER TABLE ADD COLUMN IF NOT EXISTS
+        // (available in SQLite 3.35.0+) to safely add missing columns without checking first.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN queue_state_id TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree_binding_id TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN execution_session_ref TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_cycle_id TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
 
-    ensure_column(conn, "council_messages", "created_at", "TEXT NULL")?;
-    conn.execute(
-        r"
-        UPDATE council_messages
-        SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
-        ",
-        [],
-    )?;
-
-    ensure_column(conn, "council_sessions", "session_summary", "TEXT NULL")?;
-    ensure_column(conn, "council_sessions", "updated_at", "TEXT NULL")?;
-    ensure_column(conn, "council_sessions", "conversation_id", "TEXT NULL")?;
-    conn.execute(
-        r"
-        UPDATE council_sessions
-        SET updated_at = COALESCE(updated_at, closed_at, opened_at, CURRENT_TIMESTAMP)
-        ",
-        [],
-    )?;
-
-    ensure_column(conn, "evidence_refs", "related_session_id", "TEXT NULL")?;
-    ensure_column(conn, "evidence_refs", "related_memory_query", "TEXT NULL")?;
-    ensure_column(conn, "evidence_refs", "related_symbol", "TEXT NULL")?;
-    ensure_column(conn, "evidence_refs", "related_file", "TEXT NULL")?;
-    ensure_column(
-        conn,
-        "evidence_refs",
-        "schema_version",
-        "TEXT NOT NULL DEFAULT '1.0'",
-    )?;
-    conn.execute(
-        "UPDATE evidence_refs SET schema_version = COALESCE(schema_version, '1.0')",
-        [],
-    )?;
-    ensure_column(conn, "task_events", "execution_action", "TEXT NULL")?;
-    ensure_column(
-        conn,
-        "task_events",
-        "execution_duration_seconds",
-        "INTEGER NULL",
-    )?;
-    ensure_column(
-        conn,
-        "agent_heartbeat_events",
-        "related_task_id",
-        "TEXT NULL",
-    )?;
-    ensure_column(conn, "agents", "role", "TEXT NULL")?;
-    ensure_column(conn, "agents", "capabilities", "TEXT NOT NULL DEFAULT '[]'")?;
-    conn.execute(
-        "UPDATE agents SET capabilities = COALESCE(capabilities, '[]')",
-        [],
-    )?;
-    ensure_column(conn, "agents", "tier", "TEXT NULL")?;
-    ensure_column(conn, "agents", "specializations", "TEXT NOT NULL DEFAULT '[]'")?;
-    conn.execute(
-        "UPDATE agents SET specializations = COALESCE(specializations, '[]')",
-        [],
-    )?;
-    conn.execute_batch(
-        r"
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_parent_source
-        ON task_relationships(source_task_id)
-        WHERE kind = 'parent';
-        CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id
-        ON tasks(parent_task_id)
-        ",
-    )?;
-
-    // File-scope conflict detection
-    ensure_column(conn, "tasks", "scope", "TEXT NOT NULL DEFAULT '[]'")?;
-
-    // Track 1 (Foundation) columns
-    ensure_column(conn, "tasks", "claimed_at", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "files_hint", "TEXT NULL")?;
-    ensure_column(conn, "agents", "last_heartbeat_at", "TEXT NULL")?;
-
-    // Ensure file_locks table and indexes exist for older databases.
-    // The task_id FK uses ON DELETE CASCADE so that delete_task removes all
-    // associated locks atomically without requiring an explicit pre-delete step.
-    conn.execute_batch(
-        r"
-        CREATE TABLE IF NOT EXISTS file_locks (
-            lock_id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-            agent_id TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            worktree_id TEXT NOT NULL,
-            locked_at TEXT NOT NULL,
-            released_at TEXT
+        // Create the parent_task_id index for legacy databases.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)",
+            [],
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_file_locks_active
-            ON file_locks(file_path, worktree_id) WHERE released_at IS NULL;
-        CREATE INDEX IF NOT EXISTS idx_file_locks_agent
-            ON file_locks(agent_id) WHERE released_at IS NULL;
-        CREATE INDEX IF NOT EXISTS idx_file_locks_task
-            ON file_locks(task_id) WHERE released_at IS NULL;
-        ",
-    )?;
 
-    // Workflow ledger alignment (141d) — explicit workflow/phase linkage on tasks
-    ensure_column(conn, "tasks", "workflow_id", "TEXT NULL")?;
-    ensure_column(conn, "tasks", "phase_id", "TEXT NULL")?;
-
-    // Workflow ledger alignment (141d) — semantic handoff context
-    ensure_column(conn, "handoffs", "goal", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "next_steps", "TEXT NULL")?;
-    ensure_column(conn, "handoffs", "stop_reason", "TEXT NULL")?;
-
-    // Task duplicate prevention: partial unique index on scope for queued (open) tasks.
-    // concurrency cap enforcement: no schema column needed — enforced at claim time.
-    conn.execute_batch(
-        r"
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_queued_scope_dedup
-        ON tasks(scope)
-        WHERE status = 'open' AND scope != '[]';
-        ",
-    )?;
-
-    // Tool adoption scoring (#114c) — per-task tool usage analysis
-    conn.execute_batch(
-        r"
-        CREATE TABLE IF NOT EXISTS tool_adoption_scores (
-            task_id    TEXT NOT NULL PRIMARY KEY,
-            score_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
-        );
-        ",
-    )?;
-
-    // Sync trigger: keep tasks.parent_task_id and task_relationships consistent
-    // on parent deletion. Existing databases need this migrated in.
-    conn.execute_batch(
-        r"
-        CREATE TRIGGER IF NOT EXISTS trg_task_delete_clear_parent_relationship
-        BEFORE DELETE ON tasks
-        FOR EACH ROW
-        BEGIN
-            DELETE FROM task_relationships
-            WHERE kind = 'parent'
-              AND target_task_id = OLD.task_id;
-        END;
-        ",
-    )?;
-
-    // Policy events table for MCP tool dispatch decision logging.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS policy_events (
-            event_id    TEXT PRIMARY KEY,
-            ts          INTEGER NOT NULL,
-            agent_id    TEXT NOT NULL,
-            tool_name   TEXT NOT NULL,
-            decision    TEXT NOT NULL CHECK(decision IN ('proceed', 'flag')),
-            reason      TEXT NOT NULL,
-            task_id     TEXT
-        );",
-    )?;
-
-    // DAG-based task graph tables
-    conn.execute_batch(
-        r"
-        CREATE TABLE IF NOT EXISTS dag_graphs (
-            graph_id    TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'open'
-                            CHECK(status IN ('open', 'complete', 'failed')),
-            created_at  INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS dag_nodes (
-            node_id      TEXT PRIMARY KEY,
-            graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
-            label        TEXT NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'pending'
-                             CHECK(status IN ('pending', 'ready', 'running', 'complete', 'failed')),
-            task_id      TEXT,
-            created_at   INTEGER NOT NULL,
-            completed_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS dag_edges (
-            edge_id      TEXT PRIMARY KEY,
-            graph_id     TEXT NOT NULL REFERENCES dag_graphs(graph_id),
-            from_node_id TEXT NOT NULL REFERENCES dag_nodes(node_id),
-            to_node_id   TEXT NOT NULL REFERENCES dag_nodes(node_id),
-            edge_type    TEXT NOT NULL DEFAULT 'blocks'
-                             CHECK(edge_type IN ('blocks', 'informs'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_dag_nodes_graph ON dag_nodes(graph_id);
-        CREATE INDEX IF NOT EXISTS idx_dag_edges_to ON dag_edges(to_node_id);
-        ",
-    )?;
-
-    // Drop the old partial unique index that only covered status='open'.
-    // Duplicate-scope enforcement is now application-level and covers all five
-    // non-terminal statuses. Existing databases must shed this index so it does
-    // not conflict with the new semantics or confuse future debugging.
-    conn.execute_batch("DROP INDEX IF EXISTS idx_tasks_queued_scope_dedup;")?;
-
-    // Permission rules for persistent dispatch policy (W1a)
-    conn.execute_batch(
-        r"
-        CREATE TABLE IF NOT EXISTS permission_rules (
-            rule_id     TEXT PRIMARY KEY,
-            agent_id    TEXT NOT NULL,
-            tool_name   TEXT NOT NULL,
-            action      TEXT NOT NULL CHECK(action IN ('allow', 'deny')),
-            scope       TEXT NOT NULL CHECK(scope IN ('session', 'permanent')),
-            reason      TEXT NOT NULL DEFAULT '',
-            created_at  INTEGER NOT NULL,
-            expires_at  INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
-            ON permission_rules(agent_id, tool_name);
-        ",
-    )?;
-
+        // Schema is complete. Set user_version to 1 so to_latest() won't re-run M0.
+        conn.execute_batch("PRAGMA user_version = 1;")?;
+    }
+    // If tasks table doesn't exist, leave user_version at 0
+    // so to_latest() runs M0 (BASE_SCHEMA) which creates the schema fresh.
     Ok(())
 }
 
-fn ensure_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> StoreResult<()> {
-    // PRAGMA table_info does not support bound parameters — the table name must
-    // be interpolated directly. All call sites use internal constants, so this
-    // is safe in practice; the ALTER TABLE below quotes the identifier for
-    // defence-in-depth.
-    let pragma = format!("PRAGMA table_info({table})");
-    let mut stmt = conn.prepare(&pragma)?;
-    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
-
-    for existing in columns {
-        if existing? == column {
-            return Ok(());
-        }
-    }
-
-    // Quote the table identifier so that names with spaces or reserved words
-    // are handled correctly and to close any SQL-injection surface.
-    let alter = format!("ALTER TABLE \"{table}\" ADD COLUMN {column} {definition}");
-    conn.execute(&alter, [])?;
+pub fn migrate_schema(conn: &mut Connection) -> StoreResult<()> {
+    bootstrap_existing_db(conn)?;
+    migrations()
+        .to_latest(conn)
+        .map_err(|e| super::StoreError::Validation(e.to_string()))?;
     Ok(())
 }
