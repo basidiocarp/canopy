@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::models::{
     AgentHeartbeatEvent, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
-    CouncilSession, EvidenceRef, EvidenceSourceKind, FileLock, Handoff, HandoffStatus, HandoffType,
-    OutcomeSummaryRow, RelatedTask, Task, TaskAction, TaskAssignment, TaskEvent, TaskRelationship,
-    TaskRelationshipKind, TaskStatus, TaskSummary, TaskWorkflowContext, ToolAdoptionScore,
-    WorkflowOutcomeRecord,
+    CouncilSession, EvidenceRef, EvidenceSourceKind, FactScope, FactType, FileLock, Handoff,
+    HandoffStatus, HandoffType, KnownFact, OutcomeSummaryRow, RelatedTask, Task, TaskAction,
+    TaskAssignment, TaskEvent, TaskRelationship, TaskRelationshipKind, TaskStatus, TaskSummary,
+    TaskWorkflowContext, ToolAdoptionScore, WorkflowOutcomeRecord,
 };
 
 use super::{
@@ -374,6 +374,30 @@ pub trait DagStore {
     ) -> StoreResult<()>;
 }
 
+/// Read/write access to the known-facts cache (H-09).
+#[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
+pub trait KnownFactStore {
+    fn insert_known_fact(
+        &self,
+        fact_id: &str,
+        key: &str,
+        fact_type: &FactType,
+        scope: &FactScope,
+        summary: &str,
+        hyphae_id: Option<&str>,
+        established_by: &str,
+        task_id: Option<&str>,
+        confidence: f32,
+    ) -> StoreResult<KnownFact>;
+
+    fn query_known_facts(
+        &self,
+        keys: Option<&[String]>,
+        scope: Option<&FactScope>,
+        task_id: Option<&str>,
+    ) -> StoreResult<Vec<KnownFact>>;
+}
+
 pub trait CanopyStore:
     AgentStore
     + TaskGetStore
@@ -393,6 +417,7 @@ pub trait CanopyStore:
     + PolicyEventStore
     + PermissionRuleStore
     + DagStore
+    + KnownFactStore
 {
 }
 
@@ -415,6 +440,7 @@ impl<T> CanopyStore for T where
         + PolicyEventStore
         + PermissionRuleStore
         + DagStore
+        + KnownFactStore
 {
 }
 
@@ -1031,5 +1057,41 @@ impl DagStore for super::Store {
         completed_at: Option<i64>,
     ) -> StoreResult<()> {
         self.dag_update_node_status(node_id, status, completed_at)
+    }
+}
+
+impl KnownFactStore for super::Store {
+    fn insert_known_fact(
+        &self,
+        fact_id: &str,
+        key: &str,
+        fact_type: &FactType,
+        scope: &FactScope,
+        summary: &str,
+        hyphae_id: Option<&str>,
+        established_by: &str,
+        task_id: Option<&str>,
+        confidence: f32,
+    ) -> StoreResult<KnownFact> {
+        self.insert_known_fact(
+            fact_id,
+            key,
+            fact_type,
+            scope,
+            summary,
+            hyphae_id,
+            established_by,
+            task_id,
+            confidence,
+        )
+    }
+
+    fn query_known_facts(
+        &self,
+        keys: Option<&[String]>,
+        scope: Option<&FactScope>,
+        task_id: Option<&str>,
+    ) -> StoreResult<Vec<KnownFact>> {
+        self.query_known_facts(keys, scope, task_id)
     }
 }

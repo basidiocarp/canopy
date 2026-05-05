@@ -7,6 +7,7 @@ mod evidence;
 mod files;
 mod handoffs;
 mod helpers;
+mod known_facts;
 pub mod notifications;
 mod operator_actions;
 mod orchestration;
@@ -25,7 +26,9 @@ pub use dag::{
 };
 pub use permission_rules::{PermissionRule, lookup_rule, upsert_rule};
 pub use policy_events::PolicyEventRow;
-pub use traits::{CanopyStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore};
+pub use traits::{
+    CanopyStore, KnownFactStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore,
+};
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,

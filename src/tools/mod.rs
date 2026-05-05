@@ -6,6 +6,7 @@ pub mod files;
 pub mod handoff;
 pub mod identity;
 pub mod import;
+pub mod known_facts;
 pub mod metadata;
 pub mod outcomes;
 pub mod policy;
@@ -216,6 +217,8 @@ pub fn dispatch_tool(
         "canopy_dag_add_edge" => dag::tool_canopy_dag_add_edge(store, agent_id, args),
         "canopy_dag_ready_nodes" => dag::tool_canopy_dag_ready_nodes(store, agent_id, args),
         "canopy_dag_complete_node" => dag::tool_canopy_dag_complete_node(store, agent_id, args),
+        "canopy_known_facts_add" => known_facts::tool_known_facts_add(store, agent_id, args),
+        "canopy_get_known_facts" => known_facts::tool_known_facts_get(store, agent_id, args),
         _ => ToolResult::error(format!("unknown tool: {name}")),
     }
 }

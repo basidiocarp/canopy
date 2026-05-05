@@ -1718,6 +1718,99 @@ impl ToolAdoptionScore {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Known-Facts Registry (H-09)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Scope over which a known fact is valid.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FactScope {
+    /// Fact applies across the whole project.
+    Project,
+    /// Fact is scoped to a single task.
+    Task,
+    /// Fact is scoped to a specific file path.
+    File,
+}
+
+impl std::fmt::Display for FactScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FactScope::Project => write!(f, "project"),
+            FactScope::Task => write!(f, "task"),
+            FactScope::File => write!(f, "file"),
+        }
+    }
+}
+
+impl std::str::FromStr for FactScope {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "project" => Ok(FactScope::Project),
+            "task" => Ok(FactScope::Task),
+            "file" => Ok(FactScope::File),
+            other => Err(format!("unknown fact scope: {other}")),
+        }
+    }
+}
+
+/// Semantic category of a known fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FactType {
+    Decision,
+    Constraint,
+    ErrorResolution,
+    Invariant,
+    Other,
+}
+
+impl std::fmt::Display for FactType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FactType::Decision => write!(f, "decision"),
+            FactType::Constraint => write!(f, "constraint"),
+            FactType::ErrorResolution => write!(f, "error_resolution"),
+            FactType::Invariant => write!(f, "invariant"),
+            FactType::Other => write!(f, "other"),
+        }
+    }
+}
+
+impl std::str::FromStr for FactType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "decision" => Ok(FactType::Decision),
+            "constraint" => Ok(FactType::Constraint),
+            "error_resolution" => Ok(FactType::ErrorResolution),
+            "invariant" => Ok(FactType::Invariant),
+            _ => Ok(FactType::Other),
+        }
+    }
+}
+
+/// A cached fact established by an agent and stored in Canopy for cheap lookup.
+///
+/// Facts are written via H-08 `EstablishedFact` events and queried before
+/// firing a full Hyphae search. A hit avoids the search entirely; a miss falls
+/// through to Hyphae normally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnownFact {
+    pub fact_id: String,
+    pub key: String,
+    pub fact_type: FactType,
+    pub scope: FactScope,
+    pub summary: String,
+    pub hyphae_id: Option<String>,
+    pub established_by: String,
+    pub task_id: Option<String>,
+    pub confidence: f32,
+    pub established_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ToolAdoptionScore, ToolAdoptionStatus, capabilities_match, parse_capabilities};

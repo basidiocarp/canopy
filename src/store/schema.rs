@@ -317,6 +317,24 @@ pub(crate) const BASE_SCHEMA: &str = r"
     CREATE INDEX IF NOT EXISTS idx_permission_rules_lookup
         ON permission_rules(agent_id, tool_name);
 
+    -- Known-facts cache (H-09). Populated by EstablishedFact events from agents.
+    -- Provides cheap pre-Hyphae lookup: hit → load by hyphae_id; miss → full search.
+    CREATE TABLE IF NOT EXISTS known_facts (
+        fact_id          TEXT PRIMARY KEY,
+        key              TEXT NOT NULL,
+        fact_type        TEXT NOT NULL DEFAULT 'other',
+        scope            TEXT NOT NULL DEFAULT 'project',
+        summary          TEXT NOT NULL,
+        hyphae_id        TEXT,
+        established_by   TEXT NOT NULL,
+        task_id          TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+        confidence       REAL NOT NULL DEFAULT 1.0,
+        established_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_known_facts_key ON known_facts(key);
+    CREATE INDEX IF NOT EXISTS idx_known_facts_task ON known_facts(task_id);
+
     -- Keep tasks.parent_task_id and task_relationships in sync on parent deletion.
     -- When a parent task is deleted, SQLite's FK engine sets children's parent_task_id
     -- to NULL (ON DELETE SET NULL) and cascade-deletes task_relationships rows

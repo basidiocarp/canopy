@@ -1198,6 +1198,85 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
     ));
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Known-Facts Registry (H-09)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_known_facts_add",
+        "Store a fact established by this agent so other agents can find it without re-deriving it. \
+         Provide a hyphae_id when the full content lives in Hyphae memory.",
+        json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Short stable identifier for this fact (e.g. 'arch/event-model')"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One or two sentences that let another agent decide if this fact is relevant"
+                },
+                "established_by": {
+                    "type": "string",
+                    "description": "agent_id of the agent establishing this fact"
+                },
+                "fact_type": {
+                    "type": "string",
+                    "enum": ["decision", "constraint", "error_resolution", "invariant", "other"],
+                    "description": "Semantic category of the fact"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "task", "file"],
+                    "description": "Scope over which the fact is valid (default: project)"
+                },
+                "hyphae_id": {
+                    "type": "string",
+                    "description": "Hyphae memory ID where the full content can be loaded, if any"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task this fact was established for (required when scope = task)"
+                },
+                "confidence": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Agent's confidence in the fact (default: 1.0)"
+                }
+            },
+            "required": ["key", "summary", "established_by"]
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_get_known_facts",
+        "Query the known-facts cache. Returns matching facts with their Hyphae IDs so you can load \
+         full content without a search. A miss means the fact has not been established yet — fall \
+         through to hyphae_memory_recall normally.",
+        json!({
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Specific fact keys to look up. Omit to return all facts."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "task", "file"],
+                    "description": "Filter by scope"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Limit to facts established for this task"
+                }
+            },
+            "required": []
+        }),
+    ));
+
     tools
 }
 
