@@ -372,11 +372,9 @@ fn migrations() -> Migrations<'static> {
 
 fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    // If user_version is already set, migrations have been applied; skip bootstrap.
     if user_version != 0 {
         return Ok(());
     }
-    // Check if tasks table exists
     let tasks_exists: bool = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'",
@@ -384,29 +382,88 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
             |r| r.get::<_, i64>(0),
         )
         .is_ok_and(|c| c > 0);
-    if tasks_exists {
-        // Legacy databases may be missing columns. Use ALTER TABLE ADD COLUMN IF NOT EXISTS
-        // (available in SQLite 3.35.0+) to safely add missing columns without checking first.
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN queue_state_id TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree_binding_id TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN execution_session_ref TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_cycle_id TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
-
-        // Create the parent_task_id index for legacy databases.
-        let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)",
-            [],
-        );
-
-        // Schema is complete. Set user_version to 1 so to_latest() won't re-run M0.
-        conn.execute_batch("PRAGMA user_version = 1;")?;
+    if !tasks_exists {
+        // Fresh database: leave user_version at 0 so to_latest() runs M0.
+        return Ok(());
     }
-    // If tasks table doesn't exist, leave user_version at 0
-    // so to_latest() runs M0 (BASE_SCHEMA) which creates the schema fresh.
+
+    // Add missing columns to tables that existed before these columns were introduced.
+    // ALTER TABLE fails with "duplicate column name" if the column already exists;
+    // that is the expected case on a fully up-to-date database, so we intentionally discard.
+    // Column patches must run BEFORE execute_batch(BASE_SCHEMA) because BASE_SCHEMA includes
+    // indexes that reference these columns; those indexes would fail if columns don't exist yet.
+
+    // tasks columns added over time
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN priority TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN severity TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN required_role TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN required_capabilities TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN auto_review INTEGER NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN verification_required INTEGER NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN owner_note TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN acknowledged_by TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN acknowledged_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN due_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_due_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN queue_state_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree_binding_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN execution_session_ref TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_cycle_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN scope TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN claimed_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN files_hint TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
+
+    // handoffs columns added over time
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN due_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN expires_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN created_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN updated_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN resolved_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN goal TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN next_steps TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN stop_reason TEXT NULL", []);
+
+    // agents columns added over time
+    let _ = conn.execute("ALTER TABLE agents ADD COLUMN role TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE agents ADD COLUMN tier TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE agents ADD COLUMN specializations TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE agents ADD COLUMN last_heartbeat_at TEXT NULL", []);
+
+    // council_sessions columns added over time
+    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN session_summary TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN updated_at TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN conversation_id TEXT NULL", []);
+
+    // council_messages columns added over time
+    let _ = conn.execute("ALTER TABLE council_messages ADD COLUMN created_at TEXT NULL", []);
+
+    // evidence_refs columns added over time
+    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_session_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_memory_query TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_symbol TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_file TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN schema_version TEXT NULL", []);
+
+    // task_events columns added over time
+    let _ = conn.execute("ALTER TABLE task_events ADD COLUMN execution_action TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE task_events ADD COLUMN execution_duration_seconds INTEGER NULL", []);
+
+    // agent_heartbeat_events columns added over time
+    let _ = conn.execute("ALTER TABLE agent_heartbeat_events ADD COLUMN related_task_id TEXT NULL", []);
+
+    // Now run the full baseline schema to create any tables added after the initial install
+    // (all IF NOT EXISTS — safe). Runs after column patches so indexes on new columns succeed.
+    conn.execute_batch(BASE_SCHEMA)?;
+
+    // Stamp migration version so to_latest() skips M0.
+    conn.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())
 }
 
