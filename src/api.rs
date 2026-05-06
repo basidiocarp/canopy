@@ -395,6 +395,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     let council_session = store.get_council_session(task_id)?;
     let messages = store.list_council_messages(task_id)?;
     let evidence = store.list_evidence(task_id)?;
+    let review_annotations = store.list_review_annotations_for_task(task_id)?;
     let workflow_context = Some(store.get_task_workflow_context(task_id)?);
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
     let agents = store.list_agents()?;
@@ -566,6 +567,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         children_complete,
         children,
         parent_id: store.get_parent_id(task_id)?,
+        review_annotations,
         tool_adoption_score,
     })
 }

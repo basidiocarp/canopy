@@ -362,11 +362,44 @@ pub(crate) const BASE_SCHEMA: &str = r"
         WHERE kind = 'parent'
           AND target_task_id = OLD.task_id;
     END;
+
+    -- Review annotations from the cap inline diff review UI (inline-diff-review handoff).
+    CREATE TABLE IF NOT EXISTS review_annotations (
+        annotation_id  TEXT PRIMARY KEY,
+        task_id        TEXT NOT NULL REFERENCES tasks(task_id),
+        file_path      TEXT NOT NULL,
+        start_line     INTEGER NOT NULL,
+        end_line       INTEGER NOT NULL,
+        action         TEXT NOT NULL CHECK(action IN ('approve', 'reject', 'revise')),
+        comment        TEXT NOT NULL DEFAULT '',
+        anchor_hash    TEXT NOT NULL,
+        operator_id    TEXT NOT NULL,
+        created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_review_annotations_task
+        ON review_annotations(task_id);
 ";
 
 fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(BASE_SCHEMA),
+        M::up(r"
+            CREATE TABLE IF NOT EXISTS review_annotations (
+                annotation_id  TEXT PRIMARY KEY,
+                task_id        TEXT NOT NULL REFERENCES tasks(task_id),
+                file_path      TEXT NOT NULL,
+                start_line     INTEGER NOT NULL,
+                end_line       INTEGER NOT NULL,
+                action         TEXT NOT NULL CHECK(action IN ('approve', 'reject', 'revise')),
+                comment        TEXT NOT NULL DEFAULT '',
+                anchor_hash    TEXT NOT NULL,
+                operator_id    TEXT NOT NULL,
+                created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_annotations_task
+                ON review_annotations(task_id);
+        "),
     ])
 }
 

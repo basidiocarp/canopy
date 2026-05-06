@@ -328,6 +328,7 @@ impl Store {
             | OperatorActionKind::CreateHandoff
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::AttachReviewAnnotation
             | OperatorActionKind::CreateFollowUpTask
             | OperatorActionKind::LinkTaskDependency => Err(StoreError::Validation(format!(
                 "operator action {action} is not valid for handoffs"

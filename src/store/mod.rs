@@ -15,6 +15,7 @@ mod outcomes;
 mod permission_rules;
 mod policy_events;
 mod relationships;
+mod review_annotations;
 mod schema;
 mod tasks;
 pub mod tool_usage;
@@ -32,7 +33,7 @@ pub use traits::{
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    ExecutionActionKind, Freshness, HandoffType, TaskAction, TaskEventType, TaskPriority,
+    ExecutionActionKind, Freshness, HandoffType, ReviewAnnotationAction, TaskAction, TaskEventType, TaskPriority,
     TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
 use chrono::Utc;
@@ -299,6 +300,12 @@ pub(crate) struct TaskOperatorActionInput<'a> {
     pub follow_up_description: Option<&'a str>,
     pub related_task_id: Option<&'a str>,
     pub relationship_role: Option<TaskRelationshipRole>,
+    pub review_annotation_file_path: Option<&'a str>,
+    pub review_annotation_start_line: Option<i64>,
+    pub review_annotation_end_line: Option<i64>,
+    pub review_annotation_action: Option<ReviewAnnotationAction>,
+    pub review_annotation_comment: Option<&'a str>,
+    pub review_annotation_anchor_hash: Option<&'a str>,
 }
 
 impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
@@ -447,6 +454,21 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.related_memory_query = related_memory_query;
                 input.related_symbol = related_symbol;
                 input.related_file = related_file;
+            }
+            TaskAction::AttachReviewAnnotation {
+                file_path,
+                start_line,
+                end_line,
+                action,
+                comment,
+                anchor_hash,
+            } => {
+                input.review_annotation_file_path = Some(file_path);
+                input.review_annotation_start_line = Some(start_line);
+                input.review_annotation_end_line = Some(end_line);
+                input.review_annotation_action = Some(action);
+                input.review_annotation_comment = Some(comment);
+                input.review_annotation_anchor_hash = Some(anchor_hash);
             }
             TaskAction::CreateFollowUp { title, description } => {
                 input.follow_up_title = Some(title);

@@ -892,6 +892,7 @@ impl Store {
             | OperatorActionKind::SummonCouncilSession
             | OperatorActionKind::PostCouncilMessage
             | OperatorActionKind::AttachEvidence
+            | OperatorActionKind::AttachReviewAnnotation
             | OperatorActionKind::CreateFollowUpTask
             | OperatorActionKind::LinkTaskDependency => unreachable!("handled above"),
         }

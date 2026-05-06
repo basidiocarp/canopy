@@ -231,6 +231,14 @@ pub(super) fn derive_allowed_task_actions(
         ),
         make_task_allowed_action(
             task,
+            OperatorActionKind::AttachReviewAnnotation,
+            task_level,
+            "attach_review_annotation",
+            format!("Attach review annotation to {}", task.title),
+            "Submit a line-level annotation (approve/reject/revise) from the inline diff review UI.",
+        ),
+        make_task_allowed_action(
+            task,
             OperatorActionKind::CreateFollowUpTask,
             task_level,
             "create_follow_up_task",
@@ -339,6 +347,7 @@ pub(super) fn derive_allowed_task_actions(
                     .contains(&TaskAttentionReason::ReviewReadyForCloseout)
         }
         OperatorActionKind::PostCouncilMessage => council_session.is_some(),
+        OperatorActionKind::AttachReviewAnnotation => task.status == TaskStatus::ReviewRequired,
         _ => true,
     });
 

@@ -257,6 +257,11 @@ pub trait EvidenceStore {
 }
 
 #[allow(clippy::missing_errors_doc)]
+pub trait ReviewAnnotationStore {
+    fn list_review_annotations_for_task(&self, task_id: &str) -> StoreResult<Vec<crate::models::ReviewAnnotation>>;
+}
+
+#[allow(clippy::missing_errors_doc)]
 pub trait CouncilStore {
     fn add_council_message(
         &self,
@@ -410,6 +415,7 @@ pub trait CanopyStore:
     + HandoffStore
     + FileLockStore
     + EvidenceStore
+    + ReviewAnnotationStore
     + CouncilStore
     + OrchestrationStore
     + HeartbeatStore
@@ -433,6 +439,7 @@ impl<T> CanopyStore for T where
         + HandoffStore
         + FileLockStore
         + EvidenceStore
+        + ReviewAnnotationStore
         + CouncilStore
         + OrchestrationStore
         + HeartbeatStore
@@ -850,6 +857,12 @@ impl EvidenceStore for super::Store {
         project_root: Option<&str>,
     ) -> StoreResult<Vec<EvidenceRef>> {
         self.list_evidence_for_project(project_root)
+    }
+}
+
+impl ReviewAnnotationStore for super::Store {
+    fn list_review_annotations_for_task(&self, task_id: &str) -> StoreResult<Vec<crate::models::ReviewAnnotation>> {
+        self.list_review_annotations_for_task(task_id)
     }
 }
 

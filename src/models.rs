@@ -420,6 +420,18 @@ pub enum CouncilSessionTimelineKind {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum ReviewAnnotationAction {
+    Approve,
+    Reject,
+    Revise,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum EvidenceSourceKind {
     HyphaeSession,
     HyphaeRecall,
@@ -431,6 +443,7 @@ pub enum EvidenceSourceKind {
     RhizomeExport,
     ScriptVerification,
     ManualNote,
+    ReviewAnnotation,
 }
 
 #[derive(
@@ -454,6 +467,7 @@ pub enum TaskEventType {
     CouncilMessagePosted,
     EvidenceAttached,
     FollowUpTaskCreated,
+    ReviewAnnotationAdded,
 }
 
 #[derive(
@@ -586,6 +600,7 @@ pub enum OperatorActionKind {
     SummonCouncilSession,
     PostCouncilMessage,
     AttachEvidence,
+    AttachReviewAnnotation,
     CreateFollowUpTask,
     LinkTaskDependency,
     AcceptHandoff,
@@ -712,6 +727,14 @@ pub enum TaskAction<'a> {
         related_symbol: Option<&'a str>,
         related_file: Option<&'a str>,
     },
+    AttachReviewAnnotation {
+        file_path: &'a str,
+        start_line: i64,
+        end_line: i64,
+        action: ReviewAnnotationAction,
+        comment: &'a str,
+        anchor_hash: &'a str,
+    },
     CreateFollowUp {
         title: &'a str,
         description: Option<&'a str>,
@@ -760,6 +783,7 @@ impl TaskAction<'_> {
             Self::SummonCouncilSession => OperatorActionKind::SummonCouncilSession,
             Self::PostCouncilMessage { .. } => OperatorActionKind::PostCouncilMessage,
             Self::AttachEvidence { .. } => OperatorActionKind::AttachEvidence,
+            Self::AttachReviewAnnotation { .. } => OperatorActionKind::AttachReviewAnnotation,
             Self::CreateFollowUp { .. } => OperatorActionKind::CreateFollowUpTask,
             Self::LinkDependency { .. } => OperatorActionKind::LinkTaskDependency,
             Self::ResolveDependency { .. } => OperatorActionKind::ResolveDependency,
@@ -959,6 +983,7 @@ pub struct TaskWorkflowContext {
     pub review_cycle: Option<TaskReviewCycleRecord>,
     pub council_session_id: Option<String>,
     pub execution_session_ref: Option<String>,
+    pub pending_annotations: Vec<ReviewAnnotation>,
 }
 
 /// Describes a file-scope overlap between two tasks.
@@ -1072,6 +1097,20 @@ pub struct EvidenceRef {
     pub related_memory_query: Option<String>,
     pub related_symbol: Option<String>,
     pub related_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewAnnotation {
+    pub annotation_id: String,
+    pub task_id: String,
+    pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub action: ReviewAnnotationAction,
+    pub comment: String,
+    pub anchor_hash: String,
+    pub operator_id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1517,6 +1556,7 @@ pub struct TaskDetail {
     pub children: Vec<TaskSummary>,
     pub children_complete: bool,
     pub parent_id: Option<String>,
+    pub review_annotations: Vec<ReviewAnnotation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_adoption_score: Option<ToolAdoptionScore>,
 }

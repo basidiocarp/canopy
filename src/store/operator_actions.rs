@@ -1,5 +1,5 @@
 use crate::models::{
-    CouncilMessageType, ExecutionActionKind, HandoffType, OperatorActionKind, Task, TaskEventType,
+    CouncilMessageType, ExecutionActionKind, HandoffType, Notification, NotificationEventType, OperatorActionKind, Task, TaskEventType,
     TaskRelationshipKind, TaskRelationshipRole, TaskStatus, VerificationState,
 };
 use chrono::Utc;
@@ -14,6 +14,7 @@ use super::helpers::{
     sync_task_workflow_in_connection, task_has_prior_execution_in_connection,
     touch_task_in_connection, validate_execution_actor,
 };
+use super::review_annotations::insert_review_annotation_in_connection;
 use super::{
     CLAIM_STALE_THRESHOLD_SECS, EvidenceLinkRefs, HandoffTiming, Store, StoreError, StoreResult,
     TaskCreationOptions, TaskDeadlineUpdate, TaskEventWrite, TaskOperatorActionInput,
@@ -296,6 +297,96 @@ impl Store {
                 // EvidenceAttached event is emitted inside add_evidence_in_connection.
                 // Do not emit a second event here — one emission per attachment.
                 let _ = evidence;
+                get_task_in_connection(conn, task_id)
+            })?,
+            OperatorActionKind::AttachReviewAnnotation => self.in_transaction(|conn| {
+                let task = get_task_in_connection(conn, task_id)?;
+                let file_path = input.review_annotation_file_path.ok_or_else(|| {
+                    StoreError::Validation("attach_review_annotation requires a file_path".to_string())
+                })?;
+                let start_line = input.review_annotation_start_line.ok_or_else(|| {
+                    StoreError::Validation("attach_review_annotation requires a start_line".to_string())
+                })?;
+                let end_line = input.review_annotation_end_line.ok_or_else(|| {
+                    StoreError::Validation("attach_review_annotation requires an end_line".to_string())
+                })?;
+                let action = input.review_annotation_action.ok_or_else(|| {
+                    StoreError::Validation("attach_review_annotation requires an action".to_string())
+                })?;
+                let comment = input.review_annotation_comment.unwrap_or("");
+                let anchor_hash = input.review_annotation_anchor_hash.ok_or_else(|| {
+                    StoreError::Validation("attach_review_annotation requires an anchor_hash".to_string())
+                })?;
+
+                insert_review_annotation_in_connection(
+                    conn, task_id, file_path, start_line, end_line, action, comment, anchor_hash, changed_by,
+                )?;
+
+                // Update verification_state atomically with the annotation insert.
+                use crate::models::ReviewAnnotationAction;
+                let new_verification = match action {
+                    ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise => {
+                        crate::models::VerificationState::Failed
+                    }
+                    ReviewAnnotationAction::Approve => {
+                        // All-approve gate: if no reject/revise annotations remain, set Passed.
+                        let non_approve_count: i64 = conn.query_row(
+                            "SELECT COUNT(*) FROM review_annotations WHERE task_id = ?1 AND action != 'approve'",
+                            [task_id],
+                            |r| r.get(0),
+                        )?;
+                        if non_approve_count == 0 {
+                            crate::models::VerificationState::Passed
+                        } else {
+                            task.verification_state
+                        }
+                    }
+                };
+                conn.execute(
+                    "UPDATE tasks SET verification_state = ?2, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+                    params![task_id, new_verification.to_string()],
+                )?;
+
+                let note = format!("annotation: {action} {file_path}:{start_line}-{end_line}");
+                record_task_event_in_connection(
+                    conn,
+                    &TaskEventWrite {
+                        task_id,
+                        event_type: TaskEventType::ReviewAnnotationAdded,
+                        actor: changed_by,
+                        from_status: Some(task.status),
+                        to_status: task.status,
+                        verification_state: Some(new_verification),
+                        owner_agent_id: task.owner_agent_id.as_deref(),
+                        execution_action: None,
+                        execution_duration_seconds: None,
+                        note: Some(&note),
+                    },
+                )?;
+
+                // Notify the assigned agent on reject/revise.
+                if matches!(action, ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise) {
+                    if let Some(ref owner_id) = task.owner_agent_id {
+                        let notif = Notification {
+                            notification_id: ulid::Ulid::new().to_string(),
+                            event_type: NotificationEventType::EvidenceReceived,
+                            task_id: Some(task_id.to_string()),
+                            agent_id: Some(owner_id.clone()),
+                            payload: serde_json::json!({
+                                "kind": "review_annotation",
+                                "action": action.to_string(),
+                                "file_path": file_path,
+                                "start_line": start_line,
+                                "end_line": end_line,
+                            }),
+                            seen: false,
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        };
+                        let _ = super::notifications::insert_notification(conn, &notif);
+                    }
+                }
+
+                touch_task_in_connection(conn, task_id)?;
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::CreateFollowUpTask => self.in_transaction(|conn| {

@@ -305,6 +305,12 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 follow_up_description.as_deref(),
                 related_task_id.as_deref(),
                 relationship_role,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )?;
             let task = store.apply_task_operator_action(&task_id, &changed_by, task_action)?;
             print_json(&task)?;
@@ -694,6 +700,12 @@ fn cli_action_to_task_action<'a>(
     follow_up_description: Option<&'a str>,
     related_task_id: Option<&'a str>,
     relationship_role: Option<canopy::models::TaskRelationshipRole>,
+    review_annotation_file_path: Option<&'a str>,
+    review_annotation_start_line: Option<i64>,
+    review_annotation_end_line: Option<i64>,
+    review_annotation_action: Option<canopy::models::ReviewAnnotationAction>,
+    review_annotation_comment: Option<&'a str>,
+    review_annotation_anchor_hash: Option<&'a str>,
 ) -> Result<TaskAction<'a>> {
     use canopy::models::OperatorActionKind as K;
     let require = |opt: Option<&'a str>, field: &str| -> Result<&'a str> {
@@ -800,6 +812,17 @@ fn cli_action_to_task_action<'a>(
             related_memory_query,
             related_symbol,
             related_file,
+        },
+        K::AttachReviewAnnotation => TaskAction::AttachReviewAnnotation {
+            file_path: require(review_annotation_file_path, "review-annotation-file-path")?,
+            start_line: review_annotation_start_line
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-start-line"))?,
+            end_line: review_annotation_end_line
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-end-line"))?,
+            action: review_annotation_action
+                .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-action"))?,
+            comment: review_annotation_comment.unwrap_or(""),
+            anchor_hash: require(review_annotation_anchor_hash, "review-annotation-anchor-hash")?,
         },
         K::CreateFollowUpTask => TaskAction::CreateFollowUp {
             title: require(follow_up_title, "follow-up-title")?,
@@ -1398,7 +1421,8 @@ where
         | EvidenceSourceKind::MyceliumCommand
         | EvidenceSourceKind::MyceliumExplain
         | EvidenceSourceKind::RhizomeImpact
-        | EvidenceSourceKind::RhizomeExport => (
+        | EvidenceSourceKind::RhizomeExport
+        | EvidenceSourceKind::ReviewAnnotation => (
             EvidenceVerificationStatus::Unsupported,
             format!(
                 "{} verification is not implemented yet",

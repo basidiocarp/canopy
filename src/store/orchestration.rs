@@ -19,6 +19,7 @@ impl Store {
         let council_session_id = self
             .get_council_session(task_id)?
             .map(|session| session.council_session_id);
+        let pending_annotations = self.list_review_annotations_for_task(task_id)?;
 
         Ok(TaskWorkflowContext {
             task_id: task.task_id,
@@ -29,6 +30,7 @@ impl Store {
             review_cycle,
             council_session_id,
             execution_session_ref: task.execution_session_ref,
+            pending_annotations,
         })
     }
 

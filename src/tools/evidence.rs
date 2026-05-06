@@ -234,7 +234,8 @@ fn validate_evidence_ref(source_kind: EvidenceSourceKind, source_ref: &str) -> O
         | EvidenceSourceKind::RhizomeImpact
         | EvidenceSourceKind::RhizomeExport
         | EvidenceSourceKind::ScriptVerification
-        | EvidenceSourceKind::ManualNote => true,
+        | EvidenceSourceKind::ManualNote
+        | EvidenceSourceKind::ReviewAnnotation => true,
     };
 
     valid.then_some(trimmed)

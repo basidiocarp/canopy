@@ -722,6 +722,7 @@ pub(crate) fn normalize_evidence_navigation<'a>(
         | EvidenceSourceKind::HyphaeOutcome
         | EvidenceSourceKind::CortinaEvent
         | EvidenceSourceKind::ManualNote
+        | EvidenceSourceKind::ReviewAnnotation
         | EvidenceSourceKind::RhizomeImpact
         | EvidenceSourceKind::RhizomeExport
         | EvidenceSourceKind::ScriptVerification
