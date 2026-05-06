@@ -264,6 +264,12 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             follow_up_description,
             related_task_id,
             relationship_role,
+            review_annotation_file_path,
+            review_annotation_start_line,
+            review_annotation_end_line,
+            review_annotation_action,
+            review_annotation_comment,
+            review_annotation_anchor_hash,
         } => {
             let fallback_session_id = runtime_session_id_from_env();
             let resolved_session_id = related_session_id
@@ -305,12 +311,12 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 follow_up_description.as_deref(),
                 related_task_id.as_deref(),
                 relationship_role,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                review_annotation_file_path.as_deref(),
+                review_annotation_start_line,
+                review_annotation_end_line,
+                review_annotation_action,
+                review_annotation_comment.as_deref(),
+                review_annotation_anchor_hash.as_deref(),
             )?;
             let task = store.apply_task_operator_action(&task_id, &changed_by, task_action)?;
             print_json(&task)?;

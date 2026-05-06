@@ -1,7 +1,7 @@
 use crate::models::{
     AgentRole, AgentStatus, AttentionLevel, CouncilMessageType, EvidenceSourceKind, HandoffStatus,
-    HandoffType, OperatorActionKind, SnapshotPreset, TaskPriority, TaskRelationshipRole,
-    TaskSeverity, TaskSort, TaskView, VerificationState,
+    HandoffType, OperatorActionKind, ReviewAnnotationAction, SnapshotPreset, TaskPriority,
+    TaskRelationshipRole, TaskSeverity, TaskSort, TaskView, VerificationState,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -392,6 +392,18 @@ pub enum TaskCommand {
         related_task_id: Option<String>,
         #[arg(long)]
         relationship_role: Option<TaskRelationshipRole>,
+        #[arg(long)]
+        review_annotation_file_path: Option<String>,
+        #[arg(long)]
+        review_annotation_start_line: Option<i64>,
+        #[arg(long)]
+        review_annotation_end_line: Option<i64>,
+        #[arg(long)]
+        review_annotation_action: Option<ReviewAnnotationAction>,
+        #[arg(long)]
+        review_annotation_comment: Option<String>,
+        #[arg(long)]
+        review_annotation_anchor_hash: Option<String>,
     },
     Verify {
         #[arg(long)]
