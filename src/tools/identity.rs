@@ -62,8 +62,9 @@ pub fn tool_heartbeat(
         .and_then(|s| s.parse::<AgentStatus>().ok())
         .unwrap_or(AgentStatus::Idle);
     let current_task_id = get_str(args, "current_task_id");
+    let workspace = get_str(args, "workspace");
 
-    match store.heartbeat_agent(agent_id, status, current_task_id) {
+    match store.heartbeat_agent_with_workspace(agent_id, status, current_task_id, workspace) {
         Ok(_) => {}
         Err(err) => return ToolResult::error(format!("heartbeat failed: {err}")),
     }

@@ -28,6 +28,7 @@ pub(crate) const BASE_SCHEMA: &str = r"
         description TEXT NULL,
         requested_by TEXT NOT NULL,
         project_root TEXT NOT NULL,
+        workspace TEXT NULL,
         parent_task_id TEXT NULL REFERENCES tasks(task_id) ON DELETE SET NULL,
         queue_state_id TEXT NULL,
         worktree_binding_id TEXT NULL,
@@ -451,6 +452,7 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN files_hint TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workspace TEXT NULL", []);
 
     // handoffs columns added over time
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN due_at TEXT NULL", []);

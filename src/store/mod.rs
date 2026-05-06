@@ -248,6 +248,7 @@ pub struct TaskCreationOptions {
     pub scope: Vec<String>,
     pub workflow_id: Option<String>,
     pub phase_id: Option<String>,
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

@@ -151,6 +151,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 scope,
                 workflow_id,
                 phase_id,
+                workspace: None,
             };
             let task = if let Some(parent_task_id) = parent.as_deref() {
                 store.create_subtask_with_options(

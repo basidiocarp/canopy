@@ -5,7 +5,7 @@ use super::*;
 pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {
     conn.query_row(
         r"
-        SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+        SELECT task_id, title, description, requested_by, project_root, workspace, parent_task_id,
                queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
                workflow_id, phase_id,
                required_role, required_capabilities, auto_review, verification_required, status,

@@ -18,6 +18,7 @@ pub(crate) fn create_task_in_connection(
         description: description.map(ToOwned::to_owned),
         requested_by: requested_by.to_string(),
         project_root: project_root.to_string(),
+        workspace: options.workspace.clone(),
         parent_task_id: None,
         queue_state_id: None,
         worktree_binding_id: None,
@@ -53,13 +54,13 @@ pub(crate) fn create_task_in_connection(
     conn.execute(
         r"
         INSERT INTO tasks (
-            task_id, title, description, requested_by, project_root, parent_task_id, queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
+            task_id, title, description, requested_by, project_root, workspace, parent_task_id, queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
             workflow_id, phase_id,
             required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ",
         params![
             task.task_id,
@@ -67,6 +68,7 @@ pub(crate) fn create_task_in_connection(
             task.description,
             task.requested_by,
             task.project_root,
+            task.workspace,
             task.parent_task_id,
             task.queue_state_id,
             task.worktree_binding_id,

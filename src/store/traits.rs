@@ -22,6 +22,13 @@ pub trait AgentStore {
         status: AgentStatus,
         current_task_id: Option<&str>,
     ) -> StoreResult<AgentRegistration>;
+    fn heartbeat_agent_with_workspace(
+        &self,
+        agent_id: &str,
+        status: AgentStatus,
+        current_task_id: Option<&str>,
+        workspace: Option<&str>,
+    ) -> StoreResult<AgentRegistration>;
     fn list_agents(&self) -> StoreResult<Vec<AgentRegistration>>;
     fn list_active_agents(&self) -> StoreResult<Vec<AgentRegistration>>;
     fn list_stale_agents(&self, stale_threshold_secs: i64) -> StoreResult<Vec<AgentRegistration>>;
@@ -468,6 +475,16 @@ impl AgentStore for super::Store {
         current_task_id: Option<&str>,
     ) -> StoreResult<AgentRegistration> {
         self.heartbeat_agent(agent_id, status, current_task_id)
+    }
+
+    fn heartbeat_agent_with_workspace(
+        &self,
+        agent_id: &str,
+        status: AgentStatus,
+        current_task_id: Option<&str>,
+        workspace: Option<&str>,
+    ) -> StoreResult<AgentRegistration> {
+        self.heartbeat_agent_with_workspace(agent_id, status, current_task_id, workspace)
     }
 
     fn list_agents(&self) -> StoreResult<Vec<AgentRegistration>> {

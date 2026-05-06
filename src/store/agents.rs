@@ -102,19 +102,50 @@ impl Store {
         status: AgentStatus,
         current_task_id: Option<&str>,
     ) -> StoreResult<AgentRegistration> {
+        self.heartbeat_agent_with_workspace(agent_id, status, current_task_id, None)
+    }
+
+    /// Send a heartbeat with optional workspace (project_root) update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent does not exist, the task link is invalid, or the write fails.
+    pub fn heartbeat_agent_with_workspace(
+        &self,
+        agent_id: &str,
+        status: AgentStatus,
+        current_task_id: Option<&str>,
+        workspace: Option<&str>,
+    ) -> StoreResult<AgentRegistration> {
         self.ensure_agent_exists(agent_id)?;
         self.in_transaction(|conn| {
             validate_agent_task_link(conn, agent_id, status, current_task_id)?;
-            conn.execute(
-                r"
-                UPDATE agents
-                SET status = ?2,
-                    current_task_id = ?3,
-                    heartbeat_at = CURRENT_TIMESTAMP
-                WHERE agent_id = ?1
-                ",
-                params![agent_id, status.to_string(), current_task_id],
-            )?;
+
+            if let Some(ws) = workspace {
+                conn.execute(
+                    r"
+                    UPDATE agents
+                    SET status = ?2,
+                        current_task_id = ?3,
+                        project_root = ?4,
+                        heartbeat_at = CURRENT_TIMESTAMP
+                    WHERE agent_id = ?1
+                    ",
+                    params![agent_id, status.to_string(), current_task_id, ws],
+                )?;
+            } else {
+                conn.execute(
+                    r"
+                    UPDATE agents
+                    SET status = ?2,
+                        current_task_id = ?3,
+                        heartbeat_at = CURRENT_TIMESTAMP
+                    WHERE agent_id = ?1
+                    ",
+                    params![agent_id, status.to_string(), current_task_id],
+                )?;
+            }
+
             record_agent_heartbeat_in_connection(
                 conn,
                 &AgentHeartbeatWrite {
@@ -479,11 +510,14 @@ impl Store {
     /// Returns an error if the query fails.
     pub fn rank_agents_for_task(
         &self,
-        _task_id: &str,
+        task_id: &str,
         required_tags: &[String],
     ) -> StoreResult<Vec<crate::models::AgentRankEntry>> {
         let agents = self.list_active_agents().unwrap_or_default();
         let has_planning_tag = required_tags.iter().any(|tag| tag == "requires_planning");
+
+        // Fetch task to check for workspace affinity
+        let task_workspace = self.get_task(task_id).ok().and_then(|task| task.workspace);
 
         let mut ranked: Vec<_> = agents
             .into_iter()
@@ -529,6 +563,21 @@ impl Store {
                 if agent.heartbeat_at.is_some() {
                     score += 20.0;
                     reasons.push("recently_active".to_string());
+                }
+
+                // Workspace affinity scoring
+                if let Some(ref workspace) = task_workspace {
+                    if agent.project_root == *workspace {
+                        score += 40.0;
+                        reasons.push("workspace_affinity_match".to_string());
+                    } else {
+                        tracing::warn!(
+                            "workspace affinity mismatch: agent {} in '{}', task requires '{}'",
+                            agent.agent_id,
+                            agent.project_root,
+                            workspace
+                        );
+                    }
                 }
 
                 crate::models::AgentRankEntry {

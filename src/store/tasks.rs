@@ -277,7 +277,7 @@ impl Store {
     pub fn list_tasks(&self) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+            SELECT task_id, title, description, requested_by, project_root, workspace, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
                    workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
@@ -913,7 +913,7 @@ impl Store {
         limit: Option<i64>,
     ) -> StoreResult<Vec<Task>> {
         let select = r"
-            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+            SELECT task_id, title, description, requested_by, project_root, workspace, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
                    workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
@@ -1192,7 +1192,7 @@ impl Store {
     ) -> StoreResult<Vec<Task>> {
         let mut sql = String::from(
             r"
-            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+            SELECT task_id, title, description, requested_by, project_root, workspace, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
                    workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status,
@@ -1248,7 +1248,7 @@ impl Store {
     pub fn list_tasks_for_agent(&self, agent_id: &str) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             r"
-            SELECT task_id, title, description, requested_by, project_root, parent_task_id,
+            SELECT task_id, title, description, requested_by, project_root, workspace, parent_task_id,
                    queue_state_id, worktree_binding_id, execution_session_ref, review_cycle_id,
                    workflow_id, phase_id,
                    required_role, required_capabilities, auto_review, verification_required, status,

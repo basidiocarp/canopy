@@ -42,6 +42,7 @@ pub fn tool_task_create(
         .unwrap_or(false);
     let workflow_id = get_str(args, "workflow_id").map(ToOwned::to_owned);
     let phase_id = get_str(args, "phase_id").map(ToOwned::to_owned);
+    let workspace = get_str(args, "workspace").map(ToOwned::to_owned);
 
     let options = TaskCreationOptions {
         required_role,
@@ -49,6 +50,7 @@ pub fn tool_task_create(
         verification_required,
         workflow_id,
         phase_id,
+        workspace,
         ..TaskCreationOptions::default()
     };
 
@@ -206,6 +208,7 @@ mod tests {
             description: None,
             requested_by: "test".to_string(),
             project_root: ".".to_string(),
+            workspace: None,
             parent_task_id: None,
             queue_state_id: None,
             worktree_binding_id: None,

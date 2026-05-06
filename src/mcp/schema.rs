@@ -88,6 +88,10 @@ pub fn tool_definitions() -> Vec<Value> {
                 "current_task_id": {
                     "type": "string",
                     "description": "ULID of the task currently being worked on, if any"
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Current project_root (workspace) the agent is in (optional)"
                 }
             },
             "required": ["agent_id", "status"]
@@ -234,6 +238,10 @@ pub fn tool_definitions() -> Vec<Value> {
                 "project_root": {
                     "type": "string",
                     "description": "Absolute path to the project root"
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Workspace (preferred agent project_root) for this task (optional)"
                 },
                 "parent_task_id": {
                     "type": "string",

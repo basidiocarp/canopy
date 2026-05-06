@@ -894,6 +894,7 @@ pub struct Task {
     pub description: Option<String>,
     pub requested_by: String,
     pub project_root: String,
+    pub workspace: Option<String>,
     pub parent_task_id: Option<String>,
     pub queue_state_id: Option<String>,
     pub worktree_binding_id: Option<String>,
