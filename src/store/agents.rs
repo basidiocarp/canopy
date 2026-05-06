@@ -598,3 +598,154 @@ impl Store {
         Ok(ranked)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AgentRegistration, AgentStatus};
+    use crate::store::{Store, TaskCreationOptions};
+    use tempfile::tempdir;
+
+    fn test_store() -> Store {
+        let dir = tempdir().expect("temp dir");
+        Store::open(&dir.path().join("canopy.db")).expect("store")
+    }
+
+    fn register_agent_at(store: &Store, agent_id: &str, project_root: &str) {
+        store
+            .register_agent(&AgentRegistration {
+                agent_id: agent_id.to_string(),
+                host_id: "host-1".to_string(),
+                host_type: "claude".to_string(),
+                host_instance: "local".to_string(),
+                model: "claude-sonnet".to_string(),
+                project_root: project_root.to_string(),
+                worktree_id: "main".to_string(),
+                role: None,
+                capabilities: Vec::new(),
+                tier: None,
+                specializations: Vec::new(),
+                status: AgentStatus::Idle,
+                current_task_id: None,
+                heartbeat_at: None,
+            })
+            .expect("register_agent");
+    }
+
+    fn task_for_workspace(store: &Store, workspace: &str) -> String {
+        store
+            .create_task_with_options(
+                "test task",
+                None,
+                "operator",
+                workspace,
+                &TaskCreationOptions {
+                    workspace: Some(workspace.to_string()),
+                    ..TaskCreationOptions::default()
+                },
+            )
+            .expect("create_task")
+            .task_id
+    }
+
+    #[test]
+    fn workspace_match_scores_higher_than_mismatch() {
+        let store = test_store();
+        register_agent_at(&store, "agent-local", "/workspace/alpha");
+        register_agent_at(&store, "agent-remote", "/workspace/beta");
+
+        let task_id = task_for_workspace(&store, "/workspace/alpha");
+        let ranked = store.rank_agents_for_task(&task_id, &[]).expect("rank");
+
+        let local = ranked.iter().find(|r| r.agent_id == "agent-local").unwrap();
+        let remote = ranked.iter().find(|r| r.agent_id == "agent-remote").unwrap();
+        assert!(
+            local.score > remote.score,
+            "workspace-matching agent (score={}) should outscore mismatched (score={})",
+            local.score,
+            remote.score
+        );
+        assert!(
+            local.reasons.contains(&"workspace_affinity_match".to_string()),
+            "matching agent should carry workspace_affinity_match reason"
+        );
+    }
+
+    #[test]
+    fn workspace_match_bonus_is_forty_points() {
+        let store = test_store();
+        register_agent_at(&store, "agent-match", "/workspace/proj");
+        register_agent_at(&store, "agent-miss", "/workspace/other");
+
+        let task_id = task_for_workspace(&store, "/workspace/proj");
+        let ranked = store.rank_agents_for_task(&task_id, &[]).expect("rank");
+
+        let matched = ranked.iter().find(|r| r.agent_id == "agent-match").unwrap();
+        let missed = ranked.iter().find(|r| r.agent_id == "agent-miss").unwrap();
+        assert_eq!(
+            matched.score - missed.score,
+            40.0,
+            "workspace affinity bonus must be exactly 40 points"
+        );
+    }
+
+    #[test]
+    fn task_without_workspace_leaves_scores_equal() {
+        let store = test_store();
+        register_agent_at(&store, "agent-a", "/workspace/alpha");
+        register_agent_at(&store, "agent-b", "/workspace/beta");
+
+        let task_id = store
+            .create_task_with_options(
+                "no-workspace task",
+                None,
+                "operator",
+                "/workspace/alpha",
+                &TaskCreationOptions::default(),
+            )
+            .expect("create_task")
+            .task_id;
+
+        let ranked = store.rank_agents_for_task(&task_id, &[]).expect("rank");
+        let scores: Vec<f32> = ranked.iter().map(|r| r.score).collect();
+        assert!(
+            scores.windows(2).all(|w| (w[0] - w[1]).abs() < f32::EPSILON),
+            "agents should tie when task has no workspace: {:?}",
+            ranked
+                .iter()
+                .map(|r| (&r.agent_id, r.score))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn heartbeat_with_workspace_updates_project_root() {
+        let store = test_store();
+        register_agent_at(&store, "agent-ws", "/workspace/old");
+
+        store
+            .heartbeat_agent_with_workspace(
+                "agent-ws",
+                AgentStatus::Idle,
+                None,
+                Some("/workspace/new"),
+            )
+            .expect("heartbeat_with_workspace");
+
+        let agent = store.get_agent("agent-ws").expect("get_agent");
+        assert_eq!(agent.project_root, "/workspace/new");
+    }
+
+    #[test]
+    fn heartbeat_without_workspace_preserves_project_root() {
+        let store = test_store();
+        register_agent_at(&store, "agent-keep", "/workspace/stable");
+
+        store
+            .heartbeat_agent("agent-keep", AgentStatus::Idle, None)
+            .expect("heartbeat");
+
+        let agent = store.get_agent("agent-keep").expect("get_agent");
+        assert_eq!(agent.project_root, "/workspace/stable");
+    }
+}
