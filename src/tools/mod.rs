@@ -3,6 +3,7 @@ pub mod council;
 pub mod dag;
 pub mod evidence;
 pub mod files;
+pub mod graph;
 pub mod handoff;
 pub mod identity;
 pub mod import;

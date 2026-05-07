@@ -102,6 +102,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: DispatchCommand,
     },
+    /// Validate a `HandoffGraph` topology file.
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
     /// Start local unix-socket service endpoint (for cap and other local clients)
     #[cfg(unix)]
     #[command(hide = true)]
@@ -634,4 +639,18 @@ pub enum PolicyCommand {
     /// Print the active dispatch policy: which annotation classes are
     /// auto-allowed and which require operator confirmation.
     Show,
+}
+
+/// Subcommands for `canopy graph`.
+#[derive(Debug, Subcommand)]
+pub enum GraphCommand {
+    /// Validate a `HandoffGraph` JSON file for cycles, missing nodes, and entry-point integrity.
+    Validate {
+        /// Path to a `HandoffGraph` JSON file.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Emit JSON output instead of human-readable text.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }

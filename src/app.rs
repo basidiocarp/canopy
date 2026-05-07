@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
     AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, DispatchCommand, EvidenceCommand,
-    FilesCommand, HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand, TaskCommand,
+    FilesCommand, GraphCommand, HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand,
+    TaskCommand,
 };
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
@@ -20,6 +21,7 @@ use canopy::store::{
     classify_agent_freshness,
 };
 use canopy::tools::evidence::build_evidence_review_rows;
+use canopy::tools::graph::validate_graph_file;
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
@@ -1582,6 +1584,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Notification { .. } => "notification",
         Commands::Policy { .. } => "policy",
         Commands::Dispatch { .. } => "dispatch",
+        Commands::Graph { .. } => "graph",
         #[cfg(unix)]
         Commands::ServeSocket => "serve_socket",
     }
@@ -2026,6 +2029,15 @@ fn handle_policy_command(command: &PolicyCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn handle_graph_command(command: &GraphCommand) -> Result<()> {
+    match command {
+        GraphCommand::Validate { path, json } => {
+            validate_graph_file(path, *json)?;
+        }
+    }
+    Ok(())
 }
 
 fn handle_dispatch_command(store: &Store, command: DispatchCommand) -> Result<()> {
