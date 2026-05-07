@@ -348,7 +348,8 @@ impl Store {
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
                        summary, requested_action, goal, next_steps, stop_reason,
-                       due_at, expires_at, status, created_at, updated_at, resolved_at
+                       due_at, expires_at, status, created_at, updated_at, resolved_at,
+                       assignee_type, assignee_id
                 FROM handoffs
                 WHERE task_id = ?1
                 ORDER BY rowid
@@ -363,7 +364,8 @@ impl Store {
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
                        summary, requested_action, goal, next_steps, stop_reason,
-                       due_at, expires_at, status, created_at, updated_at, resolved_at
+                       due_at, expires_at, status, created_at, updated_at, resolved_at,
+                       assignee_type, assignee_id
                 FROM handoffs
                 ORDER BY rowid
                 ",
@@ -391,7 +393,8 @@ impl Store {
                 r"
                 SELECT h.handoff_id, h.task_id, h.from_agent_id, h.to_agent_id, h.handoff_type,
                        h.summary, h.requested_action, h.goal, h.next_steps, h.stop_reason,
-                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
+                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at,
+                       h.assignee_type, h.assignee_id
                 FROM handoffs h
                 JOIN tasks t ON t.task_id = h.task_id
                 WHERE t.project_root = ?1
@@ -407,7 +410,8 @@ impl Store {
                 r"
                 SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
                        summary, requested_action, goal, next_steps, stop_reason,
-                       due_at, expires_at, status, created_at, updated_at, resolved_at
+                       due_at, expires_at, status, created_at, updated_at, resolved_at,
+                       assignee_type, assignee_id
                 FROM handoffs
                 WHERE status NOT IN ('rejected', 'expired', 'cancelled', 'completed')
                 ORDER BY rowid
@@ -436,7 +440,8 @@ impl Store {
                 r"
                 SELECT h.handoff_id, h.task_id, h.from_agent_id, h.to_agent_id, h.handoff_type,
                        h.summary, h.requested_action, h.goal, h.next_steps, h.stop_reason,
-                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at
+                       h.due_at, h.expires_at, h.status, h.created_at, h.updated_at, h.resolved_at,
+                       h.assignee_type, h.assignee_id
                 FROM handoffs h
                 JOIN tasks t ON t.task_id = h.task_id
                 WHERE t.project_root = ?1
@@ -462,7 +467,7 @@ impl Store {
             SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
                    summary, requested_action, goal, next_steps, stop_reason,
                    due_at, expires_at, status, created_at,
-                   updated_at, resolved_at
+                   updated_at, resolved_at, assignee_type, assignee_id
             FROM handoffs
             WHERE to_agent_id = ?1 AND status = 'open'
             ORDER BY created_at ASC

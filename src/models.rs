@@ -346,6 +346,30 @@ pub enum HandoffStatus {
 }
 
 #[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    EnumString,
+    Display,
+    ValueEnum,
+    Default,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum AssigneeType {
+    Human,
+    Agent,
+    Subagent,
+    #[default]
+    Unassigned,
+}
+
+#[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
 )]
 #[serde(rename_all = "snake_case")]
@@ -1032,6 +1056,8 @@ pub struct Handoff {
     pub created_at: String,
     pub updated_at: String,
     pub resolved_at: Option<String>,
+    pub assignee_type: AssigneeType,
+    pub assignee_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

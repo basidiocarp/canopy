@@ -3162,3 +3162,187 @@ fn task_action_attach_evidence_emits_exactly_one_event() {
         "operator action path must emit exactly one EvidenceAttached event"
     );
 }
+
+#[test]
+fn handoff_assignee_fields_default_to_unassigned() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "agent-1".to_string(),
+        host_id: "host-1".to_string(),
+        host_type: "claude".to_string(),
+        host_instance: "local".to_string(),
+        model: "opus".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: "wt-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    let reviewer = AgentRegistration {
+        agent_id: "agent-2".to_string(),
+        host_id: "host-2".to_string(),
+        host_type: "claude".to_string(),
+        host_instance: "local".to_string(),
+        model: "opus".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: "wt-2".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    store.register_agent(&reviewer).expect("register reviewer");
+
+    let task = store
+        .create_task(
+            "Test handoff assignees",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
+        .expect("create task");
+
+    // Create a handoff without specifying assignee fields
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            &agent.agent_id,
+            &reviewer.agent_id,
+            HandoffType::RequestReview,
+            "please review this",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    // Verify default values
+    assert_eq!(handoff.assignee_type.to_string(), "unassigned");
+    assert!(handoff.assignee_id.is_none());
+
+    // Verify round-trip through get_handoff
+    let retrieved = store
+        .get_handoff(&handoff.handoff_id)
+        .expect("get handoff");
+    assert_eq!(retrieved.assignee_type.to_string(), "unassigned");
+    assert!(retrieved.assignee_id.is_none());
+
+    // Verify round-trip through list_handoffs
+    let listed = store
+        .list_handoffs(Some(&task.task_id))
+        .expect("list handoffs");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].assignee_type.to_string(), "unassigned");
+    assert!(listed[0].assignee_id.is_none());
+}
+
+#[test]
+fn handoff_assignee_fields_survive_roundtrip_for_non_default_variants() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "agent-impl-1".to_string(),
+        host_id: "host-1".to_string(),
+        host_type: "claude".to_string(),
+        host_instance: "local".to_string(),
+        model: "opus".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: "wt-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    let reviewer = AgentRegistration {
+        agent_id: "agent-reviewer-1".to_string(),
+        host_id: "host-2".to_string(),
+        host_type: "claude".to_string(),
+        host_instance: "local".to_string(),
+        model: "opus".to_string(),
+        project_root: "/tmp/project".to_string(),
+        worktree_id: "wt-2".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    store.register_agent(&reviewer).expect("register reviewer");
+
+    let task = store
+        .create_task(
+            "Test assignee roundtrip",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
+        .expect("create task");
+
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            &agent.agent_id,
+            &reviewer.agent_id,
+            HandoffType::RequestReview,
+            "please review this",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    // Directly update the assignee fields via raw SQL, simulating an import or
+    // assignment flow that sets a non-default assignee type.
+    {
+        let conn = Connection::open(&db_path).expect("open db for direct update");
+        conn.execute(
+            "UPDATE handoffs SET assignee_type = 'agent', assignee_id = 'agent-implementer-1' WHERE handoff_id = ?1",
+            [&handoff.handoff_id],
+        )
+        .expect("set assignee fields");
+    }
+
+    // Verify round-trip through get_handoff
+    let retrieved = store
+        .get_handoff(&handoff.handoff_id)
+        .expect("get handoff");
+    assert_eq!(retrieved.assignee_type.to_string(), "agent");
+    assert_eq!(
+        retrieved.assignee_id.as_deref(),
+        Some("agent-implementer-1")
+    );
+
+    // Verify round-trip through list_handoffs
+    let listed = store
+        .list_handoffs(Some(&task.task_id))
+        .expect("list handoffs");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].assignee_type.to_string(), "agent");
+    assert_eq!(
+        listed[0].assignee_id.as_deref(),
+        Some("agent-implementer-1")
+    );
+}
