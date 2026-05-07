@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crate::models::{
-    AgentHeartbeatEvent, AgentRankEntry, AgentRegistration, AgentStatus, CouncilMessage, CouncilMessageType,
-    CouncilSession, EvidenceRef, EvidenceSourceKind, FactScope, FactType, FileLock, Handoff,
-    HandoffStatus, HandoffType, KnownFact, OutcomeSummaryRow, RelatedTask, Task, TaskAction,
-    TaskAssignment, TaskEvent, TaskRelationship, TaskRelationshipKind, TaskStatus, TaskSummary,
-    TaskWorkflowContext, ToolAdoptionScore, WorkflowOutcomeRecord,
+    AgentHeartbeatEvent, AgentRankEntry, AgentRegistration, AgentStatus, CouncilMessage,
+    CouncilMessageType, CouncilSession, EvidenceRef, EvidenceSourceKind, FactScope, FactType,
+    FileLock, Handoff, HandoffStatus, HandoffType, KnownFact, OutcomeSummaryRow, RelatedTask, Task,
+    TaskAction, TaskAssignment, TaskEvent, TaskRelationship, TaskRelationshipKind, TaskStatus,
+    TaskSummary, TaskWorkflowContext, ToolAdoptionScore, WorkflowOutcomeRecord,
 };
 
 use super::{
@@ -36,7 +36,11 @@ pub trait AgentStore {
         &self,
         project_root: Option<&str>,
     ) -> StoreResult<Vec<AgentRegistration>>;
-    fn rank_agents_for_task(&self, task_id: &str, required_tags: &[String]) -> StoreResult<Vec<AgentRankEntry>>;
+    fn rank_agents_for_task(
+        &self,
+        task_id: &str,
+        required_tags: &[String],
+    ) -> StoreResult<Vec<AgentRankEntry>>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -265,7 +269,10 @@ pub trait EvidenceStore {
 
 #[allow(clippy::missing_errors_doc)]
 pub trait ReviewAnnotationStore {
-    fn list_review_annotations_for_task(&self, task_id: &str) -> StoreResult<Vec<crate::models::ReviewAnnotation>>;
+    fn list_review_annotations_for_task(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<crate::models::ReviewAnnotation>>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -506,7 +513,11 @@ impl AgentStore for super::Store {
         self.list_agents_filtered(project_root)
     }
 
-    fn rank_agents_for_task(&self, task_id: &str, required_tags: &[String]) -> StoreResult<Vec<AgentRankEntry>> {
+    fn rank_agents_for_task(
+        &self,
+        task_id: &str,
+        required_tags: &[String],
+    ) -> StoreResult<Vec<AgentRankEntry>> {
         self.rank_agents_for_task(task_id, required_tags)
     }
 }
@@ -878,7 +889,10 @@ impl EvidenceStore for super::Store {
 }
 
 impl ReviewAnnotationStore for super::Store {
-    fn list_review_annotations_for_task(&self, task_id: &str) -> StoreResult<Vec<crate::models::ReviewAnnotation>> {
+    fn list_review_annotations_for_task(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<crate::models::ReviewAnnotation>> {
         self.list_review_annotations_for_task(task_id)
     }
 }

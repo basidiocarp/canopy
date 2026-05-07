@@ -658,7 +658,10 @@ mod tests {
         let ranked = store.rank_agents_for_task(&task_id, &[]).expect("rank");
 
         let local = ranked.iter().find(|r| r.agent_id == "agent-local").unwrap();
-        let remote = ranked.iter().find(|r| r.agent_id == "agent-remote").unwrap();
+        let remote = ranked
+            .iter()
+            .find(|r| r.agent_id == "agent-remote")
+            .unwrap();
         assert!(
             local.score > remote.score,
             "workspace-matching agent (score={}) should outscore mismatched (score={})",
@@ -666,7 +669,9 @@ mod tests {
             remote.score
         );
         assert!(
-            local.reasons.contains(&"workspace_affinity_match".to_string()),
+            local
+                .reasons
+                .contains(&"workspace_affinity_match".to_string()),
             "matching agent should carry workspace_affinity_match reason"
         );
     }
@@ -709,7 +714,9 @@ mod tests {
         let ranked = store.rank_agents_for_task(&task_id, &[]).expect("rank");
         let scores: Vec<f32> = ranked.iter().map(|r| r.score).collect();
         assert!(
-            scores.windows(2).all(|w| (w[0] - w[1]).abs() < f32::EPSILON),
+            scores
+                .windows(2)
+                .all(|w| (w[0] - w[1]).abs() < f32::EPSILON),
             "agents should tie when task has no workspace: {:?}",
             ranked
                 .iter()

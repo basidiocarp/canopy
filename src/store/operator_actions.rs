@@ -1,6 +1,7 @@
 use crate::models::{
-    CouncilMessageType, ExecutionActionKind, HandoffType, Notification, NotificationEventType, OperatorActionKind, Task, TaskEventType,
-    TaskRelationshipKind, TaskRelationshipRole, TaskStatus, VerificationState,
+    CouncilMessageType, ExecutionActionKind, HandoffType, Notification, NotificationEventType,
+    OperatorActionKind, Task, TaskEventType, TaskRelationshipKind, TaskRelationshipRole,
+    TaskStatus, VerificationState,
 };
 use chrono::Utc;
 use rusqlite::params;

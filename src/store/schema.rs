@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use rusqlite_migration::{Migrations, M};
+use rusqlite_migration::{M, Migrations};
 
 use super::StoreResult;
 
@@ -385,7 +385,8 @@ pub(crate) const BASE_SCHEMA: &str = r"
 fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(BASE_SCHEMA),
-        M::up(r"
+        M::up(
+            r"
             CREATE TABLE IF NOT EXISTS review_annotations (
                 annotation_id  TEXT PRIMARY KEY,
                 task_id        TEXT NOT NULL REFERENCES tasks(task_id),
@@ -400,7 +401,8 @@ fn migrations() -> Migrations<'static> {
             );
             CREATE INDEX IF NOT EXISTS idx_review_annotations_task
                 ON review_annotations(task_id);
-        "),
+        ",
+        ),
     ])
 }
 
@@ -431,9 +433,15 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN priority TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN severity TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN required_role TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN required_capabilities TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN required_capabilities TEXT NULL",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN auto_review INTEGER NULL", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN verification_required INTEGER NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN verification_required INTEGER NULL",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN owner_note TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN acknowledged_by TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN acknowledged_at TEXT NULL", []);
@@ -441,8 +449,14 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_due_at TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN queue_state_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree_binding_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN execution_session_ref TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN worktree_binding_id TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN execution_session_ref TEXT NULL",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN review_cycle_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT NULL", []);
@@ -468,30 +482,72 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN role TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN tier TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE agents ADD COLUMN specializations TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE agents ADD COLUMN last_heartbeat_at TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE agents ADD COLUMN specializations TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE agents ADD COLUMN last_heartbeat_at TEXT NULL",
+        [],
+    );
 
     // council_sessions columns added over time
-    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN session_summary TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN updated_at TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE council_sessions ADD COLUMN conversation_id TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE council_sessions ADD COLUMN session_summary TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE council_sessions ADD COLUMN updated_at TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE council_sessions ADD COLUMN conversation_id TEXT NULL",
+        [],
+    );
 
     // council_messages columns added over time
-    let _ = conn.execute("ALTER TABLE council_messages ADD COLUMN created_at TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE council_messages ADD COLUMN created_at TEXT NULL",
+        [],
+    );
 
     // evidence_refs columns added over time
-    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_session_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_memory_query TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_symbol TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN related_file TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE evidence_refs ADD COLUMN schema_version TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE evidence_refs ADD COLUMN related_session_id TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE evidence_refs ADD COLUMN related_memory_query TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE evidence_refs ADD COLUMN related_symbol TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE evidence_refs ADD COLUMN related_file TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE evidence_refs ADD COLUMN schema_version TEXT NULL",
+        [],
+    );
 
     // task_events columns added over time
-    let _ = conn.execute("ALTER TABLE task_events ADD COLUMN execution_action TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE task_events ADD COLUMN execution_duration_seconds INTEGER NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE task_events ADD COLUMN execution_action TEXT NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE task_events ADD COLUMN execution_duration_seconds INTEGER NULL",
+        [],
+    );
 
     // agent_heartbeat_events columns added over time
-    let _ = conn.execute("ALTER TABLE agent_heartbeat_events ADD COLUMN related_task_id TEXT NULL", []);
+    let _ = conn.execute(
+        "ALTER TABLE agent_heartbeat_events ADD COLUMN related_task_id TEXT NULL",
+        [],
+    );
 
     // Now run the full baseline schema to create any tables added after the initial install
     // (all IF NOT EXISTS — safe). Runs after column patches so indexes on new columns succeed.

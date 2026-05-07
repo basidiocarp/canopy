@@ -1,6 +1,8 @@
 use serde_json::{Value, json};
 
-use crate::models::{AgentRegistration, AgentRole, AgentStatus, AgentTier, SituationResult, WhoAmIResult};
+use crate::models::{
+    AgentRegistration, AgentRole, AgentStatus, AgentTier, SituationResult, WhoAmIResult,
+};
 use crate::store::CanopyStore;
 
 use super::{ToolResult, get_str, get_string_array};

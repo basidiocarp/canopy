@@ -822,14 +822,18 @@ fn cli_action_to_task_action<'a>(
         },
         K::AttachReviewAnnotation => TaskAction::AttachReviewAnnotation {
             file_path: require(review_annotation_file_path, "review-annotation-file-path")?,
-            start_line: review_annotation_start_line
-                .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-start-line"))?,
+            start_line: review_annotation_start_line.ok_or_else(|| {
+                anyhow::anyhow!("{action} requires --review-annotation-start-line")
+            })?,
             end_line: review_annotation_end_line
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-end-line"))?,
             action: review_annotation_action
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --review-annotation-action"))?,
             comment: review_annotation_comment.unwrap_or(""),
-            anchor_hash: require(review_annotation_anchor_hash, "review-annotation-anchor-hash")?,
+            anchor_hash: require(
+                review_annotation_anchor_hash,
+                "review-annotation-anchor-hash",
+            )?,
         },
         K::CreateFollowUpTask => TaskAction::CreateFollowUp {
             title: require(follow_up_title, "follow-up-title")?,

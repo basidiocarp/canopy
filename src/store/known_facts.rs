@@ -76,9 +76,7 @@ impl Store {
         )?;
         stmt.query_row([fact_id], map_known_fact)
             .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    StoreError::NotFound("known_fact")
-                }
+                rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound("known_fact"),
                 other => StoreError::from(other),
             })
     }
@@ -269,7 +267,9 @@ mod tests {
             .expect("query project");
         assert!(project_only.iter().all(|f| f.scope == FactScope::Project));
 
-        let all = store.query_known_facts(None, None, None).expect("query all");
+        let all = store
+            .query_known_facts(None, None, None)
+            .expect("query all");
         assert_eq!(all.len(), 2);
     }
 }

@@ -33,8 +33,8 @@ pub use traits::{
 
 use crate::models::{
     AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    ExecutionActionKind, Freshness, HandoffType, ReviewAnnotationAction, TaskAction, TaskEventType, TaskPriority,
-    TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
+    ExecutionActionKind, Freshness, HandoffType, ReviewAnnotationAction, TaskAction, TaskEventType,
+    TaskPriority, TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
 };
 use chrono::Utc;
 use rusqlite::Connection;

@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use ulid::Ulid;
 
-use super::{StoreError, StoreResult, Store};
+use super::{Store, StoreError, StoreResult};
 use crate::models::ReviewAnnotation;
 
 pub(crate) fn map_review_annotation(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewAnnotation> {
@@ -55,7 +55,8 @@ pub(crate) fn insert_review_annotation_in_connection(
           FROM review_annotations WHERE annotation_id = ?1",
         [&annotation_id],
         map_review_annotation,
-    ).map_err(StoreError::from)
+    )
+    .map_err(StoreError::from)
 }
 
 pub(crate) fn list_review_annotations_for_task_in_connection(
@@ -70,11 +71,15 @@ pub(crate) fn list_review_annotations_for_task_in_connection(
           ORDER BY rowid",
     )?;
     let rows = stmt.query_map([task_id], map_review_annotation)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 impl Store {
-    pub fn list_review_annotations_for_task(&self, task_id: &str) -> StoreResult<Vec<ReviewAnnotation>> {
+    pub fn list_review_annotations_for_task(
+        &self,
+        task_id: &str,
+    ) -> StoreResult<Vec<ReviewAnnotation>> {
         list_review_annotations_for_task_in_connection(&self.conn, task_id)
     }
 }

@@ -75,7 +75,9 @@ fn write_response(writer: &mut (impl Write + ?Sized), response: &Value) {
 
 fn handle_snapshot(params: &Value) -> Value {
     use canopy::api::{self, SnapshotOptions};
-    use canopy::models::{AttentionLevel, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort, TaskView};
+    use canopy::models::{
+        AttentionLevel, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort, TaskView,
+    };
 
     #[derive(serde::Deserialize, Default)]
     struct SnapshotParams {
@@ -244,7 +246,10 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
             "canopy_snapshot" => {
                 let result = handle_snapshot(&params);
                 if result.get("error").is_some() {
-                    let msg = result["error"].as_str().unwrap_or("snapshot error").to_string();
+                    let msg = result["error"]
+                        .as_str()
+                        .unwrap_or("snapshot error")
+                        .to_string();
                     err_response(&id, -32000, msg)
                 } else {
                     ok_response(&id, &result)
@@ -262,7 +267,10 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
             "canopy_agents" => {
                 let result = handle_agents(&params);
                 if result.get("error").is_some() {
-                    let msg = result["error"].as_str().unwrap_or("agents error").to_string();
+                    let msg = result["error"]
+                        .as_str()
+                        .unwrap_or("agents error")
+                        .to_string();
                     err_response(&id, -32000, msg)
                 } else {
                     ok_response(&id, &result)

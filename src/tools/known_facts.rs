@@ -68,10 +68,11 @@ pub fn tool_known_facts_get(
     _agent_id: &str,
     args: &Value,
 ) -> ToolResult {
-    let keys: Option<Vec<String>> = args
-        .get("keys")
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect());
+    let keys: Option<Vec<String>> = args.get("keys").and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    });
 
     let scope = get_str(args, "scope").and_then(|s| FactScope::from_str(s).ok());
     let task_id = get_str(args, "task_id");

@@ -31,8 +31,8 @@ fn register_agent(
         capabilities: vec!["rust".to_string()],
         status: AgentStatus::Idle,
         current_task_id: None,
-            tier: None,
-            specializations: Vec::new(),
+        tier: None,
+        specializations: Vec::new(),
         heartbeat_at: None,
     };
 
