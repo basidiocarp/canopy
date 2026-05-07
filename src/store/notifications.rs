@@ -129,7 +129,7 @@ pub fn mark_seen(conn: &Connection, notification_id: &str) -> StoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::{BASE_SCHEMA, migrate_schema};
+    use crate::store::schema::migrate_schema;
     use rusqlite::Connection;
 
     fn test_conn() -> Connection {

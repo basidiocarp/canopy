@@ -301,6 +301,7 @@ impl Store {
                 get_task_in_connection(conn, task_id)
             })?,
             OperatorActionKind::AttachReviewAnnotation => self.in_transaction(|conn| {
+                use crate::models::ReviewAnnotationAction;
                 let task = get_task_in_connection(conn, task_id)?;
                 let file_path = input.review_annotation_file_path.ok_or_else(|| {
                     StoreError::Validation("attach_review_annotation requires a file_path".to_string())
@@ -324,7 +325,6 @@ impl Store {
                 )?;
 
                 // Update verification_state atomically with the annotation insert.
-                use crate::models::ReviewAnnotationAction;
                 let new_verification = match action {
                     ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise => {
                         crate::models::VerificationState::Failed

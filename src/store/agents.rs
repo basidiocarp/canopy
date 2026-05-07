@@ -105,7 +105,7 @@ impl Store {
         self.heartbeat_agent_with_workspace(agent_id, status, current_task_id, None)
     }
 
-    /// Send a heartbeat with optional workspace (project_root) update.
+    /// Send a heartbeat with optional workspace (`project_root`) update.
     ///
     /// # Errors
     ///
@@ -601,7 +601,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::models::{AgentRegistration, AgentStatus};
     use crate::store::{Store, TaskCreationOptions};
     use tempfile::tempdir;
@@ -687,10 +686,10 @@ mod tests {
 
         let matched = ranked.iter().find(|r| r.agent_id == "agent-match").unwrap();
         let missed = ranked.iter().find(|r| r.agent_id == "agent-miss").unwrap();
-        assert_eq!(
-            matched.score - missed.score,
-            40.0,
-            "workspace affinity bonus must be exactly 40 points"
+        assert!(
+            (matched.score - missed.score - 40.0).abs() < 0.001,
+            "workspace affinity bonus must be exactly 40 points, got {}",
+            matched.score - missed.score
         );
     }
 

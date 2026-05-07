@@ -311,7 +311,9 @@ pub(super) fn derive_allowed_task_actions(
             is_open_task_status(task.status) && task.status != TaskStatus::ReviewRequired
         }
         OperatorActionKind::ClearTaskDueAt => deadline_summary.due_at.is_some(),
-        OperatorActionKind::SetReviewDueAt => task.status == TaskStatus::ReviewRequired,
+        OperatorActionKind::SetReviewDueAt | OperatorActionKind::AttachReviewAnnotation => {
+            task.status == TaskStatus::ReviewRequired
+        }
         OperatorActionKind::ClearReviewDueAt => deadline_summary.review_due_at.is_some(),
         OperatorActionKind::SummonCouncilSession => {
             council_session.is_none()
@@ -347,7 +349,6 @@ pub(super) fn derive_allowed_task_actions(
                     .contains(&TaskAttentionReason::ReviewReadyForCloseout)
         }
         OperatorActionKind::PostCouncilMessage => council_session.is_some(),
-        OperatorActionKind::AttachReviewAnnotation => task.status == TaskStatus::ReviewRequired,
         _ => true,
     });
 

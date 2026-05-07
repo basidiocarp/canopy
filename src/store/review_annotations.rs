@@ -21,6 +21,7 @@ pub(crate) fn map_review_annotation(row: &rusqlite::Row<'_>) -> rusqlite::Result
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_review_annotation_in_connection(
     conn: &Connection,
     task_id: &str,
@@ -76,6 +77,11 @@ pub(crate) fn list_review_annotations_for_task_in_connection(
 }
 
 impl Store {
+    /// Returns all review annotations for the given task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StoreError` if the database query fails.
     pub fn list_review_annotations_for_task(
         &self,
         task_id: &str,
