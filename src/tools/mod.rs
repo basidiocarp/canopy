@@ -14,6 +14,7 @@ pub mod policy;
 pub mod queue;
 pub mod routing;
 pub mod scope;
+pub mod session;
 pub mod task;
 pub mod tool_adoption;
 
@@ -222,6 +223,11 @@ pub fn dispatch_tool(
         "canopy_dag_complete_node" => dag::tool_canopy_dag_complete_node(store, agent_id, args),
         "canopy_known_facts_add" => known_facts::tool_known_facts_add(store, agent_id, args),
         "canopy_get_known_facts" => known_facts::tool_known_facts_get(store, agent_id, args),
+        "canopy_session_start" => session::tool_session_start(store, agent_id, args),
+        "canopy_session_join" => session::tool_session_join(store, agent_id, args),
+        "canopy_session_get" => session::tool_session_get(store, agent_id, args),
+        "canopy_session_send" => session::tool_session_send(store, agent_id, args),
+        "canopy_session_close" => session::tool_session_close(store, agent_id, args),
         _ => ToolResult::error(format!("unknown tool: {name}")),
     }
 }

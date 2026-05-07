@@ -129,7 +129,8 @@ pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
         | "canopy_outcome_show"
         | "canopy_outcome_summary"
         | "canopy_check_handoff_completeness"
-        | "canopy_dag_ready_nodes" => ToolAnnotations {
+        | "canopy_dag_ready_nodes"
+        | "canopy_session_get" => ToolAnnotations {
             read_only_hint: true,
             destructive_hint: false,
             idempotent_hint: true,
@@ -140,7 +141,8 @@ pub fn annotations_for_tool(name: &str) -> ToolAnnotations {
         | "canopy_handoff_complete"
         | "canopy_handoff_reject"
         | "canopy_task_update_status"
-        | "canopy_dag_complete_node" => ToolAnnotations {
+        | "canopy_dag_complete_node"
+        | "canopy_session_close" => ToolAnnotations {
             read_only_hint: false,
             destructive_hint: true,
             idempotent_hint: false,

@@ -1241,6 +1241,104 @@ pub fn tool_definitions() -> Vec<Value> {
     ));
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Session Coordination (5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    tools.push(tool_def(
+        "canopy_session_start",
+        "Start a new coordination session for a handoff.",
+        json!({
+            "type": "object",
+            "properties": {
+                "handoff_slug": {
+                    "type": "string",
+                    "description": "Handoff this session is for"
+                },
+                "request": {
+                    "type": "string",
+                    "description": "Initial task description"
+                }
+            },
+            "required": ["handoff_slug", "request"],
+            "additionalProperties": false
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_session_join",
+        "Join an existing session and retrieve the current cursor position.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to join"
+                }
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_session_get",
+        "Retrieve messages from a session, optionally starting from a cursor position.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to read from"
+                },
+                "cursor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Start position; returns messages[cursor..]"
+                }
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_session_send",
+        "Send a message in a session.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Message content to append"
+                }
+            },
+            "required": ["session_id", "content"],
+            "additionalProperties": false
+        }),
+    ));
+
+    tools.push(tool_def(
+        "canopy_session_close",
+        "Close a session, preventing further messages.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to close"
+                }
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        }),
+    ));
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Known-Facts Registry (H-09)
     // ─────────────────────────────────────────────────────────────────────────
 

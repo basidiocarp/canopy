@@ -95,6 +95,13 @@ fn test_dispatch_tools_are_in_schema() {
         "canopy_dag_add_edge",
         "canopy_dag_ready_nodes",
         "canopy_dag_complete_node",
+        "canopy_known_facts_add",
+        "canopy_get_known_facts",
+        "canopy_session_start",
+        "canopy_session_join",
+        "canopy_session_get",
+        "canopy_session_send",
+        "canopy_session_close",
     ];
 
     let schema_tools = canopy::mcp::schema::tool_definitions();
@@ -120,7 +127,7 @@ fn test_dispatch_tools_are_in_schema() {
 fn test_tool_count_matches() {
     let schema_count = canopy::mcp::schema::tool_definitions().len();
     assert_eq!(
-        schema_count, 48,
-        "Expected 48 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
+        schema_count, 53,
+        "Expected 53 tools in schema, got {schema_count}. Update this assertion and the dispatch list in test_dispatch_tools_are_in_schema."
     );
 }
