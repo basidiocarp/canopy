@@ -487,8 +487,14 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         [],
     );
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN assignee_id TEXT NULL", []);
-    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN disposition TEXT NOT NULL DEFAULT 'keep'", []);
-    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN disposition_reason TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE handoffs ADD COLUMN disposition TEXT NOT NULL DEFAULT 'keep'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE handoffs ADD COLUMN disposition_reason TEXT",
+        [],
+    );
 
     // agents columns added over time
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN role TEXT NULL", []);

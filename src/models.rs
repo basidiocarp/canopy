@@ -346,7 +346,16 @@ pub enum HandoffStatus {
 }
 
 #[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    EnumString,
+    Display,
+    ValueEnum,
     Default,
 )]
 #[serde(rename_all = "snake_case")]

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::store::CanopyStore;
 
-use super::{validate_required_string, get_bounded_i64, ToolResult};
+use super::{ToolResult, get_bounded_i64, validate_required_string};
 
 type HResult<T> = Result<T, String>;
 
@@ -52,10 +52,8 @@ fn session_path(dir: &Path, id: &str) -> PathBuf {
 
 /// Load a session from disk.
 fn load_session(path: &Path) -> HResult<HandoffSession> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("read session: {e}"))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("deserialize session: {e}"))
+    let content = fs::read_to_string(path).map_err(|e| format!("read session: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("deserialize session: {e}"))
 }
 
 /// Write a new session to disk atomically using a lockfile and temp file.
@@ -72,8 +70,8 @@ fn write_session_atomic(path: &Path, session: &HandoffSession) -> HResult<()> {
         .map_err(|e| format!("acquire lock: {e}"))?;
 
     let result = (|| {
-        let content = serde_json::to_string_pretty(session)
-            .map_err(|e| format!("serialize: {e}"))?;
+        let content =
+            serde_json::to_string_pretty(session).map_err(|e| format!("serialize: {e}"))?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, &content).map_err(|e| format!("write tmp: {e}"))?;
         fs::rename(&tmp, path).map_err(|e| {
@@ -105,8 +103,8 @@ where
     let result: HResult<T> = (|| {
         let mut session = load_session(path)?;
         let value = f(&mut session)?;
-        let content = serde_json::to_string_pretty(&session)
-            .map_err(|e| format!("serialize: {e}"))?;
+        let content =
+            serde_json::to_string_pretty(&session).map_err(|e| format!("serialize: {e}"))?;
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, &content).map_err(|e| format!("write tmp: {e}"))?;
         fs::rename(&tmp, path).map_err(|e| {
@@ -141,10 +139,7 @@ pub fn tool_session_start(
         Err(e) => return e,
     };
 
-    let session_id = format!(
-        "sess_{}",
-        Utc::now().timestamp_nanos_opt().unwrap_or(0)
-    );
+    let session_id = format!("sess_{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
 
     let session = HandoffSession {
         id: session_id.clone(),

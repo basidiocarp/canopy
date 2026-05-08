@@ -3234,9 +3234,7 @@ fn handoff_assignee_fields_default_to_unassigned() {
     assert!(handoff.assignee_id.is_none());
 
     // Verify round-trip through get_handoff
-    let retrieved = store
-        .get_handoff(&handoff.handoff_id)
-        .expect("get handoff");
+    let retrieved = store.get_handoff(&handoff.handoff_id).expect("get handoff");
     assert_eq!(retrieved.assignee_type.to_string(), "unassigned");
     assert!(retrieved.assignee_id.is_none());
 
@@ -3326,9 +3324,7 @@ fn handoff_assignee_fields_survive_roundtrip_for_non_default_variants() {
     }
 
     // Verify round-trip through get_handoff
-    let retrieved = store
-        .get_handoff(&handoff.handoff_id)
-        .expect("get handoff");
+    let retrieved = store.get_handoff(&handoff.handoff_id).expect("get handoff");
     assert_eq!(retrieved.assignee_type.to_string(), "agent");
     assert_eq!(
         retrieved.assignee_id.as_deref(),
@@ -3390,13 +3386,7 @@ fn handoff_disposition_keep_is_default() {
     store.register_agent(&reviewer).expect("register reviewer");
 
     let task = store
-        .create_task(
-            "Test task",
-            None,
-            "operator",
-            "/tmp/project",
-            None,
-        )
+        .create_task("Test task", None, "operator", "/tmp/project", None)
         .expect("create task");
 
     let handoff = store
@@ -3488,9 +3478,7 @@ fn handoff_disposition_discard_survives_roundtrip() {
     );
 
     // Verify round-trip through get_handoff.
-    let retrieved = store
-        .get_handoff(&handoff.handoff_id)
-        .expect("get handoff");
+    let retrieved = store.get_handoff(&handoff.handoff_id).expect("get handoff");
     assert_eq!(retrieved.disposition, HandoffDisposition::Discard);
     assert_eq!(
         retrieved.disposition_reason.as_deref(),
@@ -3582,9 +3570,7 @@ fn handoff_disposition_crash_survives_roundtrip() {
     );
 
     // Verify round-trip through get_handoff.
-    let retrieved = store
-        .get_handoff(&handoff.handoff_id)
-        .expect("get handoff");
+    let retrieved = store.get_handoff(&handoff.handoff_id).expect("get handoff");
     assert_eq!(retrieved.disposition, HandoffDisposition::Crash);
     assert_eq!(
         retrieved.disposition_reason.as_deref(),
