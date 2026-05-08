@@ -131,7 +131,9 @@ pub(crate) const BASE_SCHEMA: &str = r"
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         resolved_at TEXT NULL,
         assignee_type TEXT NOT NULL DEFAULT 'unassigned',
-        assignee_id TEXT NULL
+        assignee_id TEXT NULL,
+        disposition TEXT NOT NULL DEFAULT 'keep',
+        disposition_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS council_messages (
@@ -485,6 +487,8 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         [],
     );
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN assignee_id TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN disposition TEXT NOT NULL DEFAULT 'keep'", []);
+    let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN disposition_reason TEXT", []);
 
     // agents columns added over time
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN role TEXT NULL", []);

@@ -346,6 +346,20 @@ pub enum HandoffStatus {
 }
 
 #[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+    Default,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum HandoffDisposition {
+    #[default]
+    Keep,
+    Discard,
+    Crash,
+}
+
+#[derive(
     Debug,
     Clone,
     Copy,
@@ -1058,6 +1072,9 @@ pub struct Handoff {
     pub resolved_at: Option<String>,
     pub assignee_type: AssigneeType,
     pub assignee_id: Option<String>,
+    pub disposition: HandoffDisposition,
+    /// Reason is optional but strongly recommended when disposition is Discard or Crash.
+    pub disposition_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

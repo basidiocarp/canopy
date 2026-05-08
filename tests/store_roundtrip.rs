@@ -2,7 +2,7 @@
 
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    HandoffStatus, HandoffType, OperatorActionKind, TaskAction, TaskEventType,
+    HandoffDisposition, HandoffStatus, HandoffType, OperatorActionKind, TaskAction, TaskEventType,
     TaskRelationshipRole, TaskStatus, VerificationState,
 };
 use canopy::store::{
@@ -3344,5 +3344,261 @@ fn handoff_assignee_fields_survive_roundtrip_for_non_default_variants() {
     assert_eq!(
         listed[0].assignee_id.as_deref(),
         Some("agent-implementer-1")
+    );
+}
+
+#[test]
+fn handoff_disposition_keep_is_default() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "agent-1".to_string(),
+        host_id: "host-1".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-1".to_string(),
+        model: "model-1".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+    let reviewer = AgentRegistration {
+        agent_id: "agent-2".to_string(),
+        host_id: "host-2".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-2".to_string(),
+        model: "model-2".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-2".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    store.register_agent(&reviewer).expect("register reviewer");
+
+    let task = store
+        .create_task(
+            "Test task",
+            None,
+            "operator",
+            "/tmp/project",
+            None,
+        )
+        .expect("create task");
+
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            &agent.agent_id,
+            &reviewer.agent_id,
+            HandoffType::RequestReview,
+            "please review this",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    assert_eq!(handoff.disposition.to_string(), "keep");
+    assert!(handoff.disposition_reason.is_none());
+}
+
+#[test]
+fn handoff_disposition_discard_survives_roundtrip() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "agent-1".to_string(),
+        host_id: "host-1".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-1".to_string(),
+        model: "model-1".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+    let reviewer = AgentRegistration {
+        agent_id: "agent-2".to_string(),
+        host_id: "host-2".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-2".to_string(),
+        model: "model-2".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-2".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    store.register_agent(&reviewer).expect("register reviewer");
+
+    let task = store
+        .create_task("Test task", None, "operator", "/tmp/project", None)
+        .expect("create task");
+
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            &agent.agent_id,
+            &reviewer.agent_id,
+            HandoffType::RequestReview,
+            "please review this",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    // Use the write path to set disposition and reason.
+    let updated = store
+        .update_handoff_disposition(
+            &handoff.handoff_id,
+            HandoffDisposition::Discard,
+            Some("superseded by PR #123"),
+        )
+        .expect("set disposition to discard");
+    assert_eq!(updated.disposition, HandoffDisposition::Discard);
+    assert_eq!(
+        updated.disposition_reason.as_deref(),
+        Some("superseded by PR #123")
+    );
+
+    // Verify round-trip through get_handoff.
+    let retrieved = store
+        .get_handoff(&handoff.handoff_id)
+        .expect("get handoff");
+    assert_eq!(retrieved.disposition, HandoffDisposition::Discard);
+    assert_eq!(
+        retrieved.disposition_reason.as_deref(),
+        Some("superseded by PR #123")
+    );
+
+    // Verify round-trip through list_handoffs.
+    let listed = store
+        .list_handoffs(Some(&task.task_id))
+        .expect("list handoffs");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].disposition, HandoffDisposition::Discard);
+    assert_eq!(
+        listed[0].disposition_reason.as_deref(),
+        Some("superseded by PR #123")
+    );
+}
+
+#[test]
+fn handoff_disposition_crash_survives_roundtrip() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let agent = AgentRegistration {
+        agent_id: "agent-1".to_string(),
+        host_id: "host-1".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-1".to_string(),
+        model: "model-1".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-1".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+    let reviewer = AgentRegistration {
+        agent_id: "agent-2".to_string(),
+        host_id: "host-2".to_string(),
+        host_type: "host_type".to_string(),
+        host_instance: "instance-2".to_string(),
+        model: "model-2".to_string(),
+        project_root: "/project".to_string(),
+        worktree_id: "worktree-2".to_string(),
+        status: AgentStatus::Idle,
+        current_task_id: None,
+        tier: None,
+        specializations: Vec::new(),
+        heartbeat_at: None,
+        capabilities: Vec::new(),
+        role: None,
+    };
+
+    store.register_agent(&agent).expect("register agent");
+    store.register_agent(&reviewer).expect("register reviewer");
+
+    let task = store
+        .create_task("Test task", None, "operator", "/tmp/project", None)
+        .expect("create task");
+
+    let handoff = store
+        .create_handoff(
+            &task.task_id,
+            &agent.agent_id,
+            &reviewer.agent_id,
+            HandoffType::RequestReview,
+            "please review this",
+            None,
+            HandoffTiming::default(),
+        )
+        .expect("create handoff");
+
+    // Use the write path to set Crash disposition with a non-null reason.
+    let updated = store
+        .update_handoff_disposition(
+            &handoff.handoff_id,
+            HandoffDisposition::Crash,
+            Some("agent panicked during review step"),
+        )
+        .expect("set disposition to crash");
+    assert_eq!(updated.disposition, HandoffDisposition::Crash);
+    assert_eq!(
+        updated.disposition_reason.as_deref(),
+        Some("agent panicked during review step")
+    );
+
+    // Verify round-trip through get_handoff.
+    let retrieved = store
+        .get_handoff(&handoff.handoff_id)
+        .expect("get handoff");
+    assert_eq!(retrieved.disposition, HandoffDisposition::Crash);
+    assert_eq!(
+        retrieved.disposition_reason.as_deref(),
+        Some("agent panicked during review step")
+    );
+
+    // Verify round-trip through list_handoffs.
+    let listed = store
+        .list_handoffs(Some(&task.task_id))
+        .expect("list handoffs");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].disposition, HandoffDisposition::Crash);
+    assert_eq!(
+        listed[0].disposition_reason.as_deref(),
+        Some("agent panicked during review step")
     );
 }

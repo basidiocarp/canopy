@@ -50,7 +50,7 @@ pub(crate) fn get_handoff_in_connection(
         SELECT handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
                summary, requested_action, goal, next_steps, stop_reason,
                due_at, expires_at, status, created_at, updated_at, resolved_at,
-               assignee_type, assignee_id
+               assignee_type, assignee_id, disposition, disposition_reason
         FROM handoffs
         WHERE handoff_id = ?1
         ",

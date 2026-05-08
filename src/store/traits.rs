@@ -221,6 +221,12 @@ pub trait HandoffStore {
     fn list_pending_handoffs_for(&self, agent_id: &str) -> StoreResult<Vec<Handoff>>;
     fn list_handoffs_for_project(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>>;
     fn list_active_handoffs(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>>;
+    fn update_handoff_disposition(
+        &self,
+        handoff_id: &str,
+        disposition: crate::models::HandoffDisposition,
+        disposition_reason: Option<&str>,
+    ) -> StoreResult<Handoff>;
 }
 
 #[allow(clippy::missing_errors_doc)]
@@ -819,6 +825,15 @@ impl HandoffStore for super::Store {
 
     fn list_active_handoffs(&self, project_root: Option<&str>) -> StoreResult<Vec<Handoff>> {
         self.list_active_handoffs(project_root)
+    }
+
+    fn update_handoff_disposition(
+        &self,
+        handoff_id: &str,
+        disposition: crate::models::HandoffDisposition,
+        disposition_reason: Option<&str>,
+    ) -> StoreResult<Handoff> {
+        self.update_handoff_disposition(handoff_id, disposition, disposition_reason)
     }
 }
 

@@ -161,6 +161,8 @@ pub(crate) fn create_handoff_in_connection(
         resolved_at: None,
         assignee_type: crate::models::AssigneeType::Unassigned,
         assignee_id: None,
+        disposition: crate::models::HandoffDisposition::Keep,
+        disposition_reason: None,
     };
     conn.execute(
         r"
@@ -168,8 +170,8 @@ pub(crate) fn create_handoff_in_connection(
             handoff_id, task_id, from_agent_id, to_agent_id, handoff_type,
             summary, requested_action, goal, next_steps, stop_reason,
             due_at, expires_at, status, created_at, updated_at, resolved_at,
-            assignee_type, assignee_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, ?14, ?15)
+            assignee_type, assignee_id, disposition, disposition_reason
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, ?14, ?15, ?16, ?17)
         ",
         params![
             handoff.handoff_id,
@@ -187,6 +189,8 @@ pub(crate) fn create_handoff_in_connection(
             handoff.status.to_string(),
             handoff.assignee_type.to_string(),
             handoff.assignee_id,
+            handoff.disposition.to_string(),
+            handoff.disposition_reason,
         ],
     )?;
     touch_task_in_connection(conn, task_id)?;

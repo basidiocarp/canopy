@@ -142,6 +142,8 @@ pub(crate) fn map_handoff(row: &rusqlite::Row<'_>) -> rusqlite::Result<Handoff> 
         resolved_at: row.get(15)?,
         assignee_type: parse_enum_column(row, 16)?,
         assignee_id: row.get(17)?,
+        disposition: parse_enum_column(row, 18)?,
+        disposition_reason: row.get(19)?,
     })
 }
 
