@@ -200,7 +200,7 @@ pub fn tool_session_join(
         Err(e) => return ToolResult::error(e),
     };
 
-    let cursor = session.messages.len() as i64;
+    let cursor = i64::try_from(session.messages.len()).unwrap_or(i64::MAX);
 
     match serde_json::to_string_pretty(&serde_json::json!({
         "session_id": session.id,
@@ -228,7 +228,7 @@ pub fn tool_session_get(
         Err(e) => return e,
     };
 
-    let cursor = get_bounded_i64(args, "cursor", 0, 0, i64::MAX) as usize;
+    let cursor = usize::try_from(get_bounded_i64(args, "cursor", 0, 0, i64::MAX)).unwrap_or(0);
 
     let dir = match sessions_dir() {
         Ok(d) => d,
@@ -247,11 +247,11 @@ pub fn tool_session_get(
         Vec::new()
     };
 
-    let next_cursor = (cursor + messages.len()) as i64;
+    let next_cursor = i64::try_from(cursor + messages.len()).unwrap_or(i64::MAX);
 
     match serde_json::to_string_pretty(&serde_json::json!({
         "session_id": session.id,
-        "cursor": cursor as i64,
+        "cursor": i64::try_from(cursor).unwrap_or(i64::MAX),
         "next_cursor": next_cursor,
         "messages": messages,
     })) {
@@ -311,7 +311,7 @@ pub fn tool_session_send(
 
     match serde_json::to_string_pretty(&serde_json::json!({
         "session_id": session_id,
-        "cursor_position": cursor_position as i64,
+        "cursor_position": i64::try_from(cursor_position).unwrap_or(i64::MAX),
     })) {
         Ok(text) => ToolResult::text(text),
         Err(e) => ToolResult::error(format!("serialize result: {e}")),
@@ -360,7 +360,6 @@ pub fn tool_session_close(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     fn with_session_dir<F>(f: F)
     where
@@ -406,8 +405,8 @@ mod tests {
             // Add 3 messages
             for i in 0..3 {
                 session.messages.push(SessionMessage {
-                    sender: format!("agent-{}", i),
-                    content: format!("message {}", i),
+                    sender: format!("agent-{i}"),
+                    content: format!("message {i}"),
                     cursor_position: i,
                     timestamp: Utc::now().to_rfc3339(),
                 });
@@ -423,7 +422,7 @@ mod tests {
     #[test]
     fn test_session_send_on_closed_returns_error() {
         with_session_dir(|| {
-            let mut session = HandoffSession {
+            let session = HandoffSession {
                 id: "sess_test".to_string(),
                 created_by: "agent-1".to_string(),
                 handoff_slug: "test/handoff".to_string(),
@@ -432,12 +431,8 @@ mod tests {
                 status: "closed".to_string(),
             };
 
-            // Verify closed status is detected
+            // Verify closed status is detected (check used in tool_session_send)
             assert_eq!(session.status, "closed");
-            if session.status == "closed" {
-                // This is the check used in tool_session_send
-                assert!(true);
-            }
         });
     }
 }
