@@ -299,15 +299,11 @@ mod tests {
         let title = "Test task";
         let description = Some("Test description");
 
-        let hash1 = compute_body_hash(
-            title,
-            description,
-            &vec!["file1.rs".to_string()],
-        );
+        let hash1 = compute_body_hash(title, description, &["file1.rs".to_string()]);
         let hash2 = compute_body_hash(
             title,
             description,
-            &vec!["file1.rs".to_string(), "file2.rs".to_string()],
+            &["file1.rs".to_string(), "file2.rs".to_string()],
         );
 
         assert_ne!(hash1, hash2, "Body hash should change when scope changes");
@@ -434,6 +430,7 @@ pub fn tool_task_complete(
     };
 
     // Gate: if a handoff path is provided, check completeness first
+    let mut residual_work_warning: Option<String> = None;
     if let Some(handoff_path_str) = get_str(args, "handoff_path") {
         let handoff_path = std::path::Path::new(handoff_path_str);
         match crate::handoff_check::check_completeness(handoff_path) {
@@ -444,6 +441,7 @@ pub fn tool_task_complete(
                         crate::handoff_check::format_incomplete_report(&report)
                     ));
                 }
+                residual_work_warning = report.residual_work_warning;
             }
             Err(e) => {
                 return ToolResult::error(format!("failed to check handoff completeness: {e}"));
@@ -517,6 +515,19 @@ pub fn tool_task_complete(
         Ok(t) => t,
         Err(e) => return ToolResult::error(format!("failed to complete task: {e}")),
     };
+
+    // Surface residual work warning in the audit trail if the section was unfilled.
+    if let Some(ref warning) = residual_work_warning {
+        tracing::warn!(task_id = %task_id, "{warning}");
+        let _ = store.add_evidence(
+            task_id,
+            crate::models::EvidenceSourceKind::ManualNote,
+            task_id,
+            "residual_work_warning",
+            Some(warning.as_str()),
+            EvidenceLinkRefs::default(),
+        );
+    }
 
     // Attach summary as manual note evidence
     let _ = store.add_evidence(

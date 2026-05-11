@@ -15,6 +15,11 @@ pub struct CompletenessReport {
     pub empty_paste_markers: Vec<usize>,
     pub has_verify_script: bool,
     pub verify_script_path: Option<PathBuf>,
+    /// Set when a `## Residual Work` section is present but contains only the
+    /// template placeholder row — meaning no findings have been logged.
+    /// This is a warning, not a hard block: an empty section is valid when
+    /// every Stage 1 and Stage 2 finding was fixed.
+    pub residual_work_warning: Option<String>,
 }
 
 /// Result of running a verification script.
@@ -43,6 +48,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
 
     let (total_checkboxes, checked_checkboxes) = count_checkboxes(&content);
     let empty_paste_markers = find_empty_paste_markers(&content);
+    let residual_work_warning = check_residual_work_section(&content);
 
     let verify_script = derive_verify_script_path(handoff_path);
     let has_verify_script = verify_script.exists();
@@ -58,6 +64,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
             total_checkboxes,
             checked_checkboxes,
             has_verify_script,
+            residual_work_warning = residual_work_warning.is_some(),
             "handoff completeness check passed"
         );
     } else {
@@ -78,6 +85,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
         empty_paste_markers,
         has_verify_script,
         verify_script_path,
+        residual_work_warning,
     })
 }
 
@@ -267,6 +275,52 @@ fn workspace_root_from_handoff_path(path: &Path) -> Option<PathBuf> {
     path.parent().map(Path::to_path_buf)
 }
 
+/// Check whether the `## Residual Work` section (if present) has been filled.
+///
+/// Returns a warning string if the section exists but contains only the template
+/// placeholder row — meaning no findings have been explicitly logged or dismissed.
+/// Returns `None` if the section is absent (all findings fixed) or properly filled.
+fn check_residual_work_section(content: &str) -> Option<String> {
+    let section_start = content.find("## Residual Work")?;
+    // Slice from the section heading to the next same-level heading or end-of-doc.
+    let after_heading = &content[section_start + "## Residual Work".len()..];
+    let section_end = after_heading
+        .find("\n## ")
+        .unwrap_or(after_heading.len());
+    let section = &after_heading[..section_end];
+
+    // A "real" table row: starts with `|`, has 3+ pipes, is not a separator row,
+    // is not the column-header row (always the first pipe row), and is not the
+    // template example placeholder. We skip the column-header structurally rather
+    // than by matching the word "Finding" — which would also match real findings.
+    let mut header_skipped = false;
+    let has_real_entry = section
+        .lines()
+        .filter(|line| line.trim_start().starts_with('|'))
+        .filter(|line| !line.contains("------"))
+        .filter(|_line| {
+            if !header_skipped {
+                header_skipped = true;
+                return false; // skip the column-header row, whatever it says
+            }
+            true
+        })
+        .filter(|line| !line.trim_start().starts_with("| _(example:"))
+        .any(|line| line.chars().filter(|&c| c == '|').count() >= 3);
+
+    if has_real_entry {
+        return None;
+    }
+
+    Some(
+        "Residual Work section has no logged findings. \
+         If every Stage 1 and Stage 2 finding was fixed, this is fine. \
+         If any finding was accepted but not fixed, add it here with a disposition \
+         (follow-up handoff, filed ticket, or accepted-with-note)."
+            .to_string(),
+    )
+}
+
 /// Count total and checked markdown checkboxes in the content.
 /// Returns (total, checked).
 fn count_checkboxes(content: &str) -> (usize, usize) {
@@ -437,6 +491,7 @@ filled output
             empty_paste_markers: vec![10, 25],
             has_verify_script: false,
             verify_script_path: None,
+            residual_work_warning: None,
         };
         let msg = format_incomplete_report(&report);
         assert!(msg.contains("2 of 5 checklist items remain unchecked"));
@@ -467,6 +522,7 @@ filled output
             empty_paste_markers: vec![],
             has_verify_script: false,
             verify_script_path: None,
+            residual_work_warning: None,
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
@@ -499,11 +555,49 @@ filled output
             empty_paste_markers: vec![],
             has_verify_script: true,
             verify_script_path: Some(script),
+            residual_work_warning: None,
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
         assert_eq!(result.passed, 5);
         assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn residual_work_absent_returns_none() {
+        let content = "## Completion\n\n- **Disposition:** keep\n";
+        assert!(check_residual_work_section(content).is_none());
+    }
+
+    #[test]
+    fn residual_work_with_real_entry_returns_none() {
+        let content = "## Residual Work\n\n\
+            | Finding | Disposition | Link / Note |\n\
+            |---------|-------------|-------------|\n\
+            | hash gap in assign_task | Follow-up handoff | .handoffs/canopy/assign-hash.md |\n\
+            \n## Completion\n";
+        assert!(check_residual_work_section(content).is_none());
+    }
+
+    #[test]
+    fn residual_work_placeholder_only_returns_warning() {
+        let content = "## Residual Work\n\n\
+            | Finding | Disposition | Link / Note |\n\
+            |---------|-------------|-------------|\n\
+            | _(example: unused import in foo.rs)_ | Follow-up handoff | `.handoffs/canopy/cleanup.md` |\n\
+            \n## Completion\n";
+        let warning = check_residual_work_section(content);
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("no logged findings"));
+    }
+
+    #[test]
+    fn residual_work_empty_table_returns_warning() {
+        let content = "## Residual Work\n\n\
+            | Finding | Disposition | Link / Note |\n\
+            |---------|-------------|-------------|\n\
+            \n## Completion\n";
+        assert!(check_residual_work_section(content).is_some());
     }
 
     #[test]
