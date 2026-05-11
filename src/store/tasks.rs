@@ -24,6 +24,49 @@ use crate::models::{
 
 use super::helpers::{handoff_is_expired, parse_enum_value};
 
+#[must_use]
+pub fn compute_body_hash(title: &str, description: Option<&str>, scope: &[String]) -> String {
+    // FNV-1a: deterministic across compiler versions and platforms.
+    // std DefaultHasher is explicitly not guaranteed stable across Rust releases.
+    const PRIME: u64 = 1_099_511_628_211;
+    const OFFSET: u64 = 14_695_981_039_346_656_037;
+    let mut hash = OFFSET;
+    let bytes = title
+        .bytes()
+        .chain(std::iter::once(b'\x00'))
+        .chain(description.unwrap_or("").bytes())
+        .chain(std::iter::once(b'\x00'))
+        .chain(
+            scope
+                .iter()
+                .flat_map(|s| s.bytes().chain(std::iter::once(b'\x00'))),
+        );
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+/// Records the body hash on first dispatch for tasks that track plan immutability.
+///
+/// Both `atomic_claim_task` variants bypass `update_task_status`, so they call
+/// this helper directly after their raw SQL UPDATE succeeds.
+fn record_body_hash_if_needed(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+) -> StoreResult<()> {
+    let task = get_task_in_connection(conn, task_id)?;
+    if task.immutable_once_dispatched && task.body_hash.is_none() {
+        let hash = compute_body_hash(&task.title, task.description.as_deref(), &task.scope);
+        conn.execute(
+            "UPDATE tasks SET body_hash = ?2, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+            params![task_id, hash],
+        )?;
+    }
+    Ok(())
+}
+
 impl Store {
     /// Creates a new task in the local ledger.
     ///
@@ -283,7 +326,7 @@ impl Store {
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
             FROM tasks
             ORDER BY rowid
             ",
@@ -324,6 +367,29 @@ impl Store {
         self.ensure_task_exists(task_id)?;
         self.in_transaction(|conn| {
             let current = get_task_in_connection(conn, task_id)?;
+
+            // Detect silent body rewrites: if a hash was locked at dispatch time,
+            // compare it against the current body. A mismatch means the title,
+            // description, or scope was changed after dispatch without going through
+            // a sanctioned update path.
+            if current.immutable_once_dispatched {
+                if let Some(ref stored) = current.body_hash {
+                    let live = compute_body_hash(
+                        &current.title,
+                        current.description.as_deref(),
+                        &current.scope,
+                    );
+                    if *stored != live {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            stored_hash = %stored,
+                            live_hash = %live,
+                            "plan immutability violation: task body was rewritten after dispatch"
+                        );
+                    }
+                }
+            }
+
             let from_status = current.status;
             let next_verification = update
                 .verification_state
@@ -383,6 +449,20 @@ impl Store {
                 (current.verified_by.as_deref(), None)
             };
 
+            // Compute body hash if transitioning to in_progress or assigned and hash not yet recorded
+            let body_hash = if (status == TaskStatus::InProgress || status == TaskStatus::Assigned)
+                && current.body_hash.is_none()
+                && current.immutable_once_dispatched
+            {
+                Some(compute_body_hash(
+                    &current.title,
+                    current.description.as_deref(),
+                    &current.scope,
+                ))
+            } else {
+                None
+            };
+
             conn.execute(
                 r"
                 UPDATE tasks
@@ -394,6 +474,7 @@ impl Store {
                     closed_by = ?7,
                     closure_summary = ?8,
                     closed_at = CASE WHEN ?9 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    body_hash = COALESCE(?10, body_hash),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE task_id = ?1
                 ",
@@ -415,6 +496,7 @@ impl Store {
                         None
                     },
                     is_terminal,
+                    body_hash,
                 ],
             )?;
 
@@ -919,7 +1001,7 @@ impl Store {
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
             FROM tasks
         ";
 
@@ -1087,6 +1169,9 @@ impl Store {
                         note: Some("claimed via atomic_claim_task"),
                     },
                 )?;
+                // Lock the body hash on first dispatch. This path bypasses
+                // update_task_status, so we record it here explicitly.
+                record_body_hash_if_needed(conn, task_id)?;
                 sync_task_workflow_in_connection(conn, task_id)?;
                 let task = get_task_in_connection(conn, task_id)?;
                 Ok(Some(task))
@@ -1169,6 +1254,9 @@ impl Store {
                         note: Some("claimed via atomic_claim_task_with_cap"),
                     },
                 )?;
+                // Lock the body hash on first dispatch. This path bypasses
+                // update_task_status, so we record it here explicitly.
+                record_body_hash_if_needed(conn, task_id)?;
                 sync_task_workflow_in_connection(conn, task_id)?;
                 let task = get_task_in_connection(conn, task_id)?;
                 Ok(Some(task))
@@ -1199,7 +1287,7 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1255,7 +1343,7 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC

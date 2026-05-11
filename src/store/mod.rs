@@ -27,6 +27,7 @@ pub use dag::{
 };
 pub use permission_rules::{PermissionRule, lookup_rule, upsert_rule};
 pub use policy_events::PolicyEventRow;
+pub use tasks::compute_body_hash;
 pub use traits::{
     CanopyStore, KnownFactStore, OrchestrationStore, OutcomeStore, TaskGetStore, TaskLookupStore,
 };

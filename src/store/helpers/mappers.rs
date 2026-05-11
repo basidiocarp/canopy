@@ -68,6 +68,8 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: row.get(34)?,
         updated_at: row.get(35)?,
         prior_task_id: None,
+        immutable_once_dispatched: row.get::<_, Option<i64>>(36)?.unwrap_or(1) != 0,
+        body_hash: row.get(37)?,
     })
 }
 

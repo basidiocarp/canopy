@@ -20,6 +20,10 @@ pub fn capabilities_match(agent: &[String], required: &[String]) -> bool {
     })
 }
 
+fn default_immutable_once_dispatched() -> bool {
+    true
+}
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
 )]
@@ -977,6 +981,13 @@ pub struct Task {
     /// this field points to the most recently completed task's ID, allowing idempotent
     /// rediscovery of prior work.
     pub prior_task_id: Option<String>,
+    /// When true, the plan body fields (title, description, scope) are frozen
+    /// once the task leaves the draft/pending state.
+    #[serde(default = "default_immutable_once_dispatched")]
+    pub immutable_once_dispatched: bool,
+    /// FNV-1a (64-bit) hash of the plan body (title + description + scope) recorded
+    /// at the moment the task is first dispatched. Used to detect silent rewrites.
+    pub body_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

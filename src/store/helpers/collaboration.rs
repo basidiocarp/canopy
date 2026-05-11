@@ -50,6 +50,8 @@ pub(crate) fn create_task_in_connection(
         created_at: String::new(),
         updated_at: String::new(),
         prior_task_id: None,
+        immutable_once_dispatched: true,
+        body_hash: None,
     };
     conn.execute(
         r"
@@ -59,8 +61,9 @@ pub(crate) fn create_task_in_connection(
             required_role, required_capabilities, auto_review, verification_required, status,
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
-            closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at,
+            immutable_once_dispatched, body_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?35, ?36)
         ",
         params![
             task.task_id,
@@ -97,6 +100,8 @@ pub(crate) fn create_task_in_connection(
             task.due_at,
             task.review_due_at,
             serialize_capabilities(&task.scope)?,
+            i64::from(task.immutable_once_dispatched),
+            task.body_hash,
         ],
     )?;
     record_task_event_in_connection(

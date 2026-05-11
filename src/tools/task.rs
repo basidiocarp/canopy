@@ -22,6 +22,9 @@ use serde_json::Value;
 use std::fmt::Write;
 use std::str::FromStr;
 
+#[cfg(test)]
+use crate::store::compute_body_hash;
+
 /// Create a new task.
 pub fn tool_task_create(
     store: &(impl CanopyStore + ?Sized),
@@ -240,6 +243,8 @@ mod tests {
             created_at: "2025-01-01T00:00:00Z".to_string(),
             updated_at: "2025-01-01T00:00:00Z".to_string(),
             prior_task_id: None,
+            immutable_once_dispatched: true,
+            body_hash: None,
         }
     }
 
@@ -253,6 +258,73 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(result.content.len(), 1);
         assert!(result.content[0].text.contains("task-1"));
+    }
+
+    #[test]
+    fn test_compute_body_hash_deterministic() {
+        let title = "Test task";
+        let description = Some("Test description");
+        let scope = vec!["file1.rs".to_string(), "file2.rs".to_string()];
+
+        let hash1 = compute_body_hash(title, description, &scope);
+        let hash2 = compute_body_hash(title, description, &scope);
+
+        assert_eq!(hash1, hash2, "Body hash should be deterministic");
+    }
+
+    #[test]
+    fn test_compute_body_hash_changes_on_title_change() {
+        let description = Some("Test description");
+        let scope = vec!["file1.rs".to_string()];
+
+        let hash1 = compute_body_hash("Original title", description, &scope);
+        let hash2 = compute_body_hash("Modified title", description, &scope);
+
+        assert_ne!(hash1, hash2, "Body hash should change when title changes");
+    }
+
+    #[test]
+    fn test_compute_body_hash_changes_on_description_change() {
+        let title = "Test task";
+        let scope = vec!["file1.rs".to_string()];
+
+        let hash1 = compute_body_hash(title, Some("Original description"), &scope);
+        let hash2 = compute_body_hash(title, Some("Modified description"), &scope);
+
+        assert_ne!(hash1, hash2, "Body hash should change when description changes");
+    }
+
+    #[test]
+    fn test_compute_body_hash_changes_on_scope_change() {
+        let title = "Test task";
+        let description = Some("Test description");
+
+        let hash1 = compute_body_hash(
+            title,
+            description,
+            &vec!["file1.rs".to_string()],
+        );
+        let hash2 = compute_body_hash(
+            title,
+            description,
+            &vec!["file1.rs".to_string(), "file2.rs".to_string()],
+        );
+
+        assert_ne!(hash1, hash2, "Body hash should change when scope changes");
+    }
+
+    #[test]
+    fn test_compute_body_hash_handles_empty_description() {
+        let title = "Test task";
+        let scope = vec!["file1.rs".to_string()];
+
+        let hash1 = compute_body_hash(title, None, &scope);
+        let hash2 = compute_body_hash(title, Some(""), &scope);
+
+        assert_eq!(
+            hash1, hash2,
+            "Body hash should treat None and empty string as equivalent"
+        );
     }
 }
 

@@ -407,6 +407,12 @@ fn migrations() -> Migrations<'static> {
                 ON review_annotations(task_id);
         ",
         ),
+        M::up(
+            r"
+            ALTER TABLE tasks ADD COLUMN immutable_once_dispatched INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE tasks ADD COLUMN body_hash TEXT;
+        ",
+        ),
     ])
 }
 
