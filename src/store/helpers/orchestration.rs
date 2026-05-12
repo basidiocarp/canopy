@@ -279,42 +279,91 @@ fn upsert_task_worktree_binding_in_connection(
     Ok(binding)
 }
 
-#[allow(clippy::too_many_lines)]
 fn sync_task_review_cycle_in_connection(
     conn: &Connection,
     task: &Task,
 ) -> StoreResult<TaskReviewCycleRecord> {
     let existing = load_task_review_cycle_in_connection(conn, &task.task_id)?;
+    let cycle_metrics = load_review_cycle_metrics(conn, &task.task_id)?;
+    let context = derive_review_cycle_context(&cycle_metrics.events);
+
+    let (review_cycle_id, cycle_number, next_state) =
+        calculate_cycle_state(task, existing, context)?;
+
+    upsert_review_cycle(
+        conn,
+        &review_cycle_id,
+        task,
+        cycle_number,
+        next_state,
+        cycle_metrics.council_session_id,
+        cycle_metrics.evidence_count,
+        cycle_metrics.decision_count,
+    )?;
+
+    let review_cycle = load_task_review_cycle_in_connection(conn, &task.task_id)?
+        .ok_or(StoreError::NotFound("task review cycle"))?;
+    conn.execute(
+        "UPDATE tasks SET review_cycle_id = ?2 WHERE task_id = ?1",
+        params![task.task_id, review_cycle.review_cycle_id],
+    )?;
+    Ok(review_cycle)
+}
+
+struct ReviewCycleMetrics {
+    council_session_id: Option<String>,
+    evidence_count: i64,
+    decision_count: i64,
+    events: Vec<TaskEvent>,
+}
+
+fn load_review_cycle_metrics(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<ReviewCycleMetrics> {
     let council_session_id = conn
         .query_row(
             "SELECT council_session_id FROM council_sessions WHERE task_id = ?1",
-            [task.task_id.as_str()],
+            [task_id],
             |row| row.get::<_, String>(0),
         )
         .optional()?;
     let evidence_count = conn.query_row(
         "SELECT COUNT(*) FROM evidence_refs WHERE task_id = ?1",
-        [task.task_id.as_str()],
+        [task_id],
         |row| row.get::<_, i64>(0),
     )?;
     let decision_count = conn.query_row(
         "SELECT COUNT(*) FROM council_messages WHERE task_id = ?1 AND message_type = 'decision'",
-        [task.task_id.as_str()],
+        [task_id],
         |row| row.get::<_, i64>(0),
     )?;
-    let events = list_task_events_in_connection(conn, &task.task_id)?;
-    let context = derive_review_cycle_context(&events);
-    let review_required = task.status == TaskStatus::ReviewRequired;
-    let terminal = matches!(
-        task.status,
-        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
-    );
+    let events = list_task_events_in_connection(conn, task_id)?;
 
+    Ok(ReviewCycleMetrics {
+        council_session_id,
+        evidence_count,
+        decision_count,
+        events,
+    })
+}
+
+fn calculate_cycle_state(
+    task: &Task,
+    existing: Option<TaskReviewCycleRecord>,
+    context: crate::models::ReviewCycleContext,
+) -> StoreResult<(String, i64, ReviewCycleState)> {
     let mut review_cycle_id = existing.as_ref().map_or_else(
         || Ulid::new().to_string(),
         |record| record.review_cycle_id.clone(),
     );
     let mut cycle_number = existing.as_ref().map_or(1, |record| record.cycle_number);
+
+    let review_required = task.status == TaskStatus::ReviewRequired;
+    let terminal = matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+    );
 
     if review_required
         && existing
@@ -343,6 +392,21 @@ fn sync_task_review_cycle_in_connection(
     } else {
         ReviewCycleState::Inactive
     };
+
+    Ok((review_cycle_id, cycle_number, next_state))
+}
+
+fn upsert_review_cycle(
+    conn: &Connection,
+    review_cycle_id: &str,
+    task: &Task,
+    cycle_number: i64,
+    next_state: ReviewCycleState,
+    council_session_id: Option<String>,
+    evidence_count: i64,
+    decision_count: i64,
+) -> StoreResult<()> {
+    let review_required = task.status == TaskStatus::ReviewRequired;
 
     conn.execute(
         r"
@@ -399,13 +463,7 @@ fn sync_task_review_cycle_in_connection(
             next_state == ReviewCycleState::Closed,
         ],
     )?;
-    let review_cycle = load_task_review_cycle_in_connection(conn, &task.task_id)?
-        .ok_or(StoreError::NotFound("task review cycle"))?;
-    conn.execute(
-        "UPDATE tasks SET review_cycle_id = ?2 WHERE task_id = ?1",
-        params![task.task_id, review_cycle.review_cycle_id],
-    )?;
-    Ok(review_cycle)
+    Ok(())
 }
 
 pub(crate) fn sync_task_workflow_in_connection(

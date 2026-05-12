@@ -30,8 +30,209 @@ pub(super) struct SnapshotContext {
     workflow_context_by_task_id: HashMap<String, TaskWorkflowContext>,
 }
 
+struct HandoffContextSets {
+    open_handoff_task_ids: HashSet<String>,
+    pending_handoff_acceptance_task_ids: HashSet<String>,
+    due_soon_handoff_acceptance_task_ids: HashSet<String>,
+    overdue_handoff_acceptance_task_ids: HashSet<String>,
+}
+
+struct TaskStateSets {
+    assigned_awaiting_claim_task_ids: HashSet<String>,
+    review_with_graph_pressure_task_ids: HashSet<String>,
+    review_handoff_follow_through_task_ids: HashSet<String>,
+    due_soon_review_handoff_follow_through_task_ids: HashSet<String>,
+    overdue_review_handoff_follow_through_task_ids: HashSet<String>,
+    due_soon_review_decision_follow_through_task_ids: HashSet<String>,
+    overdue_review_decision_follow_through_task_ids: HashSet<String>,
+    review_decision_follow_through_task_ids: HashSet<String>,
+    review_awaiting_support_task_ids: HashSet<String>,
+    review_ready_for_decision_task_ids: HashSet<String>,
+    review_ready_for_closeout_task_ids: HashSet<String>,
+    claimed_not_started_task_ids: HashSet<String>,
+    paused_resumable_task_ids: HashSet<String>,
+    accepted_handoff_follow_through_task_ids: HashSet<String>,
+    due_soon_accepted_handoff_follow_through_task_ids: HashSet<String>,
+    overdue_accepted_handoff_follow_through_task_ids: HashSet<String>,
+}
+
+struct SummaryMaps {
+    deadline_summary_by_task_id: HashMap<String, TaskDeadlineSummary>,
+    relationship_summary_by_task_id: HashMap<String, TaskRelationshipSummary>,
+    workflow_context_by_task_id: HashMap<String, TaskWorkflowContext>,
+}
+
+fn build_handoff_context_sets(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    now: OffsetDateTime,
+) -> HandoffContextSets {
+    HandoffContextSets {
+        open_handoff_task_ids: handoffs
+            .iter()
+            .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
+            .map(|handoff| handoff.task_id.clone())
+            .collect(),
+        pending_handoff_acceptance_task_ids: derive_pending_handoff_acceptance_task_ids(
+            handoffs, now,
+        ),
+        due_soon_handoff_acceptance_task_ids:
+            derive_pending_handoff_acceptance_task_ids_with_freshness(
+                handoffs,
+                now,
+                Freshness::Aging,
+            ),
+        overdue_handoff_acceptance_task_ids:
+            derive_pending_handoff_acceptance_task_ids_with_freshness(
+                handoffs,
+                now,
+                Freshness::Stale,
+            ),
+    }
+}
+
+fn build_task_state_sets(
+    tasks: &[Task],
+    handoffs: &[Handoff],
+    task_events: &[TaskEvent],
+    assignments: &[TaskAssignment],
+    relationship_summaries: &[TaskRelationshipSummary],
+    execution_summaries: &[TaskExecutionSummary],
+    now: OffsetDateTime,
+    _handoff_sets: &HandoffContextSets,
+) -> TaskStateSets {
+    let accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids(tasks, handoffs, execution_summaries);
+    let due_soon_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            execution_summaries,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_accepted_handoff_follow_through_task_ids =
+        derive_accepted_handoff_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            execution_summaries,
+            now,
+            Freshness::Stale,
+        );
+
+    let review_with_graph_pressure_task_ids =
+        derive_review_with_graph_pressure_task_ids(tasks, relationship_summaries);
+    let review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids(tasks, handoffs, now);
+    let due_soon_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_handoff_follow_through_task_ids =
+        derive_review_handoff_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            now,
+            Freshness::Stale,
+        );
+    let due_soon_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            now,
+            Freshness::Aging,
+        );
+    let overdue_review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids_with_freshness(
+            tasks,
+            handoffs,
+            now,
+            Freshness::Stale,
+        );
+    let review_decision_follow_through_task_ids =
+        derive_review_decision_follow_through_task_ids(tasks, handoffs, now);
+    let review_awaiting_support_task_ids =
+        derive_review_awaiting_support_task_ids(tasks, task_events);
+
+    let review_ready_for_decision_task_ids = derive_review_ready_for_decision_task_ids(
+        tasks,
+        task_events,
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+    );
+    let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
+        tasks,
+        task_events,
+        &review_with_graph_pressure_task_ids,
+        &review_handoff_follow_through_task_ids,
+        &review_decision_follow_through_task_ids,
+        &review_awaiting_support_task_ids,
+    );
+    let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
+        tasks,
+        execution_summaries,
+        &accepted_handoff_follow_through_task_ids,
+    );
+    let paused_resumable_task_ids = derive_paused_resumable_task_ids(
+        tasks,
+        execution_summaries,
+        &accepted_handoff_follow_through_task_ids,
+    );
+    let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
+        tasks,
+        assignments,
+        execution_summaries,
+        &accepted_handoff_follow_through_task_ids,
+    );
+
+    TaskStateSets {
+        assigned_awaiting_claim_task_ids,
+        review_with_graph_pressure_task_ids,
+        review_handoff_follow_through_task_ids,
+        due_soon_review_handoff_follow_through_task_ids,
+        overdue_review_handoff_follow_through_task_ids,
+        due_soon_review_decision_follow_through_task_ids,
+        overdue_review_decision_follow_through_task_ids,
+        review_decision_follow_through_task_ids,
+        review_awaiting_support_task_ids,
+        review_ready_for_decision_task_ids,
+        review_ready_for_closeout_task_ids,
+        claimed_not_started_task_ids,
+        paused_resumable_task_ids,
+        accepted_handoff_follow_through_task_ids,
+        due_soon_accepted_handoff_follow_through_task_ids,
+        overdue_accepted_handoff_follow_through_task_ids,
+    }
+}
+
+fn build_summary_maps(
+    deadline_summaries: &[TaskDeadlineSummary],
+    relationship_summaries: &[TaskRelationshipSummary],
+    workflow_contexts: &[TaskWorkflowContext],
+) -> SummaryMaps {
+    SummaryMaps {
+        deadline_summary_by_task_id: deadline_summaries
+            .iter()
+            .map(|summary| (summary.task_id.clone(), summary.clone()))
+            .collect(),
+        relationship_summary_by_task_id: relationship_summaries
+            .iter()
+            .map(|summary| (summary.task_id.clone(), summary.clone()))
+            .collect(),
+        workflow_context_by_task_id: workflow_contexts
+            .iter()
+            .map(|context| (context.task_id.clone(), context.clone()))
+            .collect(),
+    }
+}
+
 impl SnapshotContext {
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         tasks: &[Task],
         handoffs: &[Handoff],
@@ -43,143 +244,58 @@ impl SnapshotContext {
         deadline_summaries: &[TaskDeadlineSummary],
         now: OffsetDateTime,
     ) -> Self {
-        let accepted_handoff_follow_through_task_ids =
-            derive_accepted_handoff_follow_through_task_ids(tasks, handoffs, execution_summaries);
-        let due_soon_accepted_handoff_follow_through_task_ids =
-            derive_accepted_handoff_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                execution_summaries,
-                now,
-                Freshness::Aging,
-            );
-        let overdue_accepted_handoff_follow_through_task_ids =
-            derive_accepted_handoff_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                execution_summaries,
-                now,
-                Freshness::Stale,
-            );
-        let assigned_awaiting_claim_task_ids = derive_assigned_awaiting_claim_task_ids(
+        let handoff_sets = build_handoff_context_sets(tasks, handoffs, now);
+        let task_state_sets = build_task_state_sets(
             tasks,
+            handoffs,
+            task_events,
             assignments,
+            relationship_summaries,
             execution_summaries,
-            &accepted_handoff_follow_through_task_ids,
+            now,
+            &handoff_sets,
         );
-        let review_with_graph_pressure_task_ids =
-            derive_review_with_graph_pressure_task_ids(tasks, relationship_summaries);
-        let review_handoff_follow_through_task_ids =
-            derive_review_handoff_follow_through_task_ids(tasks, handoffs, now);
-        let due_soon_review_handoff_follow_through_task_ids =
-            derive_review_handoff_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                now,
-                Freshness::Aging,
-            );
-        let overdue_review_handoff_follow_through_task_ids =
-            derive_review_handoff_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                now,
-                Freshness::Stale,
-            );
-        let due_soon_review_decision_follow_through_task_ids =
-            derive_review_decision_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                now,
-                Freshness::Aging,
-            );
-        let overdue_review_decision_follow_through_task_ids =
-            derive_review_decision_follow_through_task_ids_with_freshness(
-                tasks,
-                handoffs,
-                now,
-                Freshness::Stale,
-            );
-        let review_decision_follow_through_task_ids =
-            derive_review_decision_follow_through_task_ids(tasks, handoffs, now);
-        let review_awaiting_support_task_ids =
-            derive_review_awaiting_support_task_ids(tasks, task_events);
-        let review_ready_for_decision_task_ids = derive_review_ready_for_decision_task_ids(
-            tasks,
-            task_events,
-            &review_with_graph_pressure_task_ids,
-            &review_handoff_follow_through_task_ids,
-            &review_decision_follow_through_task_ids,
-            &review_awaiting_support_task_ids,
-        );
-        let review_ready_for_closeout_task_ids = derive_review_ready_for_closeout_task_ids(
-            tasks,
-            task_events,
-            &review_with_graph_pressure_task_ids,
-            &review_handoff_follow_through_task_ids,
-            &review_decision_follow_through_task_ids,
-            &review_awaiting_support_task_ids,
-        );
-        let claimed_not_started_task_ids = derive_claimed_not_started_task_ids(
-            tasks,
-            execution_summaries,
-            &accepted_handoff_follow_through_task_ids,
-        );
-        let paused_resumable_task_ids = derive_paused_resumable_task_ids(
-            tasks,
-            execution_summaries,
-            &accepted_handoff_follow_through_task_ids,
+        let summary_maps = build_summary_maps(
+            deadline_summaries,
+            relationship_summaries,
+            workflow_contexts,
         );
 
         Self {
             now,
-            open_handoff_task_ids: handoffs
-                .iter()
-                .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
-                .map(|handoff| handoff.task_id.clone())
-                .collect(),
-            pending_handoff_acceptance_task_ids: derive_pending_handoff_acceptance_task_ids(
-                handoffs, now,
-            ),
-            due_soon_handoff_acceptance_task_ids:
-                derive_pending_handoff_acceptance_task_ids_with_freshness(
-                    handoffs,
-                    now,
-                    Freshness::Aging,
-                ),
-            overdue_handoff_acceptance_task_ids:
-                derive_pending_handoff_acceptance_task_ids_with_freshness(
-                    handoffs,
-                    now,
-                    Freshness::Stale,
-                ),
-            assigned_awaiting_claim_task_ids,
-            review_with_graph_pressure_task_ids,
-            review_handoff_follow_through_task_ids,
-            due_soon_review_handoff_follow_through_task_ids,
-            overdue_review_handoff_follow_through_task_ids,
-            due_soon_review_decision_follow_through_task_ids,
-            overdue_review_decision_follow_through_task_ids,
-            review_decision_follow_through_task_ids,
-            review_awaiting_support_task_ids,
-            review_ready_for_decision_task_ids,
-            review_ready_for_closeout_task_ids,
-            claimed_not_started_task_ids,
-            paused_resumable_task_ids,
-            accepted_handoff_follow_through_task_ids,
-            due_soon_accepted_handoff_follow_through_task_ids,
-            overdue_accepted_handoff_follow_through_task_ids,
-            deadline_summary_by_task_id: deadline_summaries
-                .iter()
-                .map(|summary| (summary.task_id.clone(), summary.clone()))
-                .collect(),
-            relationship_summary_by_task_id: relationship_summaries
-                .iter()
-                .map(|summary| (summary.task_id.clone(), summary.clone()))
-                .collect(),
-            workflow_context_by_task_id: workflow_contexts
-                .iter()
-                .map(|context| (context.task_id.clone(), context.clone()))
-                .collect(),
+            open_handoff_task_ids: handoff_sets.open_handoff_task_ids,
+            pending_handoff_acceptance_task_ids: handoff_sets.pending_handoff_acceptance_task_ids,
+            due_soon_handoff_acceptance_task_ids: handoff_sets
+                .due_soon_handoff_acceptance_task_ids,
+            overdue_handoff_acceptance_task_ids: handoff_sets.overdue_handoff_acceptance_task_ids,
+            assigned_awaiting_claim_task_ids: task_state_sets.assigned_awaiting_claim_task_ids,
+            review_with_graph_pressure_task_ids: task_state_sets.review_with_graph_pressure_task_ids,
+            review_handoff_follow_through_task_ids: task_state_sets
+                .review_handoff_follow_through_task_ids,
+            due_soon_review_handoff_follow_through_task_ids: task_state_sets
+                .due_soon_review_handoff_follow_through_task_ids,
+            overdue_review_handoff_follow_through_task_ids: task_state_sets
+                .overdue_review_handoff_follow_through_task_ids,
+            due_soon_review_decision_follow_through_task_ids: task_state_sets
+                .due_soon_review_decision_follow_through_task_ids,
+            overdue_review_decision_follow_through_task_ids: task_state_sets
+                .overdue_review_decision_follow_through_task_ids,
+            review_decision_follow_through_task_ids: task_state_sets
+                .review_decision_follow_through_task_ids,
+            review_awaiting_support_task_ids: task_state_sets.review_awaiting_support_task_ids,
+            review_ready_for_decision_task_ids: task_state_sets.review_ready_for_decision_task_ids,
+            review_ready_for_closeout_task_ids: task_state_sets.review_ready_for_closeout_task_ids,
+            claimed_not_started_task_ids: task_state_sets.claimed_not_started_task_ids,
+            paused_resumable_task_ids: task_state_sets.paused_resumable_task_ids,
+            accepted_handoff_follow_through_task_ids: task_state_sets
+                .accepted_handoff_follow_through_task_ids,
+            due_soon_accepted_handoff_follow_through_task_ids: task_state_sets
+                .due_soon_accepted_handoff_follow_through_task_ids,
+            overdue_accepted_handoff_follow_through_task_ids: task_state_sets
+                .overdue_accepted_handoff_follow_through_task_ids,
+            deadline_summary_by_task_id: summary_maps.deadline_summary_by_task_id,
+            relationship_summary_by_task_id: summary_maps.relationship_summary_by_task_id,
+            workflow_context_by_task_id: summary_maps.workflow_context_by_task_id,
         }
     }
 

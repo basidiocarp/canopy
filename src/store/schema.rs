@@ -421,7 +421,6 @@ fn migrations() -> Migrations<'static> {
     ])
 }
 
-#[allow(clippy::too_many_lines)]
 fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if user_version != 0 {
@@ -439,13 +438,25 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         return Ok(());
     }
 
-    // Add missing columns to tables that existed before these columns were introduced.
-    // ALTER TABLE fails with "duplicate column name" if the column already exists;
-    // that is the expected case on a fully up-to-date database, so we intentionally discard.
-    // Column patches must run BEFORE execute_batch(BASE_SCHEMA) because BASE_SCHEMA includes
-    // indexes that reference these columns; those indexes would fail if columns don't exist yet.
+    add_tasks_columns(conn)?;
+    add_handoffs_columns(conn)?;
+    add_agents_columns(conn)?;
+    add_council_sessions_columns(conn)?;
+    add_council_messages_columns(conn)?;
+    add_evidence_refs_columns(conn)?;
+    add_task_events_columns(conn)?;
+    add_agent_heartbeat_events_columns(conn)?;
 
-    // tasks columns added over time
+    // Now run the full baseline schema to create any tables added after the initial install
+    // (all IF NOT EXISTS — safe). Runs after column patches so indexes on new columns succeed.
+    conn.execute_batch(BASE_SCHEMA)?;
+
+    // Stamp migration version so to_latest() skips M0.
+    conn.execute_batch("PRAGMA user_version = 1;")?;
+    Ok(())
+}
+
+fn add_tasks_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN priority TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN severity TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN required_role TEXT NULL", []);
@@ -483,8 +494,10 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workspace TEXT NULL", []);
+    Ok(())
+}
 
-    // handoffs columns added over time
+fn add_handoffs_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN due_at TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN expires_at TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE handoffs ADD COLUMN created_at TEXT NULL", []);
@@ -506,8 +519,10 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE handoffs ADD COLUMN disposition_reason TEXT",
         [],
     );
+    Ok(())
+}
 
-    // agents columns added over time
+fn add_agents_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN role TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE agents ADD COLUMN tier TEXT NULL", []);
@@ -519,8 +534,10 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE agents ADD COLUMN last_heartbeat_at TEXT NULL",
         [],
     );
+    Ok(())
+}
 
-    // council_sessions columns added over time
+fn add_council_sessions_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute(
         "ALTER TABLE council_sessions ADD COLUMN session_summary TEXT NULL",
         [],
@@ -533,14 +550,18 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE council_sessions ADD COLUMN conversation_id TEXT NULL",
         [],
     );
+    Ok(())
+}
 
-    // council_messages columns added over time
+fn add_council_messages_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute(
         "ALTER TABLE council_messages ADD COLUMN created_at TEXT NULL",
         [],
     );
+    Ok(())
+}
 
-    // evidence_refs columns added over time
+fn add_evidence_refs_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute(
         "ALTER TABLE evidence_refs ADD COLUMN related_session_id TEXT NULL",
         [],
@@ -561,8 +582,10 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE evidence_refs ADD COLUMN schema_version TEXT NULL",
         [],
     );
+    Ok(())
+}
 
-    // task_events columns added over time
+fn add_task_events_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute(
         "ALTER TABLE task_events ADD COLUMN execution_action TEXT NULL",
         [],
@@ -571,19 +594,14 @@ fn bootstrap_existing_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE task_events ADD COLUMN execution_duration_seconds INTEGER NULL",
         [],
     );
+    Ok(())
+}
 
-    // agent_heartbeat_events columns added over time
+fn add_agent_heartbeat_events_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute(
         "ALTER TABLE agent_heartbeat_events ADD COLUMN related_task_id TEXT NULL",
         [],
     );
-
-    // Now run the full baseline schema to create any tables added after the initial install
-    // (all IF NOT EXISTS — safe). Runs after column patches so indexes on new columns succeed.
-    conn.execute_batch(BASE_SCHEMA)?;
-
-    // Stamp migration version so to_latest() skips M0.
-    conn.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())
 }
 

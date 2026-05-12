@@ -413,13 +413,34 @@ pub(crate) fn release_agent_current_task_in_connection(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
 pub(crate) fn assign_task_in_connection(
     conn: &Connection,
     task_id: &str,
     assigned_to: &str,
     assigned_by: &str,
     reason: Option<&str>,
+) -> StoreResult<()> {
+    validate_assignment_phase(conn, task_id, assigned_to)?;
+    let (from_status, previous_owner) = fetch_task_assignment_metadata(conn, task_id)?;
+    update_task_assignment(conn, task_id, assigned_to, assigned_by, reason)?;
+    record_assignment_event(
+        conn,
+        task_id,
+        assigned_to,
+        assigned_by,
+        from_status,
+        previous_owner.as_deref(),
+        reason,
+    )?;
+    update_agent_phases(conn, task_id, assigned_to, previous_owner.as_deref())?;
+    sync_task_workflow_in_connection(conn, task_id)?;
+    Ok(())
+}
+
+fn validate_assignment_phase(
+    conn: &Connection,
+    task_id: &str,
+    assigned_to: &str,
 ) -> StoreResult<()> {
     let assignee_current_task = conn
         .query_row(
@@ -437,6 +458,7 @@ pub(crate) fn assign_task_in_connection(
             "assigned agent already owns another active task".to_string(),
         ));
     }
+
     let assignee_role_and_capabilities = conn
         .query_row(
             "SELECT role, capabilities FROM agents WHERE agent_id = ?1",
@@ -457,23 +479,7 @@ pub(crate) fn assign_task_in_connection(
     let assignee_capabilities = assignee_role_and_capabilities
         .1
         .map_or_else(Vec::new, |json| parse_capabilities(&json));
-    let from_status = conn
-        .query_row(
-            "SELECT status FROM tasks WHERE task_id = ?1",
-            [task_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .map(|value| parse_enum_value::<TaskStatus>(&value, 0))
-        .transpose()?;
-    let previous_owner = conn
-        .query_row(
-            "SELECT owner_agent_id FROM tasks WHERE task_id = ?1",
-            [task_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .ok_or(StoreError::NotFound("task"))?;
+
     let required_role_and_capabilities = conn
         .query_row(
             "SELECT required_role, required_capabilities FROM tasks WHERE task_id = ?1",
@@ -514,6 +520,40 @@ pub(crate) fn assign_task_in_connection(
         )));
     }
 
+    Ok(())
+}
+
+fn fetch_task_assignment_metadata(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<(Option<TaskStatus>, Option<String>)> {
+    let from_status = conn
+        .query_row(
+            "SELECT status FROM tasks WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|value| parse_enum_value::<TaskStatus>(&value, 0))
+        .transpose()?;
+    let previous_owner = conn
+        .query_row(
+            "SELECT owner_agent_id FROM tasks WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .ok_or(StoreError::NotFound("task"))?;
+    Ok((from_status, previous_owner))
+}
+
+fn update_task_assignment(
+    conn: &Connection,
+    task_id: &str,
+    assigned_to: &str,
+    assigned_by: &str,
+    reason: Option<&str>,
+) -> StoreResult<()> {
     conn.execute(
         r"
         UPDATE tasks
@@ -537,15 +577,24 @@ pub(crate) fn assign_task_in_connection(
             reason
         ],
     )?;
-    let event_type = if previous_owner
-        .as_deref()
-        .is_some_and(|owner| owner != assigned_to)
-    {
+    Ok(())
+}
+
+fn record_assignment_event(
+    conn: &Connection,
+    task_id: &str,
+    assigned_to: &str,
+    assigned_by: &str,
+    from_status: Option<TaskStatus>,
+    previous_owner: Option<&str>,
+    reason: Option<&str>,
+) -> StoreResult<()> {
+    let event_type = if previous_owner.is_some_and(|owner| owner != assigned_to) {
         TaskEventType::OwnershipTransferred
     } else {
         TaskEventType::Assigned
     };
-    let owner_change_note = match previous_owner.as_deref() {
+    let owner_change_note = match previous_owner {
         Some(previous_owner) if previous_owner != assigned_to => {
             format!("owner:{previous_owner}->{assigned_to}")
         }
@@ -569,9 +618,16 @@ pub(crate) fn assign_task_in_connection(
             execution_duration_seconds: None,
             note: Some(note.as_str()),
         },
-    )?;
+    )
+}
 
-    if let Some(previous_owner) = previous_owner.filter(|owner| owner != assigned_to) {
+fn update_agent_phases(
+    conn: &Connection,
+    task_id: &str,
+    assigned_to: &str,
+    previous_owner: Option<&str>,
+) -> StoreResult<()> {
+    if let Some(previous_owner) = previous_owner.filter(|owner| *owner != assigned_to) {
         conn.execute(
             r"
             UPDATE agents
@@ -583,7 +639,7 @@ pub(crate) fn assign_task_in_connection(
         record_agent_heartbeat_in_connection(
             conn,
             &AgentHeartbeatWrite {
-                agent_id: &previous_owner,
+                agent_id: previous_owner,
                 status: AgentStatus::Idle,
                 current_task_id: None,
                 related_task_id: Some(task_id),
@@ -610,8 +666,6 @@ pub(crate) fn assign_task_in_connection(
             source: AgentHeartbeatSource::TaskSync,
         },
     )?;
-
-    sync_task_workflow_in_connection(conn, task_id)?;
 
     Ok(())
 }

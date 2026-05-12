@@ -3,7 +3,6 @@
 use super::*;
 use crate::models::{Notification, NotificationEventType};
 
-#[allow(clippy::too_many_lines)]
 pub(crate) fn create_task_in_connection(
     conn: &Connection,
     title: &str,
@@ -17,7 +16,37 @@ pub(crate) fn create_task_in_connection(
         get_task_in_connection(conn, branch_of_id)?;
     }
 
-    let task = Task {
+    let task = build_new_task(title, description, requested_by, project_root, options);
+
+    persist_task_to_db(conn, &task)?;
+
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: &task.task_id,
+            event_type: TaskEventType::Created,
+            actor: requested_by,
+            from_status: None,
+            to_status: TaskStatus::Open,
+            verification_state: Some(VerificationState::Unknown),
+            owner_agent_id: None,
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: description,
+        },
+    )?;
+    sync_task_workflow_in_connection(conn, &task.task_id)?;
+    get_task_in_connection(conn, &task.task_id)
+}
+
+fn build_new_task(
+    title: &str,
+    description: Option<&str>,
+    requested_by: &str,
+    project_root: &str,
+    options: &TaskCreationOptions,
+) -> Task {
+    Task {
         task_id: Ulid::new().to_string(),
         title: title.to_string(),
         description: description.map(ToOwned::to_owned),
@@ -60,7 +89,10 @@ pub(crate) fn create_task_in_connection(
         branch_of: options.branch_of.clone(),
         branch_at: options.branch_at.clone(),
         branch_outcome: options.branch_outcome,
-    };
+    }
+}
+
+fn persist_task_to_db(conn: &Connection, task: &Task) -> StoreResult<()> {
     conn.execute(
         r"
         INSERT INTO tasks (
@@ -115,23 +147,7 @@ pub(crate) fn create_task_in_connection(
             task.branch_outcome.map(|v| v.to_string()),
         ],
     )?;
-    record_task_event_in_connection(
-        conn,
-        &TaskEventWrite {
-            task_id: &task.task_id,
-            event_type: TaskEventType::Created,
-            actor: requested_by,
-            from_status: None,
-            to_status: TaskStatus::Open,
-            verification_state: Some(VerificationState::Unknown),
-            owner_agent_id: None,
-            execution_action: None,
-            execution_duration_seconds: None,
-            note: description,
-        },
-    )?;
-    sync_task_workflow_in_connection(conn, &task.task_id)?;
-    get_task_in_connection(conn, &task.task_id)
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

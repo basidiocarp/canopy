@@ -224,7 +224,6 @@ impl Store {
     ///
     /// Returns an error if the action is invalid for handoffs or the write
     /// fails.
-    #[allow(clippy::too_many_lines)]
     pub fn apply_handoff_operator_action(
         &self,
         handoff_id: &str,
@@ -257,50 +256,9 @@ impl Store {
                 let _ = input;
                 self.resolve_handoff(handoff_id, HandoffStatus::Expired, changed_by)
             }
-            OperatorActionKind::FollowUpHandoff => self.in_transaction(|conn| {
-                let handoff = get_handoff_in_connection(conn, handoff_id)?;
-                if handoff.status != HandoffStatus::Open {
-                    return Err(StoreError::Validation(
-                        "only open handoffs can be followed up".to_string(),
-                    ));
-                }
-                if handoff_is_expired(&handoff)? {
-                    return Err(StoreError::Validation(
-                        "expired handoffs cannot be followed up".to_string(),
-                    ));
-                }
-                conn.execute(
-                    r"
-                    UPDATE handoffs
-                    SET updated_at = CURRENT_TIMESTAMP
-                    WHERE handoff_id = ?1
-                    ",
-                    [handoff_id],
-                )?;
-                touch_task_in_connection(conn, &handoff.task_id)?;
-                let task = get_task_in_connection(conn, &handoff.task_id)?;
-                let base_note =
-                    format!("handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true");
-                let note = input.note.map_or(base_note.clone(), |extra| {
-                    format!("{base_note}; note={extra}")
-                });
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id: &handoff.task_id,
-                        event_type: TaskEventType::HandoffUpdated,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                get_handoff_in_connection(conn, handoff_id)
-            }),
+            OperatorActionKind::FollowUpHandoff => {
+                self.apply_handoff_follow_up_action(handoff_id, changed_by, input.note)
+            }
             OperatorActionKind::SummonCouncilSession
             | OperatorActionKind::AcknowledgeTask
             | OperatorActionKind::UnacknowledgeTask
@@ -336,6 +294,57 @@ impl Store {
                 "operator action {action} is not valid for handoffs"
             ))),
         }
+    }
+
+    fn apply_handoff_follow_up_action(
+        &self,
+        handoff_id: &str,
+        changed_by: &str,
+        note: Option<&str>,
+    ) -> StoreResult<Handoff> {
+        self.in_transaction(|conn| {
+            let handoff = get_handoff_in_connection(conn, handoff_id)?;
+            if handoff.status != HandoffStatus::Open {
+                return Err(StoreError::Validation(
+                    "only open handoffs can be followed up".to_string(),
+                ));
+            }
+            if handoff_is_expired(&handoff)? {
+                return Err(StoreError::Validation(
+                    "expired handoffs cannot be followed up".to_string(),
+                ));
+            }
+            conn.execute(
+                r"
+                UPDATE handoffs
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE handoff_id = ?1
+                ",
+                [handoff_id],
+            )?;
+            touch_task_in_connection(conn, &handoff.task_id)?;
+            let task = get_task_in_connection(conn, &handoff.task_id)?;
+            let base_note = format!("handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true");
+            let note_str = note.map_or(base_note.clone(), |extra| {
+                format!("{base_note}; note={extra}")
+            });
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id: &handoff.task_id,
+                    event_type: TaskEventType::HandoffUpdated,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note_str.as_str()),
+                },
+            )?;
+            get_handoff_in_connection(conn, handoff_id)
+        })
     }
 
     /// Lists handoffs globally or for one task.

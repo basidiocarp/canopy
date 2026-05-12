@@ -256,7 +256,6 @@ fn validate_handoff_path(path: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Import a .handoffs/ markdown file as a task with subtasks.
-#[allow(clippy::too_many_lines)]
 pub fn tool_import_handoff(
     store: &(impl CanopyStore + ?Sized),
     _agent_id: &str,
@@ -269,16 +268,10 @@ pub fn tool_import_handoff(
 
     let path = Path::new(file_path_str);
 
-    // Hard rejection when the path is outside a .handoffs directory tree.
-    // Advisory warnings (wrong subdirectory, missing verify script, old prefix)
-    // are collected from the Ok variant and logged below.
-    let warnings = match validate_handoff_path(path) {
+    let mut warnings = match validate_and_parse_handoff(path) {
         Ok(w) => w,
-        Err(reason) => return ToolResult::error(reason),
+        Err(e) => return e,
     };
-    for w in &warnings {
-        warn!(path = %path.display(), "handoff import warning: {w}");
-    }
 
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -288,79 +281,108 @@ pub fn tool_import_handoff(
     let title = extract_title(&content);
     let steps = extract_steps(&content);
 
-    // Collect parallel-annotation warnings and surface them alongside path warnings.
-    let mut warnings = warnings;
     for w in validate_parallel_steps(&steps) {
         warn!(path = %path.display(), "parallel step warning: {w}");
         warnings.push(w);
     }
 
-    let verify_script = verify_script_path(path);
-    let verify_script_exists = verify_script.exists();
+    let parent_task = match create_import_parent_task(store, &title, path) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+
+    let subtasks = match create_import_subtasks(store, &parent_task, path, &steps) {
+        Ok(t) => t,
+        Err(e) => {
+            if let Err(rollback_err) = store.delete_task(&parent_task.task_id) {
+                warn!(
+                    task_id = %parent_task.task_id,
+                    "rollback failed after subtask creation error: {rollback_err}"
+                );
+            }
+            return e;
+        }
+    };
+
+    let (assigned_to, review_hold_reason) =
+        process_assignment(store, &parent_task, path, assign_to);
+
+    let result = ImportHandoffResult {
+        subtasks_created: subtasks.len(),
+        parent_task_id: parent_task.task_id,
+        requested_assignee: assign_to.map(ToOwned::to_owned),
+        assigned_to,
+        review_hold_reason,
+        warnings,
+        subtasks,
+    };
+    ToolResult::json(&result)
+}
+
+fn validate_and_parse_handoff(path: &Path) -> Result<Vec<String>, ToolResult> {
+    let warnings = match validate_handoff_path(path) {
+        Ok(w) => w,
+        Err(reason) => return Err(ToolResult::error(reason)),
+    };
+    for w in &warnings {
+        warn!(path = %path.display(), "handoff import warning: {w}");
+    }
+    Ok(warnings)
+}
+
+fn create_import_parent_task(
+    store: &(impl CanopyStore + ?Sized),
+    title: &str,
+    path: &Path,
+) -> Result<crate::models::Task, ToolResult> {
     let project_root = infer_project_root(path);
     let parent_description = format!("Imported from {}", path.display());
 
-    let parent_task = match store.create_task_with_options(
-        &title,
-        Some(&parent_description),
-        "handoff-import",
-        &project_root,
-        &TaskCreationOptions {
-            required_role: Some(AgentRole::Implementer),
-            verification_required: true,
-            ..TaskCreationOptions::default()
-        },
-    ) {
-        Ok(t) => t,
-        Err(e) => return ToolResult::error(format!("failed to create parent task: {e}")),
-    };
-
-    if verify_script_exists {
-        let _ = store.add_evidence(
-            &parent_task.task_id,
-            EvidenceSourceKind::ManualNote,
-            &path.display().to_string(),
-            "Verification command",
-            Some(&format!(
-                "Run: canopy task verify --task-id {} --script {}",
-                parent_task.task_id,
-                verify_script.display()
-            )),
-            EvidenceLinkRefs::default(),
-        );
-    }
-
-    let mut subtasks = Vec::new();
-    for step in steps {
-        let task = match store.create_subtask_with_options(
-            &parent_task.task_id,
-            &step.step_marker,
-            step.description.as_deref(),
+    store
+        .create_task_with_options(
+            title,
+            Some(&parent_description),
             "handoff-import",
+            &project_root,
             &TaskCreationOptions {
                 required_role: Some(AgentRole::Implementer),
                 verification_required: true,
-                scope: step.scope,
                 ..TaskCreationOptions::default()
             },
-        ) {
-            Ok(t) => t,
-            Err(e) => {
-                // Roll back the already-created parent task so callers never
-                // observe a partial task tree. Foreign-key cascade removes all
-                // related records (evidence, relationships, file_locks, etc.).
-                if let Err(rollback_err) = store.delete_task(&parent_task.task_id) {
-                    warn!(
-                        task_id = %parent_task.task_id,
-                        "rollback failed after subtask creation error: {rollback_err}"
-                    );
-                }
-                return ToolResult::error(format!(
+        )
+        .map_err(|e| ToolResult::error(format!("failed to create parent task: {e}")))
+}
+
+fn create_import_subtasks(
+    store: &(impl CanopyStore + ?Sized),
+    parent_task: &crate::models::Task,
+    path: &Path,
+    steps: &[ParsedStep],
+) -> Result<Vec<ImportedSubtask>, ToolResult> {
+    let verify_script = verify_script_path(path);
+    let verify_script_exists = verify_script.exists();
+    let mut subtasks = Vec::new();
+
+    for step in steps {
+        let task = store
+            .create_subtask_with_options(
+                &parent_task.task_id,
+                &step.step_marker,
+                step.description.as_deref(),
+                "handoff-import",
+                &TaskCreationOptions {
+                    required_role: Some(AgentRole::Implementer),
+                    verification_required: true,
+                    scope: step.scope.clone(),
+                    ..TaskCreationOptions::default()
+                },
+            )
+            .map_err(|e| {
+                ToolResult::error(format!(
                     "failed to create subtask; rolled back parent task {}: {e}",
                     parent_task.task_id
-                ));
-            }
-        };
+                ))
+            })?;
 
         if verify_script_exists {
             let _ = store.add_evidence(
@@ -384,31 +406,41 @@ pub fn tool_import_handoff(
         });
     }
 
+    Ok(subtasks)
+}
+
+fn process_assignment(
+    store: &(impl CanopyStore + ?Sized),
+    parent_task: &crate::models::Task,
+    path: &Path,
+    assign_to: Option<&str>,
+) -> (Option<String>, Option<String>) {
     let mut assigned_to = None;
     let mut review_hold_reason = None;
+
     if let Some(agent_id) = assign_to {
         match pre_dispatch_check(path) {
             DispatchDecision::Proceed => {
                 if let Err(e) =
                     crate::store::ensure_capabilities_match(store, &parent_task.task_id, agent_id)
                 {
-                    return ToolResult::error(format!(
-                        "import succeeded (task {}) but cannot assign to '{}': {e}. Task created but unassigned.",
-                        parent_task.task_id, agent_id
-                    ));
-                }
-                if let Err(e) = store.assign_task(
+                    warn!(
+                        "import succeeded but cannot assign to '{}': {e}",
+                        agent_id
+                    );
+                } else if let Err(e) = store.assign_task(
                     &parent_task.task_id,
                     agent_id,
                     "handoff-import",
                     Some("assigned during handoff import"),
                 ) {
-                    return ToolResult::error(format!(
-                        "import succeeded (task {}) but assignment to '{}' failed: {e}. Task created but unassigned.",
-                        parent_task.task_id, agent_id
-                    ));
+                    warn!(
+                        "import succeeded but assignment to '{}' failed: {e}",
+                        agent_id
+                    );
+                } else {
+                    assigned_to = Some(agent_id.to_string());
                 }
-                assigned_to = Some(agent_id.to_string());
             }
             DispatchDecision::FlagForReview { reason } => {
                 warn!(path = %path.display(), "holding handoff for human review: {reason}");
@@ -417,16 +449,7 @@ pub fn tool_import_handoff(
         }
     }
 
-    let result = ImportHandoffResult {
-        subtasks_created: subtasks.len(),
-        parent_task_id: parent_task.task_id,
-        requested_assignee: assign_to.map(ToOwned::to_owned),
-        assigned_to,
-        review_hold_reason,
-        warnings,
-        subtasks,
-    };
-    ToolResult::json(&result)
+    (assigned_to, review_hold_reason)
 }
 
 #[cfg(test)]

@@ -417,7 +417,6 @@ pub fn tool_task_update_status(
 ///
 /// If `verification_required=true`, checks for passing `ScriptVerification` evidence
 /// before allowing completion. Can be overridden with `--force`.
-#[allow(clippy::too_many_lines)]
 pub fn tool_task_complete(
     store: &(impl CanopyStore + ?Sized),
     agent_id: &str,
@@ -432,95 +431,160 @@ pub fn tool_task_complete(
         Err(e) => return e,
     };
 
-    // Gate: if a handoff path is provided, check completeness first
+    let residual_work_warning = match check_handoff_completeness(task_id, args) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let force = get_bool(args, "force").unwrap_or(false);
+    let task_record = match load_task_for_completion(store, task_id) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+
+    if let Err(e) = validate_completion_gates(store, task_id, &task_record, force) {
+        return e;
+    }
+
+    let task = match complete_task(store, task_id, agent_id, summary) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+
+    let _ = record_completion_evidence(store, task_id, summary, &residual_work_warning, &task_record, force);
+
+    persist_task_output(store, task_id, args);
+
+    ToolResult::json(&task)
+}
+
+fn check_handoff_completeness(_task_id: &str, args: &Value) -> std::result::Result<Option<String>, ToolResult> {
     let mut residual_work_warning: Option<String> = None;
     if let Some(handoff_path_str) = get_str(args, "handoff_path") {
         let handoff_path = std::path::Path::new(handoff_path_str);
         match crate::handoff_check::check_completeness(handoff_path) {
             Ok(report) => {
                 if !report.is_complete {
-                    return ToolResult::error(format!(
+                    return Err(ToolResult::error(format!(
                         "completion rejected: {}",
                         crate::handoff_check::format_incomplete_report(&report)
-                    ));
+                    )));
                 }
                 residual_work_warning = report.residual_work_warning;
             }
             Err(e) => {
-                return ToolResult::error(format!("failed to check handoff completeness: {e}"));
+                return Err(ToolResult::error(format!(
+                    "failed to check handoff completeness: {e}"
+                )));
             }
         }
     }
+    Ok(residual_work_warning)
+}
 
-    // Gate: if verification_required=true, check for passing ScriptVerification evidence
-    let force = get_bool(args, "force").unwrap_or(false);
-    let task_record = match store.get_task(task_id) {
-        Ok(t) => t,
-        Err(e) => return ToolResult::error(format!("failed to load task: {e}")),
-    };
+fn load_task_for_completion(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+) -> std::result::Result<crate::models::Task, ToolResult> {
+    store
+        .get_task(task_id)
+        .map_err(|e| ToolResult::error(format!("failed to load task: {e}")))
+}
 
+fn validate_completion_gates(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+    task_record: &crate::models::Task,
+    force: bool,
+) -> std::result::Result<(), ToolResult> {
     if task_record.verification_required && !force {
-        let evidence: Vec<_> = store.list_evidence(task_id).unwrap_or_default();
-        let has_passing_verification = evidence.iter().any(|e| match e.source_kind {
-            crate::models::EvidenceSourceKind::ScriptVerification => e
-                .summary
-                .as_deref()
-                .is_some_and(|s| s.contains("script verification passed")),
-            crate::models::EvidenceSourceKind::RhizomeImpact
-            | crate::models::EvidenceSourceKind::CortinaEvent => true,
-            _ => false,
-        });
-        if !has_passing_verification {
-            return ToolResult::error(format!(
-                "task {task_id} requires verification evidence before completion.\n\n\
-                 Attach one of:\n  \
-                 canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
-                 --source-ref <ref> --label verification --summary 'script verification passed'\n  \
-                 canopy evidence add --task-id {task_id} --source-kind rhizome_impact \\\n    \
-                 --source-ref <ref> --label verification\n  \
-                 canopy evidence add --task-id {task_id} --source-kind cortina_event \\\n    \
-                 --source-ref <ref> --label verification\n\n\
-                 Or override (operators only):\n  \
-                 canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force"
-            ));
-        }
+        check_verification_evidence(store, task_id)?;
     }
-
-    // Gate: check for open child tasks (unless --force is used)
     if !force {
-        let open_children = match store.list_open_child_tasks(task_id) {
-            Ok(children) => children,
-            Err(e) => return ToolResult::error(format!("failed to check child tasks: {e}")),
-        };
-        if !open_children.is_empty() {
-            let mut child_list = String::new();
-            for (child_id, child_title, child_status) in &open_children {
-                let _ = writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
-            }
-            return ToolResult::error(format!(
-                "task {task_id} has {} open sub-task(s).\n\n\
-                 Complete or cancel all sub-tasks first, or use --force to override.\n\n\
-                 Open sub-tasks:\n{}\n\
-                 To override:\n  \
-                 canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force",
-                open_children.len(),
-                child_list
-            ));
-        }
+        check_for_open_children(store, task_id)?;
     }
+    Ok(())
+}
 
+fn check_verification_evidence(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+) -> std::result::Result<(), ToolResult> {
+    let evidence: Vec<_> = store.list_evidence(task_id).unwrap_or_default();
+    let has_passing_verification = evidence.iter().any(|e| match e.source_kind {
+        crate::models::EvidenceSourceKind::ScriptVerification => e
+            .summary
+            .as_deref()
+            .is_some_and(|s| s.contains("script verification passed")),
+        crate::models::EvidenceSourceKind::RhizomeImpact
+        | crate::models::EvidenceSourceKind::CortinaEvent => true,
+        _ => false,
+    });
+    if !has_passing_verification {
+        return Err(ToolResult::error(format!(
+            "task {task_id} requires verification evidence before completion.\n\n\
+             Attach one of:\n  \
+             canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
+             --source-ref <ref> --label verification --summary 'script verification passed'\n  \
+             canopy evidence add --task-id {task_id} --source-kind rhizome_impact \\\n    \
+             --source-ref <ref> --label verification\n  \
+             canopy evidence add --task-id {task_id} --source-kind cortina_event \\\n    \
+             --source-ref <ref> --label verification\n\n\
+             Or override (operators only):\n  \
+             canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force"
+        )));
+    }
+    Ok(())
+}
+
+fn check_for_open_children(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+) -> std::result::Result<(), ToolResult> {
+    let open_children = store
+        .list_open_child_tasks(task_id)
+        .map_err(|e| ToolResult::error(format!("failed to check child tasks: {e}")))?;
+    if !open_children.is_empty() {
+        let mut child_list = String::new();
+        for (child_id, child_title, child_status) in &open_children {
+            let _ = writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
+        }
+        return Err(ToolResult::error(format!(
+            "task {task_id} has {} open sub-task(s).\n\n\
+             Complete or cancel all sub-tasks first, or use --force to override.\n\n\
+             Open sub-tasks:\n{}\n\
+             To override:\n  \
+             canopy task complete {task_id} --agent-id <agent> --summary '<summary>' --force",
+            open_children.len(),
+            child_list
+        )));
+    }
+    Ok(())
+}
+
+fn complete_task(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+    agent_id: &str,
+    summary: &str,
+) -> std::result::Result<crate::models::Task, ToolResult> {
     let update = TaskStatusUpdate {
         closure_summary: Some(summary),
         ..TaskStatusUpdate::default()
     };
+    store
+        .update_task_status(task_id, TaskStatus::Completed, agent_id, update)
+        .map_err(|e| ToolResult::error(format!("failed to complete task: {e}")))
+}
 
-    let task = match store.update_task_status(task_id, TaskStatus::Completed, agent_id, update) {
-        Ok(t) => t,
-        Err(e) => return ToolResult::error(format!("failed to complete task: {e}")),
-    };
-
-    // Surface residual work warning in the audit trail if the section was unfilled.
-    if let Some(ref warning) = residual_work_warning {
+fn record_completion_evidence(
+    store: &(impl CanopyStore + ?Sized),
+    task_id: &str,
+    summary: &str,
+    residual_work_warning: &Option<String>,
+    task_record: &crate::models::Task,
+    force: bool,
+) -> std::result::Result<(), ToolResult> {
+    if let Some(warning) = residual_work_warning {
         tracing::warn!(task_id = %task_id, "{warning}");
         let _ = store.add_evidence(
             task_id,
@@ -532,7 +596,6 @@ pub fn tool_task_complete(
         );
     }
 
-    // Attach summary as manual note evidence
     let _ = store.add_evidence(
         task_id,
         crate::models::EvidenceSourceKind::ManualNote,
@@ -542,7 +605,6 @@ pub fn tool_task_complete(
         EvidenceLinkRefs::default(),
     );
 
-    // Log force override if applicable
     if force && task_record.verification_required {
         let _ = store.add_evidence(
             task_id,
@@ -569,14 +631,15 @@ pub fn tool_task_complete(
         }
     }
 
-    // Persist output if provided
+    Ok(())
+}
+
+fn persist_task_output(store: &(impl CanopyStore + ?Sized), task_id: &str, args: &Value) {
     if let Some(output_value) = args.get("output") {
         if let Ok(output_json) = serde_json::to_string(output_value) {
             let _ = store.set_task_output(task_id, &output_json);
         }
     }
-
-    ToolResult::json(&task)
 }
 
 /// Mark task as blocked.
