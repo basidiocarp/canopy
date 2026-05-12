@@ -430,7 +430,7 @@ pub fn tool_import_handoff(
 }
 
 #[cfg(test)]
-#[allow(unsafe_code)]
+#[allow(unsafe_code)] // set_var is unsafe in Rust 2024; safe here because env_lock() serializes all env mutations
 mod tests {
     use super::tool_import_handoff;
     use crate::store::Store;
