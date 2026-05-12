@@ -566,29 +566,8 @@ impl Store {
                     "link_task_dependency requires a relationship_role".to_string(),
                 )
             })?;
-            let (source_task_id, target_task_id, note_role, rel_kind) = match relationship_role {
-                TaskRelationshipRole::Blocks => {
-                    (task_id, related_task_id, TaskRelationshipRole::Blocks, TaskRelationshipKind::Blocks)
-                }
-                TaskRelationshipRole::BlockedBy => {
-                    (related_task_id, task_id, TaskRelationshipRole::BlockedBy, TaskRelationshipKind::Blocks)
-                }
-                TaskRelationshipRole::DependsOn => {
-                    (task_id, related_task_id, TaskRelationshipRole::DependsOn, TaskRelationshipKind::DependsOn)
-                }
-                TaskRelationshipRole::DependencyOf => {
-                    (related_task_id, task_id, TaskRelationshipRole::DependencyOf, TaskRelationshipKind::DependsOn)
-                }
-                TaskRelationshipRole::FollowUpParent
-                | TaskRelationshipRole::FollowUpChild
-                | TaskRelationshipRole::Parent
-                | TaskRelationshipRole::Child => {
-                    return Err(StoreError::Validation(
-                        "link_task_dependency only supports blocks, blocked_by, depends_on, or dependency_of roles"
-                            .to_string(),
-                    ));
-                }
-            };
+            let (source_task_id, target_task_id, note_role, rel_kind) =
+                resolve_relationship_pair(task_id, related_task_id, relationship_role)?;
             let relationship = create_task_relationship_in_connection(
                 conn,
                 source_task_id,
@@ -597,63 +576,15 @@ impl Store {
                 changed_by,
             )?;
             let related_task = get_task_in_connection(conn, related_task_id)?;
-            let note = format!(
-                "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
-                relationship.relationship_id,
-                relationship.kind,
+            record_link_dependency_events(
+                conn,
+                task_id,
+                changed_by,
+                &current_task,
+                &related_task,
+                &relationship,
                 note_role,
-                related_task.task_id,
-                related_task.title
-            );
-            record_task_event_in_connection(
-                conn,
-                &TaskEventWrite {
-                    task_id,
-                    event_type: TaskEventType::RelationshipUpdated,
-                    actor: changed_by,
-                    from_status: Some(current_task.status),
-                    to_status: current_task.status,
-                    verification_state: Some(current_task.verification_state),
-                    owner_agent_id: current_task.owner_agent_id.as_deref(),
-                    execution_action: None,
-                    execution_duration_seconds: None,
-                    note: Some(note.as_str()),
-                },
-            )?;
-            let inverse_role = match relationship_role {
-                TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
-                TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
-                TaskRelationshipRole::DependsOn => TaskRelationshipRole::DependencyOf,
-                TaskRelationshipRole::DependencyOf => TaskRelationshipRole::DependsOn,
-                TaskRelationshipRole::FollowUpParent
-                | TaskRelationshipRole::FollowUpChild
-                | TaskRelationshipRole::Parent
-                | TaskRelationshipRole::Child => {
-                    unreachable!("validated above")
-                }
-            };
-            let inverse_note = format!(
-                "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
-                relationship.relationship_id,
-                relationship.kind,
-                inverse_role,
-                current_task.task_id,
-                current_task.title
-            );
-            record_task_event_in_connection(
-                conn,
-                &TaskEventWrite {
-                    task_id: &related_task.task_id,
-                    event_type: TaskEventType::RelationshipUpdated,
-                    actor: changed_by,
-                    from_status: Some(related_task.status),
-                    to_status: related_task.status,
-                    verification_state: Some(related_task.verification_state),
-                    owner_agent_id: related_task.owner_agent_id.as_deref(),
-                    execution_action: None,
-                    execution_duration_seconds: None,
-                    note: Some(inverse_note.as_str()),
-                },
+                relationship_role,
             )?;
             touch_task_in_connection(conn, related_task_id)?;
             get_task_in_connection(conn, task_id)
@@ -1048,6 +979,107 @@ impl Store {
             get_task_in_connection(conn, task_id)
         })
     }
+}
+
+fn resolve_relationship_pair<'a>(
+    task_id: &'a str,
+    related_task_id: &'a str,
+    relationship_role: TaskRelationshipRole,
+) -> StoreResult<(&'a str, &'a str, TaskRelationshipRole, TaskRelationshipKind)> {
+    match relationship_role {
+        TaskRelationshipRole::Blocks => {
+            Ok((task_id, related_task_id, TaskRelationshipRole::Blocks, TaskRelationshipKind::Blocks))
+        }
+        TaskRelationshipRole::BlockedBy => {
+            Ok((related_task_id, task_id, TaskRelationshipRole::BlockedBy, TaskRelationshipKind::Blocks))
+        }
+        TaskRelationshipRole::DependsOn => {
+            Ok((task_id, related_task_id, TaskRelationshipRole::DependsOn, TaskRelationshipKind::DependsOn))
+        }
+        TaskRelationshipRole::DependencyOf => {
+            Ok((related_task_id, task_id, TaskRelationshipRole::DependencyOf, TaskRelationshipKind::DependsOn))
+        }
+        TaskRelationshipRole::FollowUpParent
+        | TaskRelationshipRole::FollowUpChild
+        | TaskRelationshipRole::Parent
+        | TaskRelationshipRole::Child => {
+            Err(StoreError::Validation(
+                "link_task_dependency only supports blocks, blocked_by, depends_on, or dependency_of roles"
+                    .to_string(),
+            ))
+        }
+    }
+}
+
+fn record_link_dependency_events(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    changed_by: &str,
+    current_task: &Task,
+    related_task: &Task,
+    relationship: &crate::models::TaskRelationship,
+    note_role: TaskRelationshipRole,
+    relationship_role: TaskRelationshipRole,
+) -> StoreResult<()> {
+    let note = format!(
+        "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+        relationship.relationship_id,
+        relationship.kind,
+        note_role,
+        related_task.task_id,
+        related_task.title
+    );
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id,
+            event_type: TaskEventType::RelationshipUpdated,
+            actor: changed_by,
+            from_status: Some(current_task.status),
+            to_status: current_task.status,
+            verification_state: Some(current_task.verification_state),
+            owner_agent_id: current_task.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(note.as_str()),
+        },
+    )?;
+    let inverse_role = match relationship_role {
+        TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
+        TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
+        TaskRelationshipRole::DependsOn => TaskRelationshipRole::DependencyOf,
+        TaskRelationshipRole::DependencyOf => TaskRelationshipRole::DependsOn,
+        TaskRelationshipRole::FollowUpParent
+        | TaskRelationshipRole::FollowUpChild
+        | TaskRelationshipRole::Parent
+        | TaskRelationshipRole::Child => {
+            unreachable!("validated above")
+        }
+    };
+    let inverse_note = format!(
+        "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+        relationship.relationship_id,
+        relationship.kind,
+        inverse_role,
+        current_task.task_id,
+        current_task.title
+    );
+    record_task_event_in_connection(
+        conn,
+        &TaskEventWrite {
+            task_id: &related_task.task_id,
+            event_type: TaskEventType::RelationshipUpdated,
+            actor: changed_by,
+            from_status: Some(related_task.status),
+            to_status: related_task.status,
+            verification_state: Some(related_task.verification_state),
+            owner_agent_id: related_task.owner_agent_id.as_deref(),
+            execution_action: None,
+            execution_duration_seconds: None,
+            note: Some(inverse_note.as_str()),
+        },
+    )?;
+    Ok(())
 }
 
 // --- Free functions for operator action dispatch ---

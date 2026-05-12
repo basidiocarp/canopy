@@ -128,7 +128,470 @@ fn handle_agent_command(store: &Store, command: AgentCommand) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+fn handle_task_create(
+    store: &Store,
+    title: String,
+    description: Option<String>,
+    requested_by: String,
+    project_root: String,
+    parent: Option<String>,
+    required_role: Option<AgentRole>,
+    required_capabilities: Option<Vec<String>>,
+    auto_review: Option<bool>,
+    verification_required: Option<bool>,
+    scope: Vec<String>,
+    workflow_id: Option<String>,
+    phase_id: Option<String>,
+) -> Result<()> {
+    let options = TaskCreationOptions {
+        required_role,
+        required_capabilities,
+        auto_review,
+        verification_required,
+        scope,
+        workflow_id,
+        phase_id,
+        workspace: None,
+        ..TaskCreationOptions::default()
+    };
+    let task = if let Some(parent_task_id) = parent.as_deref() {
+        store.create_subtask_with_options(
+            parent_task_id,
+            &title,
+            description.as_deref(),
+            &requested_by,
+            &options,
+        )?
+    } else {
+        store.create_task_with_options(
+            &title,
+            description.as_deref(),
+            &requested_by,
+            &project_root,
+            &options,
+        )?
+    };
+    print_json(&task)?;
+    Ok(())
+}
+
+fn handle_task_assign(
+    store: &Store,
+    task_id: &str,
+    assigned_to: &str,
+    assigned_by: &str,
+    reason: Option<String>,
+) -> Result<()> {
+    canopy::store::ensure_capabilities_match(store, task_id, assigned_to)?;
+    let task = store.assign_task(task_id, assigned_to, assigned_by, reason.as_deref())?;
+    print_json(&task)?;
+    Ok(())
+}
+
+fn handle_task_status(
+    store: &Store,
+    task_id: &str,
+    status: TaskStatus,
+    changed_by: &str,
+    verification_state: Option<VerificationState>,
+    blocked_reason: Option<String>,
+    closure_summary: Option<String>,
+) -> Result<()> {
+    let task = store.update_task_status(
+        task_id,
+        status,
+        changed_by,
+        TaskStatusUpdate {
+            verification_state,
+            blocked_reason: blocked_reason.as_deref(),
+            closure_summary: closure_summary.as_deref(),
+            event_note: None,
+        },
+    )?;
+    print_json(&task)?;
+    Ok(())
+}
+
+fn handle_task_triage(
+    store: &Store,
+    task_id: &str,
+    changed_by: &str,
+    priority: Option<canopy::models::TaskPriority>,
+    severity: Option<canopy::models::TaskSeverity>,
+    acknowledged: Option<bool>,
+    owner_note: Option<String>,
+    clear_owner_note: bool,
+) -> Result<()> {
+    let task = store.update_task_triage(
+        task_id,
+        changed_by,
+        TaskTriageUpdate {
+            priority,
+            severity,
+            acknowledged,
+            owner_note: owner_note.as_deref(),
+            clear_owner_note,
+            event_note: None,
+        },
+    )?;
+    print_json(&task)?;
+    Ok(())
+}
+
+fn handle_task_action(
+    store: &Store,
+    task_id: &str,
+    changed_by: &str,
+    action: canopy::models::OperatorActionKind,
+    note: Option<String>,
+    acting_agent_id: Option<String>,
+    assigned_to: Option<String>,
+    priority: Option<canopy::models::TaskPriority>,
+    severity: Option<canopy::models::TaskSeverity>,
+    verification_state: Option<canopy::models::VerificationState>,
+    blocked_reason: Option<String>,
+    closure_summary: Option<String>,
+    owner_note: Option<String>,
+    clear_owner_note: bool,
+    from_agent_id: Option<String>,
+    to_agent_id: Option<String>,
+    handoff_type: Option<canopy::models::HandoffType>,
+    handoff_summary: Option<String>,
+    requested_action: Option<String>,
+    due_at: Option<String>,
+    review_due_at: Option<String>,
+    expires_at: Option<String>,
+    author_agent_id: Option<String>,
+    message_type: Option<canopy::models::CouncilMessageType>,
+    message_body: Option<String>,
+    evidence_source_kind: Option<canopy::models::EvidenceSourceKind>,
+    evidence_source_ref: Option<String>,
+    evidence_label: Option<String>,
+    evidence_summary: Option<String>,
+    related_handoff_id: Option<String>,
+    related_session_id: Option<String>,
+    related_memory_query: Option<String>,
+    related_symbol: Option<String>,
+    related_file: Option<String>,
+    follow_up_title: Option<String>,
+    follow_up_description: Option<String>,
+    related_task_id: Option<String>,
+    relationship_role: Option<canopy::models::TaskRelationshipRole>,
+    review_annotation_file_path: Option<String>,
+    review_annotation_start_line: Option<i64>,
+    review_annotation_end_line: Option<i64>,
+    review_annotation_action: Option<canopy::models::ReviewAnnotationAction>,
+    review_annotation_comment: Option<String>,
+    review_annotation_anchor_hash: Option<String>,
+) -> Result<()> {
+    let fallback_session_id = runtime_session_id_from_env();
+    let resolved_session_id = related_session_id
+        .as_deref()
+        .or(fallback_session_id.as_deref());
+    let task_action = cli_action_to_task_action(
+        action,
+        note.as_deref(),
+        acting_agent_id.as_deref(),
+        assigned_to.as_deref(),
+        priority,
+        severity,
+        verification_state,
+        blocked_reason.as_deref(),
+        closure_summary.as_deref(),
+        owner_note.as_deref(),
+        clear_owner_note,
+        from_agent_id.as_deref(),
+        to_agent_id.as_deref(),
+        handoff_type,
+        handoff_summary.as_deref(),
+        requested_action.as_deref(),
+        due_at.as_deref(),
+        review_due_at.as_deref(),
+        expires_at.as_deref(),
+        author_agent_id.as_deref(),
+        message_type,
+        message_body.as_deref(),
+        evidence_source_kind,
+        evidence_source_ref.as_deref(),
+        evidence_label.as_deref(),
+        evidence_summary.as_deref(),
+        related_handoff_id.as_deref(),
+        resolved_session_id,
+        related_memory_query.as_deref(),
+        related_symbol.as_deref(),
+        related_file.as_deref(),
+        follow_up_title.as_deref(),
+        follow_up_description.as_deref(),
+        related_task_id.as_deref(),
+        relationship_role,
+        review_annotation_file_path.as_deref(),
+        review_annotation_start_line,
+        review_annotation_end_line,
+        review_annotation_action,
+        review_annotation_comment.as_deref(),
+        review_annotation_anchor_hash.as_deref(),
+    )?;
+    let task = store.apply_task_operator_action(task_id, changed_by, task_action)?;
+    print_json(&task)?;
+    Ok(())
+}
+
+fn handle_task_list(store: &Store, tree: bool) -> Result<()> {
+    if tree {
+        let tasks = store.list_tasks()?;
+        let relationships = store.list_task_relationships(None)?;
+
+        let mut children_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for rel in &relationships {
+            if rel.kind == TaskRelationshipKind::Parent {
+                children_map
+                    .entry(rel.target_task_id.clone())
+                    .or_default()
+                    .push(rel.source_task_id.clone());
+            }
+        }
+
+        let mut root_ids = Vec::new();
+        for task in &tasks {
+            if task.parent_task_id.is_none() {
+                root_ids.push(task.task_id.clone());
+            }
+        }
+        root_ids.sort();
+
+        let mut output = String::from("TASK LIST\n");
+        for (idx, root_id) in root_ids.iter().enumerate() {
+            let is_last = idx == root_ids.len() - 1;
+            if let Some(root_task) = tasks.iter().find(|t| t.task_id == *root_id) {
+                render_task_tree(
+                    &mut output,
+                    root_task,
+                    &tasks,
+                    &children_map,
+                    "",
+                    is_last,
+                );
+            }
+        }
+        println!("{output}");
+    } else {
+        print_json(&store.list_tasks()?)?;
+    }
+    Ok(())
+}
+
+fn handle_task_list_view(
+    store: &Store,
+    project_root: Option<String>,
+    preset: Option<String>,
+    view: Option<String>,
+    sort: Option<String>,
+    priority_at_least: Option<canopy::models::TaskPriority>,
+    severity_at_least: Option<canopy::models::TaskSeverity>,
+    acknowledged: Option<bool>,
+    attention_at_least: Option<i32>,
+) -> Result<()> {
+    let snapshot = api::snapshot(
+        store,
+        api::SnapshotOptions {
+            project_root: project_root.as_deref(),
+            preset,
+            sort,
+            view,
+            priority_at_least,
+            severity_at_least,
+            acknowledged,
+            attention_at_least,
+        },
+    )?;
+    print_json(&snapshot.tasks)?;
+    Ok(())
+}
+
+fn handle_task_claim(
+    store: &Store,
+    agent_id: &str,
+    task_id: &str,
+    force_claim: bool,
+    after: Option<String>,
+    worktree: bool,
+) -> Result<()> {
+    if !force_claim {
+        canopy::store::ensure_agent_fresh_for_claim(
+            store,
+            agent_id,
+            CLAIM_STALE_THRESHOLD_SECS,
+        )?;
+    }
+
+    canopy::store::ensure_capabilities_match(store, task_id, agent_id)?;
+
+    if let Some(ref blocker_id) = after {
+        store.add_task_relationship(
+            task_id,
+            blocker_id,
+            TaskRelationshipKind::Blocks,
+            agent_id,
+        )?;
+        warn!(
+            task_id = %task_id,
+            blocker_id = %blocker_id,
+            "added dependency before claim"
+        );
+    }
+
+    if worktree {
+        let worktree_id = format!("canopy-{}", &task_id[..task_id.len().min(8)]);
+        store.update_task_status(
+            task_id,
+            TaskStatus::Open,
+            agent_id,
+            TaskStatusUpdate {
+                event_note: Some(&format!("worktree_id={worktree_id}")),
+                ..Default::default()
+            },
+        )?;
+        warn!(
+            task_id = %task_id,
+            worktree_id = %worktree_id,
+            "recorded worktree isolation for claim"
+        );
+    }
+
+    if !force_claim {
+        let task = store.get_task(task_id)?;
+        if !task.scope.is_empty() {
+            let conflicts = store.find_scope_conflicts(task_id, &task.scope)?;
+            if !conflicts.is_empty() {
+                let detail = conflicts
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "  {} (task {}, agent {}): {}",
+                            c.task_title,
+                            c.task_id,
+                            c.agent_id,
+                            c.overlapping_paths.join(", ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                anyhow::bail!(
+                    "File scope conflict detected:\n{detail}\n\
+                     Resolve with: --after <task-id> (sequential), \
+                     --worktree (isolated), or --force-claim (advisory)"
+                );
+            }
+        }
+    }
+
+    let claimed_task = store
+        .atomic_claim_task(agent_id, task_id)?
+        .ok_or_else(|| anyhow::anyhow!("task already claimed or not found"))?;
+    print_json(&claimed_task)?;
+    Ok(())
+}
+
+fn handle_task_complete(
+    store: &Store,
+    agent_id: &str,
+    task_id: &str,
+    summary: &str,
+    force: bool,
+) -> Result<()> {
+    let task_record = store.get_task(task_id)?;
+
+    if task_record.verification_required && !force {
+        let evidence = store.list_evidence(task_id).unwrap_or_default();
+        let has_passing_verification = evidence.iter().any(|e| {
+            matches!(e.source_kind, EvidenceSourceKind::ScriptVerification)
+                && e.summary
+                    .as_deref()
+                    .is_some_and(|s| s.contains("script verification passed"))
+        });
+        if !has_passing_verification {
+            return Err(anyhow::anyhow!(
+                "task {task_id} requires script verification before completion.\n\n\
+                 Attach a passing verification result:\n  \
+                 canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
+                 --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
+                 Or override (operators only):\n  \
+                 canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force"
+            ));
+        }
+    }
+
+    if !force {
+        let open_children = store.list_open_child_tasks(task_id)?;
+        if !open_children.is_empty() {
+            let mut child_list = String::new();
+            for (child_id, child_title, child_status) in &open_children {
+                let _ =
+                    writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
+            }
+            return Err(anyhow::anyhow!(
+                "task {task_id} has {} open sub-task(s).\n\n\
+                 Complete or cancel all sub-tasks first, or use --force to override.\n\n\
+                 Open sub-tasks:\n{child_list}\n\
+                 To override:\n  \
+                 canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force",
+                open_children.len()
+            ));
+        }
+    }
+
+    let task = store.update_task_status(
+        task_id,
+        TaskStatus::Completed,
+        agent_id,
+        TaskStatusUpdate {
+            verification_state: None,
+            blocked_reason: None,
+            closure_summary: Some(summary),
+            event_note: None,
+        },
+    )?;
+    store.add_evidence(
+        task_id,
+        EvidenceSourceKind::ManualNote,
+        task_id,
+        "completion_summary",
+        Some(summary),
+        EvidenceLinkRefs::default(),
+    )?;
+
+    if force && task_record.verification_required {
+        store.add_evidence(
+            task_id,
+            EvidenceSourceKind::ManualNote,
+            task_id,
+            "verification_override",
+            Some("completion allowed with --force override despite missing verification"),
+            EvidenceLinkRefs::default(),
+        )?;
+    }
+
+    if force
+        && !store
+            .list_open_child_tasks(task_id)
+            .unwrap_or_default()
+            .is_empty()
+    {
+        store.add_evidence(
+            task_id,
+            EvidenceSourceKind::ManualNote,
+            task_id,
+            "children_override",
+            Some("completion allowed with --force override despite open sub-tasks"),
+            EvidenceLinkRefs::default(),
+        )?;
+    }
+
+    print_json(&task)?;
+    Ok(())
+}
+
 fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
     match command {
         TaskCommand::Create {
@@ -145,7 +608,13 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             workflow_id,
             phase_id,
         } => {
-            let options = TaskCreationOptions {
+            handle_task_create(
+                store,
+                title,
+                description,
+                requested_by,
+                project_root,
+                parent,
                 required_role,
                 required_capabilities,
                 auto_review,
@@ -153,27 +622,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 scope,
                 workflow_id,
                 phase_id,
-                workspace: None,
-                ..TaskCreationOptions::default()
-            };
-            let task = if let Some(parent_task_id) = parent.as_deref() {
-                store.create_subtask_with_options(
-                    parent_task_id,
-                    &title,
-                    description.as_deref(),
-                    &requested_by,
-                    &options,
-                )?
-            } else {
-                store.create_task_with_options(
-                    &title,
-                    description.as_deref(),
-                    &requested_by,
-                    &project_root,
-                    &options,
-                )?
-            };
-            print_json(&task)?;
+            )?;
         }
         TaskCommand::Assign {
             task_id,
@@ -181,10 +630,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             assigned_by,
             reason,
         } => {
-            canopy::store::ensure_capabilities_match(store, &task_id, &assigned_to)?;
-            let task =
-                store.assign_task(&task_id, &assigned_to, &assigned_by, reason.as_deref())?;
-            print_json(&task)?;
+            handle_task_assign(store, &task_id, &assigned_to, &assigned_by, reason)?;
         }
         TaskCommand::Status {
             task_id,
@@ -194,18 +640,15 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             blocked_reason,
             closure_summary,
         } => {
-            let task = store.update_task_status(
+            handle_task_status(
+                store,
                 &task_id,
                 status,
                 &changed_by,
-                TaskStatusUpdate {
-                    verification_state,
-                    blocked_reason: blocked_reason.as_deref(),
-                    closure_summary: closure_summary.as_deref(),
-                    event_note: None,
-                },
+                verification_state,
+                blocked_reason,
+                closure_summary,
             )?;
-            print_json(&task)?;
         }
         TaskCommand::Triage {
             task_id,
@@ -216,19 +659,16 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             owner_note,
             clear_owner_note,
         } => {
-            let task = store.update_task_triage(
+            handle_task_triage(
+                store,
                 &task_id,
                 &changed_by,
-                TaskTriageUpdate {
-                    priority,
-                    severity,
-                    acknowledged,
-                    owner_note: owner_note.as_deref(),
-                    clear_owner_note,
-                    event_note: None,
-                },
+                priority,
+                severity,
+                acknowledged,
+                owner_note,
+                clear_owner_note,
             )?;
-            print_json(&task)?;
         }
         TaskCommand::Action {
             task_id,
@@ -275,55 +715,52 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             review_annotation_comment,
             review_annotation_anchor_hash,
         } => {
-            let fallback_session_id = runtime_session_id_from_env();
-            let resolved_session_id = related_session_id
-                .as_deref()
-                .or(fallback_session_id.as_deref());
-            let task_action = cli_action_to_task_action(
+            handle_task_action(
+                store,
+                &task_id,
+                &changed_by,
                 action,
-                note.as_deref(),
-                acting_agent_id.as_deref(),
-                assigned_to.as_deref(),
+                note,
+                acting_agent_id,
+                assigned_to,
                 priority,
                 severity,
                 verification_state,
-                blocked_reason.as_deref(),
-                closure_summary.as_deref(),
-                owner_note.as_deref(),
+                blocked_reason,
+                closure_summary,
+                owner_note,
                 clear_owner_note,
-                from_agent_id.as_deref(),
-                to_agent_id.as_deref(),
+                from_agent_id,
+                to_agent_id,
                 handoff_type,
-                handoff_summary.as_deref(),
-                requested_action.as_deref(),
-                due_at.as_deref(),
-                review_due_at.as_deref(),
-                expires_at.as_deref(),
-                author_agent_id.as_deref(),
+                handoff_summary,
+                requested_action,
+                due_at,
+                review_due_at,
+                expires_at,
+                author_agent_id,
                 message_type,
-                message_body.as_deref(),
+                message_body,
                 evidence_source_kind,
-                evidence_source_ref.as_deref(),
-                evidence_label.as_deref(),
-                evidence_summary.as_deref(),
-                related_handoff_id.as_deref(),
-                resolved_session_id,
-                related_memory_query.as_deref(),
-                related_symbol.as_deref(),
-                related_file.as_deref(),
-                follow_up_title.as_deref(),
-                follow_up_description.as_deref(),
-                related_task_id.as_deref(),
+                evidence_source_ref,
+                evidence_label,
+                evidence_summary,
+                related_handoff_id,
+                related_session_id,
+                related_memory_query,
+                related_symbol,
+                related_file,
+                follow_up_title,
+                follow_up_description,
+                related_task_id,
                 relationship_role,
-                review_annotation_file_path.as_deref(),
+                review_annotation_file_path,
                 review_annotation_start_line,
                 review_annotation_end_line,
                 review_annotation_action,
-                review_annotation_comment.as_deref(),
-                review_annotation_anchor_hash.as_deref(),
+                review_annotation_comment,
+                review_annotation_anchor_hash,
             )?;
-            let task = store.apply_task_operator_action(&task_id, &changed_by, task_action)?;
-            print_json(&task)?;
         }
         TaskCommand::Verify {
             task_id,
@@ -338,50 +775,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             )?)?;
         }
         TaskCommand::List { tree } => {
-            if tree {
-                let tasks = store.list_tasks()?;
-                let relationships = store.list_task_relationships(None)?;
-
-                // Build parent->child map
-                let mut children_map: std::collections::HashMap<String, Vec<String>> =
-                    std::collections::HashMap::new();
-                for rel in &relationships {
-                    if rel.kind == TaskRelationshipKind::Parent {
-                        children_map
-                            .entry(rel.target_task_id.clone())
-                            .or_default()
-                            .push(rel.source_task_id.clone());
-                    }
-                }
-
-                // Find root tasks (tasks with no parent)
-                let mut root_ids = Vec::new();
-                for task in &tasks {
-                    if task.parent_task_id.is_none() {
-                        root_ids.push(task.task_id.clone());
-                    }
-                }
-                root_ids.sort();
-
-                // Render tree
-                let mut output = String::from("TASK LIST\n");
-                for (idx, root_id) in root_ids.iter().enumerate() {
-                    let is_last = idx == root_ids.len() - 1;
-                    if let Some(root_task) = tasks.iter().find(|t| t.task_id == *root_id) {
-                        render_task_tree(
-                            &mut output,
-                            root_task,
-                            &tasks,
-                            &children_map,
-                            "",
-                            is_last,
-                        );
-                    }
-                }
-                println!("{output}");
-            } else {
-                print_json(&store.list_tasks()?)?;
-            }
+            handle_task_list(store, tree)?;
         }
         TaskCommand::ListView {
             project_root,
@@ -393,20 +787,17 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             acknowledged,
             attention_at_least,
         } => {
-            let snapshot = api::snapshot(
+            handle_task_list_view(
                 store,
-                api::SnapshotOptions {
-                    project_root: project_root.as_deref(),
-                    preset,
-                    sort,
-                    view,
-                    priority_at_least,
-                    severity_at_least,
-                    acknowledged,
-                    attention_at_least,
-                },
+                project_root,
+                preset,
+                view,
+                sort,
+                priority_at_least,
+                severity_at_least,
+                acknowledged,
+                attention_at_least,
             )?;
-            print_json(&snapshot.tasks)?;
         }
         TaskCommand::Show { task_id } => {
             print_json(&store.get_task(&task_id)?)?;
@@ -418,83 +809,14 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             after,
             worktree,
         } => {
-            if !force_claim {
-                canopy::store::ensure_agent_fresh_for_claim(
-                    store,
-                    &agent_id,
-                    CLAIM_STALE_THRESHOLD_SECS,
-                )?;
-            }
-
-            // Capability check before any mutations.
-            canopy::store::ensure_capabilities_match(store, &task_id, &agent_id)?;
-
-            // Sequential mode: add BlockedBy relationship before claiming
-            if let Some(ref blocker_id) = after {
-                store.add_task_relationship(
-                    &task_id,
-                    blocker_id,
-                    TaskRelationshipKind::Blocks,
-                    &agent_id,
-                )?;
-                warn!(
-                    task_id = %task_id,
-                    blocker_id = %blocker_id,
-                    "added dependency before claim"
-                );
-            }
-
-            // Worktree isolation: record worktree ID in task metadata note
-            if worktree {
-                let worktree_id = format!("canopy-{}", &task_id[..task_id.len().min(8)]);
-                store.update_task_status(
-                    &task_id,
-                    TaskStatus::Open,
-                    &agent_id,
-                    TaskStatusUpdate {
-                        event_note: Some(&format!("worktree_id={worktree_id}")),
-                        ..Default::default()
-                    },
-                )?;
-                warn!(
-                    task_id = %task_id,
-                    worktree_id = %worktree_id,
-                    "recorded worktree isolation for claim"
-                );
-            }
-
-            // Scope conflict check before claiming
-            if !force_claim {
-                let task = store.get_task(&task_id)?;
-                if !task.scope.is_empty() {
-                    let conflicts = store.find_scope_conflicts(&task_id, &task.scope)?;
-                    if !conflicts.is_empty() {
-                        let detail = conflicts
-                            .iter()
-                            .map(|c| {
-                                format!(
-                                    "  {} (task {}, agent {}): {}",
-                                    c.task_title,
-                                    c.task_id,
-                                    c.agent_id,
-                                    c.overlapping_paths.join(", ")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        anyhow::bail!(
-                            "File scope conflict detected:\n{detail}\n\
-                             Resolve with: --after <task-id> (sequential), \
-                             --worktree (isolated), or --force-claim (advisory)"
-                        );
-                    }
-                }
-            }
-
-            let claimed_task = store
-                .atomic_claim_task(&agent_id, &task_id)?
-                .ok_or_else(|| anyhow::anyhow!("task already claimed or not found"))?;
-            print_json(&claimed_task)?;
+            handle_task_claim(
+                store,
+                &agent_id,
+                &task_id,
+                force_claim,
+                after,
+                worktree,
+            )?;
         }
         TaskCommand::Complete {
             agent_id,
@@ -502,98 +824,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             summary,
             force,
         } => {
-            // Gate: if verification_required=true, check for passing ScriptVerification evidence
-            let task_record = store.get_task(&task_id)?;
-
-            if task_record.verification_required && !force {
-                let evidence = store.list_evidence(&task_id).unwrap_or_default();
-                let has_passing_verification = evidence.iter().any(|e| {
-                    matches!(e.source_kind, EvidenceSourceKind::ScriptVerification)
-                        && e.summary
-                            .as_deref()
-                            .is_some_and(|s| s.contains("script verification passed"))
-                });
-                if !has_passing_verification {
-                    return Err(anyhow::anyhow!(
-                        "task {task_id} requires script verification before completion.\n\n\
-                         Attach a passing verification result:\n  \
-                         canopy evidence add --task-id {task_id} --source-kind script_verification \\\n    \
-                         --source-ref <ref> --label verification --summary 'script verification passed'\n\n\
-                         Or override (operators only):\n  \
-                         canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force"
-                    ));
-                }
-            }
-
-            // Gate: check for open child tasks (unless --force is used)
-            if !force {
-                let open_children = store.list_open_child_tasks(&task_id)?;
-                if !open_children.is_empty() {
-                    let mut child_list = String::new();
-                    for (child_id, child_title, child_status) in &open_children {
-                        let _ =
-                            writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
-                    }
-                    return Err(anyhow::anyhow!(
-                        "task {task_id} has {} open sub-task(s).\n\n\
-                         Complete or cancel all sub-tasks first, or use --force to override.\n\n\
-                         Open sub-tasks:\n{child_list}\n\
-                         To override:\n  \
-                         canopy task complete {task_id} --agent-id {agent_id} --summary '{summary}' --force",
-                        open_children.len()
-                    ));
-                }
-            }
-
-            let task = store.update_task_status(
-                &task_id,
-                TaskStatus::Completed,
-                &agent_id,
-                TaskStatusUpdate {
-                    verification_state: None,
-                    blocked_reason: None,
-                    closure_summary: Some(&summary),
-                    event_note: None,
-                },
-            )?;
-            store.add_evidence(
-                &task_id,
-                EvidenceSourceKind::ManualNote,
-                &task_id,
-                "completion_summary",
-                Some(&summary),
-                EvidenceLinkRefs::default(),
-            )?;
-
-            // Log force override if applicable
-            if force && task_record.verification_required {
-                store.add_evidence(
-                    &task_id,
-                    EvidenceSourceKind::ManualNote,
-                    &task_id,
-                    "verification_override",
-                    Some("completion allowed with --force override despite missing verification"),
-                    EvidenceLinkRefs::default(),
-                )?;
-            }
-
-            if force
-                && !store
-                    .list_open_child_tasks(&task_id)
-                    .unwrap_or_default()
-                    .is_empty()
-            {
-                store.add_evidence(
-                    &task_id,
-                    EvidenceSourceKind::ManualNote,
-                    &task_id,
-                    "children_override",
-                    Some("completion allowed with --force override despite open sub-tasks"),
-                    EvidenceLinkRefs::default(),
-                )?;
-            }
-
-            print_json(&task)?;
+            handle_task_complete(store, &agent_id, &task_id, &summary, force)?;
         }
     }
 
@@ -683,7 +914,7 @@ struct TaskVerificationRun {
 /// The CLI `task action` command uses a single `OperatorActionKind` flag with 33 optional
 /// fields for backward compatibility. This function bridges from that flat representation
 /// to the typed enum at the CLI boundary.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn cli_action_to_task_action<'a>(
     action: canopy::models::OperatorActionKind,
     note: Option<&'a str>,
@@ -731,80 +962,80 @@ fn cli_action_to_task_action<'a>(
     let require = |opt: Option<&'a str>, field: &str| -> Result<&'a str> {
         opt.ok_or_else(|| anyhow::anyhow!("{action} requires --{field}"))
     };
-    let task_action = match action {
-        K::AcknowledgeTask => TaskAction::Acknowledge { note },
-        K::UnacknowledgeTask => TaskAction::Unacknowledge { note },
-        K::SetTaskPriority => TaskAction::SetPriority {
+    match action {
+        K::AcknowledgeTask => Ok(TaskAction::Acknowledge { note }),
+        K::UnacknowledgeTask => Ok(TaskAction::Unacknowledge { note }),
+        K::SetTaskPriority => Ok(TaskAction::SetPriority {
             priority: priority.ok_or_else(|| anyhow::anyhow!("{action} requires --priority"))?,
             note,
-        },
-        K::SetTaskSeverity => TaskAction::SetSeverity {
+        }),
+        K::SetTaskSeverity => Ok(TaskAction::SetSeverity {
             severity: severity.ok_or_else(|| anyhow::anyhow!("{action} requires --severity"))?,
             note,
-        },
-        K::UpdateTaskNote => TaskAction::UpdateNote {
+        }),
+        K::UpdateTaskNote => Ok(TaskAction::UpdateNote {
             owner_note,
             clear_owner_note,
             note,
-        },
-        K::SetTaskDueAt => TaskAction::SetDueAt {
+        }),
+        K::SetTaskDueAt => Ok(TaskAction::SetDueAt {
             due_at: require(due_at, "due-at")?,
             note,
-        },
-        K::ClearTaskDueAt => TaskAction::ClearDueAt { note },
-        K::SetReviewDueAt => TaskAction::SetReviewDueAt {
+        }),
+        K::ClearTaskDueAt => Ok(TaskAction::ClearDueAt { note }),
+        K::SetReviewDueAt => Ok(TaskAction::SetReviewDueAt {
             review_due_at: require(review_due_at, "review-due-at")?,
             note,
-        },
-        K::ClearReviewDueAt => TaskAction::ClearReviewDueAt { note },
-        K::VerifyTask => TaskAction::Verify {
+        }),
+        K::ClearReviewDueAt => Ok(TaskAction::ClearReviewDueAt { note }),
+        K::VerifyTask => Ok(TaskAction::Verify {
             verification_state: verification_state
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --verification-state"))?,
             note,
-        },
-        K::CloseTask => TaskAction::Close {
+        }),
+        K::CloseTask => Ok(TaskAction::Close {
             closure_summary: require(closure_summary, "closure-summary")?,
             note,
-        },
-        K::BlockTask => TaskAction::Block {
+        }),
+        K::BlockTask => Ok(TaskAction::Block {
             blocked_reason: require(blocked_reason, "blocked-reason")?,
             note,
-        },
-        K::UnblockTask => TaskAction::Unblock { note },
-        K::ReopenBlockedTaskWhenUnblocked => TaskAction::ReopenWhenUnblocked { note },
-        K::ClaimTask => TaskAction::Claim {
+        }),
+        K::UnblockTask => Ok(TaskAction::Unblock { note }),
+        K::ReopenBlockedTaskWhenUnblocked => Ok(TaskAction::ReopenWhenUnblocked { note }),
+        K::ClaimTask => Ok(TaskAction::Claim {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::StartTask => TaskAction::Start {
+        }),
+        K::StartTask => Ok(TaskAction::Start {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::ResumeTask => TaskAction::Resume {
+        }),
+        K::ResumeTask => Ok(TaskAction::Resume {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::PauseTask => TaskAction::Pause {
+        }),
+        K::PauseTask => Ok(TaskAction::Pause {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::YieldTask => TaskAction::Yield {
+        }),
+        K::YieldTask => Ok(TaskAction::Yield {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::CompleteTask => TaskAction::Complete {
+        }),
+        K::CompleteTask => Ok(TaskAction::Complete {
             acting_agent_id: require(acting_agent_id, "acting-agent-id")?,
             note,
-        },
-        K::ReassignTask => TaskAction::Reassign {
+        }),
+        K::ReassignTask => Ok(TaskAction::Reassign {
             assigned_to: require(assigned_to, "assigned-to")?,
             note,
-        },
-        K::RecordDecision => TaskAction::RecordDecision {
+        }),
+        K::RecordDecision => Ok(TaskAction::RecordDecision {
             author_agent_id: require(author_agent_id, "author-agent-id")?,
             message_body: require(message_body, "message-body")?,
-        },
-        K::CreateHandoff => TaskAction::CreateHandoff {
+        }),
+        K::CreateHandoff => Ok(TaskAction::CreateHandoff {
             from_agent_id: require(from_agent_id, "from-agent-id")?,
             to_agent_id: require(to_agent_id, "to-agent-id")?,
             handoff_type: handoff_type
@@ -813,15 +1044,15 @@ fn cli_action_to_task_action<'a>(
             requested_action,
             due_at,
             expires_at,
-        },
-        K::SummonCouncilSession => TaskAction::SummonCouncilSession,
-        K::PostCouncilMessage => TaskAction::PostCouncilMessage {
+        }),
+        K::SummonCouncilSession => Ok(TaskAction::SummonCouncilSession),
+        K::PostCouncilMessage => Ok(TaskAction::PostCouncilMessage {
             author_agent_id: require(author_agent_id, "author-agent-id")?,
             message_type: message_type
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --message-type"))?,
             message_body: require(message_body, "message-body")?,
-        },
-        K::AttachEvidence => TaskAction::AttachEvidence {
+        }),
+        K::AttachEvidence => Ok(TaskAction::AttachEvidence {
             source_kind: evidence_source_kind
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --evidence-source-kind"))?,
             source_ref: require(evidence_source_ref, "evidence-source-ref")?,
@@ -832,8 +1063,8 @@ fn cli_action_to_task_action<'a>(
             related_memory_query,
             related_symbol,
             related_file,
-        },
-        K::AttachReviewAnnotation => TaskAction::AttachReviewAnnotation {
+        }),
+        K::AttachReviewAnnotation => Ok(TaskAction::AttachReviewAnnotation {
             file_path: require(review_annotation_file_path, "review-annotation-file-path")?,
             start_line: review_annotation_start_line.ok_or_else(|| {
                 anyhow::anyhow!("{action} requires --review-annotation-start-line")
@@ -847,23 +1078,23 @@ fn cli_action_to_task_action<'a>(
                 review_annotation_anchor_hash,
                 "review-annotation-anchor-hash",
             )?,
-        },
-        K::CreateFollowUpTask => TaskAction::CreateFollowUp {
+        }),
+        K::CreateFollowUpTask => Ok(TaskAction::CreateFollowUp {
             title: require(follow_up_title, "follow-up-title")?,
             description: follow_up_description,
-        },
-        K::LinkTaskDependency => TaskAction::LinkDependency {
+        }),
+        K::LinkTaskDependency => Ok(TaskAction::LinkDependency {
             related_task_id: require(related_task_id, "related-task-id")?,
             relationship_role: relationship_role
                 .ok_or_else(|| anyhow::anyhow!("{action} requires --relationship-role"))?,
-        },
-        K::ResolveDependency => TaskAction::ResolveDependency {
+        }),
+        K::ResolveDependency => Ok(TaskAction::ResolveDependency {
             related_task_id: require(related_task_id, "related-task-id")?,
-        },
-        K::PromoteFollowUp => TaskAction::PromoteFollowUp {
+        }),
+        K::PromoteFollowUp => Ok(TaskAction::PromoteFollowUp {
             related_task_id: require(related_task_id, "related-task-id")?,
-        },
-        K::CloseFollowUpChain => TaskAction::CloseFollowUpChain,
+        }),
+        K::CloseFollowUpChain => Ok(TaskAction::CloseFollowUpChain),
         K::AcceptHandoff
         | K::RejectHandoff
         | K::CancelHandoff
@@ -872,61 +1103,104 @@ fn cli_action_to_task_action<'a>(
         | K::ExpireHandoff => {
             anyhow::bail!("operator action {action} is not valid for tasks")
         }
-    };
-    Ok(task_action)
+    }
 }
 
-#[allow(clippy::too_many_lines)]
 fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Result<()> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("read handoff markdown {}", path.display()))?;
     let title = extract_handoff_title(&content);
     let steps = extract_handoff_steps(&content);
-    // Warn on single-step parallel groups — annotation has no effect with only one member.
-    {
-        let mut group_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for step in &steps {
-            if let Some(group) = &step.parallel_group {
-                *group_counts.entry(group.as_str()).or_insert(0) += 1;
-            }
-        }
-        for (group, count) in &group_counts {
-            if *count < 2 {
-                tracing::warn!(group, "parallel group has only one step — annotation has no effect");
-            }
-        }
-    }
+
+    validate_parallel_groups(&steps);
+
     let verify_script = verification_script_path(path);
     let verify_script_exists = verify_script.exists();
     let project_root = infer_handoff_project_root(path)?;
+
+    let parent_task = create_parent_task(store, &title, path, &project_root)?;
+
+    if verify_script_exists {
+        add_parent_verification_evidence(store, &parent_task, path, &verify_script)?;
+    }
+
+    let imported_steps = create_imported_steps(store, &parent_task, &steps, path, &verify_script, verify_script_exists)?;
+
+    let (parent_task, assigned_to, review_hold_reason) = apply_task_assignment(store, parent_task, path, assign)?;
+
+    print_json(&ImportedHandoff {
+        path: path.display().to_string(),
+        verify_script: verify_script_exists.then(|| verify_script.display().to_string()),
+        requested_assignee: assign.map(ToOwned::to_owned),
+        assigned_to,
+        review_hold_reason,
+        parent_task,
+        steps: imported_steps,
+    })
+}
+
+fn validate_parallel_groups(steps: &[ParsedHandoffStep]) {
+    let mut group_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for step in steps {
+        if let Some(group) = &step.parallel_group {
+            *group_counts.entry(group.as_str()).or_insert(0) += 1;
+        }
+    }
+    for (group, count) in &group_counts {
+        if *count < 2 {
+            tracing::warn!(group, "parallel group has only one step — annotation has no effect");
+        }
+    }
+}
+
+fn create_parent_task(
+    store: &Store,
+    title: &str,
+    path: &Path,
+    project_root: &str,
+) -> Result<Task> {
     let parent_description = Some(format!("Imported from {}", path.display()));
-    let parent_task = store.create_task_with_options(
-        &title,
+    store.create_task_with_options(
+        title,
         parent_description.as_deref(),
         "handoff-import",
-        &project_root,
+        project_root,
         &TaskCreationOptions {
             required_role: Some(AgentRole::Implementer),
             verification_required: true,
             ..TaskCreationOptions::default()
         },
-    )?;
+    )
+}
 
-    if verify_script_exists {
-        store.add_evidence(
-            &parent_task.task_id,
-            EvidenceSourceKind::ManualNote,
-            &path.display().to_string(),
-            "Verification command",
-            Some(&format!(
-                "Run: canopy task verify --task-id {} --script {}",
-                parent_task.task_id,
-                verify_script.display()
-            )),
-            EvidenceLinkRefs::default(),
-        )?;
-    }
+fn add_parent_verification_evidence(
+    store: &Store,
+    parent_task: &Task,
+    path: &Path,
+    verify_script: &Path,
+) -> Result<()> {
+    store.add_evidence(
+        &parent_task.task_id,
+        EvidenceSourceKind::ManualNote,
+        &path.display().to_string(),
+        "Verification command",
+        Some(&format!(
+            "Run: canopy task verify --task-id {} --script {}",
+            parent_task.task_id,
+            verify_script.display()
+        )),
+        EvidenceLinkRefs::default(),
+    )
+}
 
+fn create_imported_steps(
+    store: &Store,
+    parent_task: &Task,
+    steps: &[ParsedHandoffStep],
+    path: &Path,
+    verify_script: &Path,
+    verify_script_exists: bool,
+) -> Result<Vec<ImportedHandoffStep>> {
     let mut imported_steps = Vec::with_capacity(steps.len());
     for step in steps {
         let task = store.create_subtask_with_options(
@@ -937,7 +1211,7 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
             &TaskCreationOptions {
                 required_role: Some(AgentRole::Implementer),
                 verification_required: true,
-                scope: step.scope,
+                scope: step.scope.clone(),
                 ..TaskCreationOptions::default()
             },
         )?;
@@ -960,10 +1234,18 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
             task_id: task.task_id,
             title: task.title,
             parallel: step.parallel,
-            parallel_group: step.parallel_group,
+            parallel_group: step.parallel_group.clone(),
         });
     }
+    Ok(imported_steps)
+}
 
+fn apply_task_assignment(
+    store: &Store,
+    parent_task: Task,
+    path: &Path,
+    assign: Option<&str>,
+) -> Result<(Task, Option<String>, Option<String>)> {
     let mut assigned_to = None;
     let mut review_hold_reason = None;
     let parent_task = if let Some(agent_id) = assign {
@@ -990,16 +1272,7 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
     } else {
         parent_task
     };
-
-    print_json(&ImportedHandoff {
-        path: path.display().to_string(),
-        verify_script: verify_script_exists.then(|| verify_script.display().to_string()),
-        requested_assignee: assign.map(ToOwned::to_owned),
-        assigned_to,
-        review_hold_reason,
-        parent_task,
-        steps: imported_steps,
-    })
+    Ok((parent_task, assigned_to, review_hold_reason))
 }
 
 fn run_task_verification(
