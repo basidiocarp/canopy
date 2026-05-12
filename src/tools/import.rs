@@ -8,6 +8,7 @@ use crate::store::{CanopyStore, EvidenceLinkRefs, TaskCreationOptions};
 use crate::tools::{ToolResult, get_str};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -32,6 +33,53 @@ struct ParsedStep {
     step_marker: String,
     description: Option<String>,
     scope: Vec<String>,
+    /// If true, this step can run concurrently with other steps in the same `parallel_group`.
+    /// Stored for future use; currently the group label drives all validation logic.
+    #[allow(dead_code)]
+    parallel: bool,
+    /// Steps sharing the same group label can run concurrently.
+    /// Steps with different labels are sequential relative to each other.
+    parallel_group: Option<String>,
+}
+
+/// Parse a `[P: group-name]` parallel annotation from a step marker string.
+///
+/// Returns `(parallel, parallel_group)` — `parallel` is true when an annotation
+/// is present, and `parallel_group` holds the trimmed group label.
+fn parse_parallel_annotation(marker: &str) -> (bool, Option<String>) {
+    if let Some(start) = marker.find("[P:") {
+        let rest = &marker[start + 3..];
+        if let Some(end) = rest.find(']') {
+            let group = rest[..end].trim().to_string();
+            if !group.is_empty() {
+                return (true, Some(group));
+            }
+        }
+    }
+    (false, None)
+}
+
+/// Validate step-level parallel annotations and return warning strings.
+/// Does not block — returns warnings only.
+fn validate_parallel_steps(steps: &[ParsedStep]) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Warn on single-step groups (annotating a group with one step is pointless).
+    let mut group_counts: HashMap<&str, usize> = HashMap::new();
+    for step in steps {
+        if let Some(group) = &step.parallel_group {
+            *group_counts.entry(group.as_str()).or_insert(0) += 1;
+        }
+    }
+    for (group, count) in &group_counts {
+        if *count < 2 {
+            warnings.push(format!(
+                "parallel group '{group}' has only one step — annotation has no effect"
+            ));
+        }
+    }
+
+    warnings
 }
 
 fn extract_title(content: &str) -> String {
@@ -62,10 +110,13 @@ fn extract_steps(content: &str) -> Vec<ParsedStep> {
         if let Some(step_marker) = current_marker.take() {
             let description = current_body.join("\n").trim().to_string();
             let scope = extract_step_scope(&description);
+            let (parallel, parallel_group) = parse_parallel_annotation(&step_marker);
             steps.push(ParsedStep {
                 description: (!description.is_empty()).then_some(description),
                 step_marker,
                 scope,
+                parallel,
+                parallel_group,
             });
             current_body.clear();
         }
@@ -236,6 +287,14 @@ pub fn tool_import_handoff(
 
     let title = extract_title(&content);
     let steps = extract_steps(&content);
+
+    // Collect parallel-annotation warnings and surface them alongside path warnings.
+    let mut warnings = warnings;
+    for w in validate_parallel_steps(&steps) {
+        warn!(path = %path.display(), "parallel step warning: {w}");
+        warnings.push(w);
+    }
+
     let verify_script = verify_script_path(path);
     let verify_script_exists = verify_script.exists();
     let project_root = infer_project_root(path);

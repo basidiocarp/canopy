@@ -639,6 +639,11 @@ fn render_task_tree(
 struct ImportedHandoffStep {
     task_id: String,
     title: String,
+    /// If true, this step can run concurrently with other steps in the same `parallel_group`.
+    parallel: bool,
+    /// Steps sharing the same group label can run concurrently.
+    /// Steps with different labels are sequential relative to each other.
+    parallel_group: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -657,6 +662,11 @@ struct ParsedHandoffStep {
     description: Option<String>,
     step_marker: String,
     scope: Vec<String>,
+    /// If true, this step can run concurrently with other steps in the same `parallel_group`.
+    parallel: bool,
+    /// Steps sharing the same group label can run concurrently.
+    /// Steps with different labels are sequential relative to each other.
+    parallel_group: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -872,6 +882,20 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
         .with_context(|| format!("read handoff markdown {}", path.display()))?;
     let title = extract_handoff_title(&content);
     let steps = extract_handoff_steps(&content);
+    // Warn on single-step parallel groups — annotation has no effect with only one member.
+    {
+        let mut group_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for step in &steps {
+            if let Some(group) = &step.parallel_group {
+                *group_counts.entry(group.as_str()).or_insert(0) += 1;
+            }
+        }
+        for (group, count) in &group_counts {
+            if *count < 2 {
+                tracing::warn!(group, "parallel group has only one step — annotation has no effect");
+            }
+        }
+    }
     let verify_script = verification_script_path(path);
     let verify_script_exists = verify_script.exists();
     let project_root = infer_handoff_project_root(path)?;
@@ -935,6 +959,8 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
         imported_steps.push(ImportedHandoffStep {
             task_id: task.task_id,
             title: task.title,
+            parallel: step.parallel,
+            parallel_group: step.parallel_group,
         });
     }
 
@@ -1322,6 +1348,23 @@ fn extract_handoff_title(content: &str) -> String {
         .unwrap_or_else(|| "Untitled handoff".to_string())
 }
 
+/// Parse a `[P: group-name]` parallel annotation from a step marker string.
+///
+/// Returns `(parallel, parallel_group)` — `parallel` is true when an annotation
+/// is present, and `parallel_group` holds the trimmed group label.
+fn parse_parallel_annotation(marker: &str) -> (bool, Option<String>) {
+    if let Some(start) = marker.find("[P:") {
+        let rest = &marker[start + 3..];
+        if let Some(end) = rest.find(']') {
+            let group = rest[..end].trim().to_string();
+            if !group.is_empty() {
+                return (true, Some(group));
+            }
+        }
+    }
+    (false, None)
+}
+
 fn extract_handoff_steps(content: &str) -> Vec<ParsedHandoffStep> {
     let mut steps = Vec::new();
     let mut current_marker = None;
@@ -1334,10 +1377,13 @@ fn extract_handoff_steps(content: &str) -> Vec<ParsedHandoffStep> {
         if let Some(step_marker) = current_marker.take() {
             let description = current_body.join("\n").trim().to_string();
             let scope = canopy::scope::extract_step_scope(&description);
+            let (parallel, parallel_group) = parse_parallel_annotation(&step_marker);
             steps.push(ParsedHandoffStep {
                 description: (!description.is_empty()).then_some(description),
                 step_marker,
                 scope,
+                parallel,
+                parallel_group,
             });
             current_body.clear();
         }
