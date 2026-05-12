@@ -315,7 +315,6 @@ pub(crate) struct TaskOperatorActionInput<'a> {
 }
 
 impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
-    #[allow(clippy::too_many_lines)]
     fn from(action: &TaskAction<'a>) -> Self {
         let mut input = Self::default();
         #[allow(clippy::match_same_arms)]

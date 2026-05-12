@@ -356,7 +356,6 @@ impl Store {
     ///
     /// Returns an error if the task does not exist, the requested transition is
     /// invalid, or the update fails.
-    #[allow(clippy::too_many_lines)]
     pub fn update_task_status(
         &self,
         task_id: &str,
@@ -569,7 +568,6 @@ impl Store {
     ///
     /// Returns an error if the task does not exist, no triage fields were
     /// provided, or the update fails.
-    #[allow(clippy::too_many_lines)]
     pub fn update_task_triage(
         &self,
         task_id: &str,
@@ -805,7 +803,6 @@ impl Store {
     ///
     /// Returns an error if the action is invalid for tasks, required fields are
     /// missing, or the underlying write fails.
-    #[allow(clippy::too_many_lines)]
     pub fn apply_task_operator_action(
         &self,
         task_id: &str,
