@@ -96,6 +96,7 @@ src/
 - **References instead of copied payloads**: keeps Canopy narrow and prevents cross-tool data drift.
 - **Transport-agnostic tools**: CLI and MCP use the same underlying coordination code.
 - **Explicit ownership model**: assignment and handoff stay visible instead of being inferred from chat.
+- **Cap→Canopy via HTTP** (decided 2026-05-12): inter-tool CLI calls are fragile. Canopy will expose a local HTTP API for Cap to query. The current CLI protocol (`canopy api snapshot`, `canopy api task`) is the interim path until the HTTP surface ships.
 
 ---
 
@@ -119,8 +120,8 @@ src/
 |----------|--------|----------|--------|
 | `evidence-ref-v1` | Cap and other readers | Local SQLite refs | `septa/evidence-ref-v1.schema.json` |
 | `handoff-context-v1` | Receiving agent, Canopy, Cap | Handoff creation flow | `septa/handoff-context-v1.schema.json` |
-| `canopy-snapshot-v1` | Cap | CLI `canopy api snapshot` | `septa/canopy-snapshot-v1.schema.json` |
-| `canopy-task-detail-v1` | Cap | CLI `canopy api task --task-id <id>` | `septa/canopy-task-detail-v1.schema.json` |
+| `canopy-snapshot-v1` | Cap | HTTP (planned) — currently CLI `canopy api snapshot` | `septa/canopy-snapshot-v1.schema.json` |
+| `canopy-task-detail-v1` | Cap | HTTP (planned) — currently CLI `canopy api task --task-id <id>` | `septa/canopy-task-detail-v1.schema.json` |
 | `canopy-notification-v1` | Cap and Annulus | Notification events | `septa/canopy-notification-v1.schema.json` |
 
 **Source files:**
