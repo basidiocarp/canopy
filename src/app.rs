@@ -136,9 +136,9 @@ fn handle_task_create(
     project_root: String,
     parent: Option<String>,
     required_role: Option<AgentRole>,
-    required_capabilities: Option<Vec<String>>,
-    auto_review: Option<bool>,
-    verification_required: Option<bool>,
+    required_capabilities: Vec<String>,
+    auto_review: bool,
+    verification_required: bool,
     scope: Vec<String>,
     workflow_id: Option<String>,
     phase_id: Option<String>,
@@ -152,7 +152,9 @@ fn handle_task_create(
         workflow_id,
         phase_id,
         workspace: None,
-        ..TaskCreationOptions::default()
+        branch_of: None,
+        branch_at: None,
+        branch_outcome: None,
     };
     let task = if let Some(parent_task_id) = parent.as_deref() {
         store.create_subtask_with_options(
@@ -384,13 +386,13 @@ fn handle_task_list(store: &Store, tree: bool) -> Result<()> {
 fn handle_task_list_view(
     store: &Store,
     project_root: Option<String>,
-    preset: Option<String>,
-    view: Option<String>,
-    sort: Option<String>,
+    preset: Option<canopy::models::SnapshotPreset>,
+    view: Option<canopy::models::TaskView>,
+    sort: Option<canopy::models::TaskSort>,
     priority_at_least: Option<canopy::models::TaskPriority>,
     severity_at_least: Option<canopy::models::TaskSeverity>,
     acknowledged: Option<bool>,
-    attention_at_least: Option<i32>,
+    attention_at_least: Option<canopy::models::AttentionLevel>,
 ) -> Result<()> {
     let snapshot = api::snapshot(
         store,
@@ -1160,17 +1162,27 @@ fn create_parent_task(
     project_root: &str,
 ) -> Result<Task> {
     let parent_description = Some(format!("Imported from {}", path.display()));
-    store.create_task_with_options(
-        title,
-        parent_description.as_deref(),
-        "handoff-import",
-        project_root,
-        &TaskCreationOptions {
-            required_role: Some(AgentRole::Implementer),
-            verification_required: true,
-            ..TaskCreationOptions::default()
-        },
-    )
+    Ok(store
+        .create_task_with_options(
+            title,
+            parent_description.as_deref(),
+            "handoff-import",
+            project_root,
+            &TaskCreationOptions {
+                required_role: Some(AgentRole::Implementer),
+                required_capabilities: Vec::new(),
+                auto_review: false,
+                verification_required: true,
+                scope: Vec::new(),
+                workflow_id: None,
+                phase_id: None,
+                workspace: None,
+                branch_of: None,
+                branch_at: None,
+                branch_outcome: None,
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{:?}", e))?)
 }
 
 fn add_parent_verification_evidence(
@@ -1179,18 +1191,21 @@ fn add_parent_verification_evidence(
     path: &Path,
     verify_script: &Path,
 ) -> Result<()> {
-    store.add_evidence(
-        &parent_task.task_id,
-        EvidenceSourceKind::ManualNote,
-        &path.display().to_string(),
-        "Verification command",
-        Some(&format!(
-            "Run: canopy task verify --task-id {} --script {}",
-            parent_task.task_id,
-            verify_script.display()
-        )),
-        EvidenceLinkRefs::default(),
-    )
+    store
+        .add_evidence(
+            &parent_task.task_id,
+            EvidenceSourceKind::ManualNote,
+            &path.display().to_string(),
+            "Verification command",
+            Some(&format!(
+                "Run: canopy task verify --task-id {} --script {}",
+                parent_task.task_id,
+                verify_script.display()
+            )),
+            EvidenceLinkRefs::default(),
+        )
+        .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+    Ok(())
 }
 
 fn create_imported_steps(
