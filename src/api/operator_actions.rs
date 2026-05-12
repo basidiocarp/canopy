@@ -2,62 +2,59 @@
 
 use super::*;
 
-#[allow(dead_code)]
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
-pub(super) fn derive_operator_actions(
-    tasks: &[Task],
-    task_attention: &[TaskAttention],
-    deadline_summaries: &[TaskDeadlineSummary],
-    relationship_summaries: &[TaskRelationshipSummary],
-    execution_summaries: &[TaskExecutionSummary],
-    handoffs: &[Handoff],
-    handoff_attention: &[HandoffAttention],
-    workflow_contexts: &[TaskWorkflowContext],
-) -> Vec<OperatorAction> {
-    let task_attention_by_id: HashMap<_, _> = task_attention
-        .iter()
-        .map(|attention| (attention.task_id.as_str(), attention))
-        .collect();
-    let deadline_summary_by_task_id: HashMap<_, _> = deadline_summaries
-        .iter()
-        .map(|summary| (summary.task_id.as_str(), summary))
-        .collect();
-    let relationship_summary_by_task_id: HashMap<_, _> = relationship_summaries
-        .iter()
-        .map(|summary| (summary.task_id.as_str(), summary))
-        .collect();
-    let execution_summary_by_task_id: HashMap<_, _> = execution_summaries
-        .iter()
-        .map(|summary| (summary.task_id.as_str(), summary))
-        .collect();
-    let handoff_attention_by_id: HashMap<_, _> = handoff_attention
-        .iter()
-        .map(|attention| (attention.handoff_id.as_str(), attention))
-        .collect();
-    let workflow_by_task_id: HashMap<_, _> = workflow_contexts
-        .iter()
-        .map(|context| (context.task_id.as_str(), context))
-        .collect();
+fn build_task_action_maps<'a>(
+    task_attention: &'a [TaskAttention],
+    deadline_summaries: &'a [TaskDeadlineSummary],
+    relationship_summaries: &'a [TaskRelationshipSummary],
+    execution_summaries: &'a [TaskExecutionSummary],
+    handoff_attention: &'a [HandoffAttention],
+    workflow_contexts: &'a [TaskWorkflowContext],
+) -> (
+    HashMap<&'a str, &'a TaskAttention>,
+    HashMap<&'a str, &'a TaskDeadlineSummary>,
+    HashMap<&'a str, &'a TaskRelationshipSummary>,
+    HashMap<&'a str, &'a TaskExecutionSummary>,
+    HashMap<&'a str, &'a HandoffAttention>,
+    HashMap<&'a str, &'a TaskWorkflowContext>,
+) {
+    (
+        task_attention
+            .iter()
+            .map(|attention| (attention.task_id.as_str(), attention))
+            .collect(),
+        deadline_summaries
+            .iter()
+            .map(|summary| (summary.task_id.as_str(), summary))
+            .collect(),
+        relationship_summaries
+            .iter()
+            .map(|summary| (summary.task_id.as_str(), summary))
+            .collect(),
+        execution_summaries
+            .iter()
+            .map(|summary| (summary.task_id.as_str(), summary))
+            .collect(),
+        handoff_attention
+            .iter()
+            .map(|attention| (attention.handoff_id.as_str(), attention))
+            .collect(),
+        workflow_contexts
+            .iter()
+            .map(|context| (context.task_id.as_str(), context))
+            .collect(),
+    )
+}
 
-    let mut actions = Vec::new();
-
-    for task in tasks {
-        let Some(attention) = task_attention_by_id.get(task.task_id.as_str()) else {
-            continue;
-        };
-        let deadline_summary = deadline_summary_by_task_id
-            .get(task.task_id.as_str())
-            .copied();
-        let relationship_summary = relationship_summary_by_task_id
-            .get(task.task_id.as_str())
-            .copied();
-        let execution_summary = execution_summary_by_task_id
-            .get(task.task_id.as_str())
-            .copied();
-        let workflow_context = workflow_by_task_id.get(task.task_id.as_str()).copied();
-
-        if attention
+fn add_task_actions(
+    task: &Task,
+    attention: &TaskAttention,
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    relationship_summary: Option<&TaskRelationshipSummary>,
+    execution_summary: Option<&TaskExecutionSummary>,
+    workflow_context: Option<&TaskWorkflowContext>,
+    actions: &mut Vec<OperatorAction>,
+) {
+    if attention
             .reasons
             .contains(&TaskAttentionReason::Unacknowledged)
         {
@@ -442,8 +439,13 @@ pub(super) fn derive_operator_actions(
                 expires_at: None,
             });
         }
-    }
+}
 
+fn add_handoff_actions<'a>(
+    handoffs: &'a [Handoff],
+    handoff_attention_by_id: &HashMap<&'a str, &'a HandoffAttention>,
+    actions: &mut Vec<OperatorAction>,
+) {
     for handoff in handoffs
         .iter()
         .filter(|handoff| handoff.status == crate::models::HandoffStatus::Open)
@@ -482,11 +484,171 @@ pub(super) fn derive_operator_actions(
             Freshness::Fresh | Freshness::Missing => {}
         }
     }
+}
+
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(super) fn derive_operator_actions(
+    tasks: &[Task],
+    task_attention: &[TaskAttention],
+    deadline_summaries: &[TaskDeadlineSummary],
+    relationship_summaries: &[TaskRelationshipSummary],
+    execution_summaries: &[TaskExecutionSummary],
+    handoffs: &[Handoff],
+    handoff_attention: &[HandoffAttention],
+    workflow_contexts: &[TaskWorkflowContext],
+) -> Vec<OperatorAction> {
+    let (
+        task_attention_by_id,
+        deadline_summary_by_task_id,
+        relationship_summary_by_task_id,
+        execution_summary_by_task_id,
+        handoff_attention_by_id,
+        workflow_by_task_id,
+    ) = build_task_action_maps(
+        task_attention,
+        deadline_summaries,
+        relationship_summaries,
+        execution_summaries,
+        handoff_attention,
+        workflow_contexts,
+    );
+
+    let mut actions = Vec::new();
+
+    for task in tasks {
+        let Some(attention) = task_attention_by_id.get(task.task_id.as_str()) else {
+            continue;
+        };
+        let deadline_summary = deadline_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
+        let relationship_summary = relationship_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
+        let execution_summary = execution_summary_by_task_id
+            .get(task.task_id.as_str())
+            .copied();
+        let workflow_context = workflow_by_task_id.get(task.task_id.as_str()).copied();
+
+        add_task_actions(
+            task,
+            attention,
+            deadline_summary,
+            relationship_summary,
+            execution_summary,
+            workflow_context,
+            &mut actions,
+        );
+    }
+
+    add_handoff_actions(handoffs, &handoff_attention_by_id, &mut actions);
 
     actions
 }
 
-#[allow(clippy::too_many_lines)]
+fn add_allowed_handoff_actions_for_item(
+    handoff: &Handoff,
+    level: AttentionLevel,
+    now: OffsetDateTime,
+    actions: &mut Vec<OperatorAction>,
+) {
+    if handoff_has_expired(handoff, now) {
+        actions.push(OperatorAction {
+            action_id: format!("handoff:{}:expire", handoff.handoff_id),
+            kind: OperatorActionKind::ExpireHandoff,
+            target_kind: OperatorActionTargetKind::Handoff,
+            level,
+            task_id: Some(handoff.task_id.clone()),
+            handoff_id: Some(handoff.handoff_id.clone()),
+            agent_id: Some(handoff.to_agent_id.clone()),
+            title: format!("Expire {}", handoff.handoff_id),
+            summary: "Resolve the open handoff as expired.".to_string(),
+            due_at: handoff.due_at.clone(),
+            expires_at: handoff.expires_at.clone(),
+        });
+        return;
+    }
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:accept", handoff.handoff_id),
+        kind: OperatorActionKind::AcceptHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Accept {}", handoff.handoff_id),
+        summary: "Accept the open handoff and record ownership or review uptake.".to_string(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:reject", handoff.handoff_id),
+        kind: OperatorActionKind::RejectHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Reject {}", handoff.handoff_id),
+        summary: "Reject the open handoff without completing the requested action.".to_string(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:cancel", handoff.handoff_id),
+        kind: OperatorActionKind::CancelHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Cancel {}", handoff.handoff_id),
+        summary: "Cancel the open handoff when the request is no longer needed.".to_string(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:complete", handoff.handoff_id),
+        kind: OperatorActionKind::CompleteHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Complete {}", handoff.handoff_id),
+        summary: "Mark the open handoff as completed once the requested work lands."
+            .to_string(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:follow_up", handoff.handoff_id),
+        kind: OperatorActionKind::FollowUpHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Follow up {}", handoff.handoff_id),
+        summary: handoff.summary.clone(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+    actions.push(OperatorAction {
+        action_id: format!("handoff:{}:expire", handoff.handoff_id),
+        kind: OperatorActionKind::ExpireHandoff,
+        target_kind: OperatorActionTargetKind::Handoff,
+        level,
+        task_id: Some(handoff.task_id.clone()),
+        handoff_id: Some(handoff.handoff_id.clone()),
+        agent_id: Some(handoff.to_agent_id.clone()),
+        title: format!("Expire {}", handoff.handoff_id),
+        summary: "Resolve the open handoff as expired.".to_string(),
+        due_at: handoff.due_at.clone(),
+        expires_at: handoff.expires_at.clone(),
+    });
+}
+
 pub(super) fn derive_allowed_handoff_actions(
     handoffs: &[Handoff],
     handoff_attention: &[HandoffAttention],
@@ -505,101 +667,7 @@ pub(super) fn derive_allowed_handoff_actions(
         let level = handoff_attention_by_id
             .get(handoff.handoff_id.as_str())
             .map_or(AttentionLevel::NeedsAttention, |item| item.level);
-        if handoff_has_expired(handoff, now) {
-            actions.push(OperatorAction {
-                action_id: format!("handoff:{}:expire", handoff.handoff_id),
-                kind: OperatorActionKind::ExpireHandoff,
-                target_kind: OperatorActionTargetKind::Handoff,
-                level,
-                task_id: Some(handoff.task_id.clone()),
-                handoff_id: Some(handoff.handoff_id.clone()),
-                agent_id: Some(handoff.to_agent_id.clone()),
-                title: format!("Expire {}", handoff.handoff_id),
-                summary: "Resolve the open handoff as expired.".to_string(),
-                due_at: handoff.due_at.clone(),
-                expires_at: handoff.expires_at.clone(),
-            });
-            continue;
-        }
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:accept", handoff.handoff_id),
-            kind: OperatorActionKind::AcceptHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Accept {}", handoff.handoff_id),
-            summary: "Accept the open handoff and record ownership or review uptake.".to_string(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:reject", handoff.handoff_id),
-            kind: OperatorActionKind::RejectHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Reject {}", handoff.handoff_id),
-            summary: "Reject the open handoff without completing the requested action.".to_string(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:cancel", handoff.handoff_id),
-            kind: OperatorActionKind::CancelHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Cancel {}", handoff.handoff_id),
-            summary: "Cancel the open handoff when the request is no longer needed.".to_string(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:complete", handoff.handoff_id),
-            kind: OperatorActionKind::CompleteHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Complete {}", handoff.handoff_id),
-            summary: "Mark the open handoff as completed once the requested work lands."
-                .to_string(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:follow_up", handoff.handoff_id),
-            kind: OperatorActionKind::FollowUpHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Follow up {}", handoff.handoff_id),
-            summary: handoff.summary.clone(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
-        actions.push(OperatorAction {
-            action_id: format!("handoff:{}:expire", handoff.handoff_id),
-            kind: OperatorActionKind::ExpireHandoff,
-            target_kind: OperatorActionTargetKind::Handoff,
-            level,
-            task_id: Some(handoff.task_id.clone()),
-            handoff_id: Some(handoff.handoff_id.clone()),
-            agent_id: Some(handoff.to_agent_id.clone()),
-            title: format!("Expire {}", handoff.handoff_id),
-            summary: "Resolve the open handoff as expired.".to_string(),
-            due_at: handoff.due_at.clone(),
-            expires_at: handoff.expires_at.clone(),
-        });
+        add_allowed_handoff_actions_for_item(handoff, level, now, &mut actions);
     }
 
     actions

@@ -23,7 +23,6 @@ use super::{
 };
 
 impl Store {
-    #[allow(clippy::too_many_lines)]
     pub(super) fn apply_task_creation_action(
         &self,
         task_id: &str,
@@ -42,546 +41,625 @@ impl Store {
         }
 
         let task = match action {
-            OperatorActionKind::RecordDecision => self.in_transaction(|conn| {
-                let task = get_task_in_connection(conn, task_id)?;
-                if task.status != TaskStatus::ReviewRequired
-                    || task.verification_state != VerificationState::Pending
-                {
-                    return Err(StoreError::Validation(
-                        "record_decision requires a task awaiting review decision".to_string(),
-                    ));
-                }
-
-                let task_events = super::helpers::list_task_events_in_connection(conn, task_id)?;
-                let review_cycle_context =
-                    crate::models::derive_review_cycle_context(&task_events);
-                if !review_cycle_context.has_evidence {
-                    return Err(StoreError::Validation(
-                        "record_decision requires current-cycle evidence support".to_string(),
-                    ));
-                }
-                if review_cycle_context.has_council_decision {
-                    return Err(StoreError::Validation(
-                        "record_decision requires a task without a current-cycle decision"
-                            .to_string(),
-                    ));
-                }
-                if has_active_blockers_in_connection(conn, task_id)?
-                    || super::helpers::has_open_follow_up_children_in_connection(conn, task_id)?
-                {
-                    return Err(StoreError::Validation(
-                        "record_decision requires review tasks without graph pressure".to_string(),
-                    ));
-                }
-                if super::helpers::has_unresolved_review_handoffs_in_connection(
-                    conn,
-                    task_id,
-                    &[
-                        HandoffType::RequestReview,
-                        HandoffType::RequestVerification,
-                    ],
-                )? {
-                    return Err(StoreError::Validation(
-                        "record_decision requires review handoff follow-through to resolve first"
-                            .to_string(),
-                    ));
-                }
-                if super::helpers::has_unresolved_review_handoffs_in_connection(
-                    conn,
-                    task_id,
-                    &[HandoffType::RecordDecision, HandoffType::CloseTask],
-                )? {
-                    return Err(StoreError::Validation(
-                        "record_decision requires decision handoff follow-through to resolve first"
-                            .to_string(),
-                    ));
-                }
-
-                let message = add_council_message_in_connection(
-                    conn,
-                    task_id,
-                    input.author_agent_id.ok_or_else(|| {
-                        StoreError::Validation(
-                            "record_decision requires an author_agent_id".to_string(),
-                        )
-                    })?,
-                    CouncilMessageType::Decision,
-                    input
-                        .message_body
-                        .filter(|body| !body.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "record_decision requires a message_body".to_string(),
-                            )
-                        })?,
-                )?;
-                let note = format!(
-                    "action=record_decision; message_id={}; author_agent_id={}; message_type={}; body={}",
-                    message.message_id, message.author_agent_id, message.message_type, message.body
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::CouncilMessagePosted,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::SummonCouncilSession => self.in_transaction(|conn| {
-                let task = get_task_in_connection(conn, task_id)?;
-                summon_task_council_in_connection(conn, &task, None)?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::CouncilSessionSummoned,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(
-                            "council_session=reviewer,architect; transcript_ref=none; state=open",
-                        ),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::CreateHandoff => self.in_transaction(|conn| {
-                let handoff = create_handoff_in_connection(
-                    conn,
-                    task_id,
-                    input.from_agent_id.ok_or_else(|| {
-                        StoreError::Validation(
-                            "create_handoff requires a from_agent_id".to_string(),
-                        )
-                    })?,
-                    input.to_agent_id.ok_or_else(|| {
-                        StoreError::Validation("create_handoff requires a to_agent_id".to_string())
-                    })?,
-                    input.handoff_type.ok_or_else(|| {
-                        StoreError::Validation("create_handoff requires a handoff_type".to_string())
-                    })?,
-                    input
-                        .handoff_summary
-                        .filter(|summary| !summary.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "create_handoff requires a handoff_summary".to_string(),
-                            )
-                        })?,
-                    input.requested_action,
-                    None,
-                    None,
-                    None,
-                    HandoffTiming {
-                        due_at: input.due_at,
-                        expires_at: input.expires_at,
-                    },
-                )?;
-                let task = get_task_in_connection(conn, task_id)?;
-                let note = format!(
-                    "handoff_id={}; from_agent_id={}; to_agent_id={}; handoff_type={}; summary={}",
-                    handoff.handoff_id,
-                    handoff.from_agent_id,
-                    handoff.to_agent_id,
-                    handoff.handoff_type,
-                    handoff.summary
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::HandoffCreated,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::PostCouncilMessage => self.in_transaction(|conn| {
-                let message = add_council_message_in_connection(
-                    conn,
-                    task_id,
-                    input.author_agent_id.ok_or_else(|| {
-                        StoreError::Validation(
-                            "post_council_message requires an author_agent_id".to_string(),
-                        )
-                    })?,
-                    input.message_type.ok_or_else(|| {
-                        StoreError::Validation(
-                            "post_council_message requires a message_type".to_string(),
-                        )
-                    })?,
-                    input
-                        .message_body
-                        .filter(|body| !body.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "post_council_message requires a message_body".to_string(),
-                            )
-                        })?,
-                )?;
-                let task = get_task_in_connection(conn, task_id)?;
-                let note = format!(
-                    "message_id={}; author_agent_id={}; message_type={}; body={}",
-                    message.message_id, message.author_agent_id, message.message_type, message.body
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::CouncilMessagePosted,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(task.verification_state),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::AttachEvidence => self.in_transaction(|conn| {
-                let evidence = add_evidence_in_connection(
-                    conn,
-                    task_id,
-                    input.evidence_source_kind.ok_or_else(|| {
-                        StoreError::Validation(
-                            "attach_evidence requires an evidence_source_kind".to_string(),
-                        )
-                    })?,
-                    input
-                        .evidence_source_ref
-                        .filter(|source_ref| !source_ref.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "attach_evidence requires an evidence_source_ref".to_string(),
-                            )
-                        })?,
-                    input
-                        .evidence_label
-                        .filter(|label| !label.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "attach_evidence requires an evidence_label".to_string(),
-                            )
-                        })?,
-                    input.evidence_summary,
-                    EvidenceLinkRefs {
-                        related_handoff_id: input.related_handoff_id,
-                        session_id: input.related_session_id,
-                        memory_query: input.related_memory_query,
-                        symbol: input.related_symbol,
-                        file: input.related_file,
-                    },
-                )?;
-                // EvidenceAttached event is emitted inside add_evidence_in_connection.
-                // Do not emit a second event here — one emission per attachment.
-                let _ = evidence;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::AttachReviewAnnotation => self.in_transaction(|conn| {
-                use crate::models::ReviewAnnotationAction;
-                let task = get_task_in_connection(conn, task_id)?;
-                let file_path = input.review_annotation_file_path.ok_or_else(|| {
-                    StoreError::Validation("attach_review_annotation requires a file_path".to_string())
-                })?;
-                let start_line = input.review_annotation_start_line.ok_or_else(|| {
-                    StoreError::Validation("attach_review_annotation requires a start_line".to_string())
-                })?;
-                let end_line = input.review_annotation_end_line.ok_or_else(|| {
-                    StoreError::Validation("attach_review_annotation requires an end_line".to_string())
-                })?;
-                let action = input.review_annotation_action.ok_or_else(|| {
-                    StoreError::Validation("attach_review_annotation requires an action".to_string())
-                })?;
-                let comment = input.review_annotation_comment.unwrap_or("");
-                let anchor_hash = input.review_annotation_anchor_hash.ok_or_else(|| {
-                    StoreError::Validation("attach_review_annotation requires an anchor_hash".to_string())
-                })?;
-
-                insert_review_annotation_in_connection(
-                    conn, task_id, file_path, start_line, end_line, action, comment, anchor_hash, changed_by,
-                )?;
-
-                // Update verification_state atomically with the annotation insert.
-                let new_verification = match action {
-                    ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise => {
-                        crate::models::VerificationState::Failed
-                    }
-                    ReviewAnnotationAction::Approve => {
-                        // All-approve gate: if no reject/revise annotations remain, set Passed.
-                        let non_approve_count: i64 = conn.query_row(
-                            "SELECT COUNT(*) FROM review_annotations WHERE task_id = ?1 AND action != 'approve'",
-                            [task_id],
-                            |r| r.get(0),
-                        )?;
-                        if non_approve_count == 0 {
-                            crate::models::VerificationState::Passed
-                        } else {
-                            task.verification_state
-                        }
-                    }
-                };
-                conn.execute(
-                    "UPDATE tasks SET verification_state = ?2, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
-                    params![task_id, new_verification.to_string()],
-                )?;
-
-                let note = format!("annotation: {action} {file_path}:{start_line}-{end_line}");
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ReviewAnnotationAdded,
-                        actor: changed_by,
-                        from_status: Some(task.status),
-                        to_status: task.status,
-                        verification_state: Some(new_verification),
-                        owner_agent_id: task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(&note),
-                    },
-                )?;
-
-                // Notify the assigned agent on reject/revise.
-                if matches!(action, ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise) {
-                    if let Some(ref owner_id) = task.owner_agent_id {
-                        let notif = Notification {
-                            notification_id: ulid::Ulid::new().to_string(),
-                            event_type: NotificationEventType::EvidenceReceived,
-                            task_id: Some(task_id.to_string()),
-                            agent_id: Some(owner_id.clone()),
-                            payload: serde_json::json!({
-                                "kind": "review_annotation",
-                                "action": action.to_string(),
-                                "file_path": file_path,
-                                "start_line": start_line,
-                                "end_line": end_line,
-                            }),
-                            seen: false,
-                            created_at: chrono::Utc::now().to_rfc3339(),
-                        };
-                        let _ = super::notifications::insert_notification(conn, &notif);
-                    }
-                }
-
-                touch_task_in_connection(conn, task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::CreateFollowUpTask => self.in_transaction(|conn| {
-                let parent_task = get_task_in_connection(conn, task_id)?;
-                let follow_up = create_task_in_connection(
-                    conn,
-                    input
-                        .follow_up_title
-                        .filter(|title| !title.trim().is_empty())
-                        .ok_or_else(|| {
-                            StoreError::Validation(
-                                "create_follow_up_task requires a follow_up_title".to_string(),
-                            )
-                        })?,
-                    input.follow_up_description,
-                    changed_by,
-                    &parent_task.project_root,
-                    &TaskCreationOptions::default(),
-                )?;
-                let note = format!(
-                    "follow_up_task_id={}; title={}",
-                    follow_up.task_id, follow_up.title
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::FollowUpTaskCreated,
-                        actor: changed_by,
-                        from_status: Some(parent_task.status),
-                        to_status: parent_task.status,
-                        verification_state: Some(parent_task.verification_state),
-                        owner_agent_id: parent_task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                let relationship = create_task_relationship_in_connection(
-                    conn,
-                    task_id,
-                    &follow_up.task_id,
-                    TaskRelationshipKind::FollowUp,
-                    changed_by,
-                )?;
-                let relation_note = format!(
-                    "relationship_id={}; kind={}; related_task_id={}",
-                    relationship.relationship_id, relationship.kind, follow_up.task_id
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::RelationshipUpdated,
-                        actor: changed_by,
-                        from_status: Some(parent_task.status),
-                        to_status: parent_task.status,
-                        verification_state: Some(parent_task.verification_state),
-                        owner_agent_id: parent_task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(relation_note.as_str()),
-                    },
-                )?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id: &follow_up.task_id,
-                        event_type: TaskEventType::RelationshipUpdated,
-                        actor: changed_by,
-                        from_status: Some(follow_up.status),
-                        to_status: follow_up.status,
-                        verification_state: Some(follow_up.verification_state),
-                        owner_agent_id: follow_up.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(relation_note.as_str()),
-                    },
-                )?;
-                get_task_in_connection(conn, &follow_up.task_id)?;
-                touch_task_in_connection(conn, task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::LinkTaskDependency => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                let related_task_id = input.related_task_id.ok_or_else(|| {
-                    StoreError::Validation(
-                        "link_task_dependency requires a related_task_id".to_string(),
-                    )
-                })?;
-                let relationship_role = input.relationship_role.ok_or_else(|| {
-                    StoreError::Validation(
-                        "link_task_dependency requires a relationship_role".to_string(),
-                    )
-                })?;
-                let (source_task_id, target_task_id, note_role, rel_kind) = match relationship_role {
-                    TaskRelationshipRole::Blocks => {
-                        (task_id, related_task_id, TaskRelationshipRole::Blocks, TaskRelationshipKind::Blocks)
-                    }
-                    TaskRelationshipRole::BlockedBy => {
-                        (related_task_id, task_id, TaskRelationshipRole::BlockedBy, TaskRelationshipKind::Blocks)
-                    }
-                    TaskRelationshipRole::DependsOn => {
-                        (task_id, related_task_id, TaskRelationshipRole::DependsOn, TaskRelationshipKind::DependsOn)
-                    }
-                    TaskRelationshipRole::DependencyOf => {
-                        (related_task_id, task_id, TaskRelationshipRole::DependencyOf, TaskRelationshipKind::DependsOn)
-                    }
-                    TaskRelationshipRole::FollowUpParent
-                    | TaskRelationshipRole::FollowUpChild
-                    | TaskRelationshipRole::Parent
-                    | TaskRelationshipRole::Child => {
-                        return Err(StoreError::Validation(
-                            "link_task_dependency only supports blocks, blocked_by, depends_on, or dependency_of roles"
-                                .to_string(),
-                        ));
-                    }
-                };
-                let relationship = create_task_relationship_in_connection(
-                    conn,
-                    source_task_id,
-                    target_task_id,
-                    rel_kind,
-                    changed_by,
-                )?;
-                let related_task = get_task_in_connection(conn, related_task_id)?;
-                let note = format!(
-                    "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
-                    relationship.relationship_id,
-                    relationship.kind,
-                    note_role,
-                    related_task.task_id,
-                    related_task.title
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::RelationshipUpdated,
-                        actor: changed_by,
-                        from_status: Some(current_task.status),
-                        to_status: current_task.status,
-                        verification_state: Some(current_task.verification_state),
-                        owner_agent_id: current_task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(note.as_str()),
-                    },
-                )?;
-                let inverse_role = match relationship_role {
-                    TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
-                    TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
-                    TaskRelationshipRole::DependsOn => TaskRelationshipRole::DependencyOf,
-                    TaskRelationshipRole::DependencyOf => TaskRelationshipRole::DependsOn,
-                    TaskRelationshipRole::FollowUpParent
-                    | TaskRelationshipRole::FollowUpChild
-                    | TaskRelationshipRole::Parent
-                    | TaskRelationshipRole::Child => {
-                        unreachable!("validated above")
-                    }
-                };
-                let inverse_note = format!(
-                    "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
-                    relationship.relationship_id,
-                    relationship.kind,
-                    inverse_role,
-                    current_task.task_id,
-                    current_task.title
-                );
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id: &related_task.task_id,
-                        event_type: TaskEventType::RelationshipUpdated,
-                        actor: changed_by,
-                        from_status: Some(related_task.status),
-                        to_status: related_task.status,
-                        verification_state: Some(related_task.verification_state),
-                        owner_agent_id: related_task.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: Some(inverse_note.as_str()),
-                    },
-                )?;
-                touch_task_in_connection(conn, related_task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
+            OperatorActionKind::RecordDecision => {
+                self.apply_record_decision_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::SummonCouncilSession => {
+                self.apply_summon_council_action(task_id, changed_by)?
+            }
+            OperatorActionKind::CreateHandoff => {
+                self.apply_create_handoff_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::PostCouncilMessage => {
+                self.apply_post_council_message_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::AttachEvidence => {
+                self.apply_attach_evidence_action(task_id, input)?
+            }
+            OperatorActionKind::AttachReviewAnnotation => {
+                self.apply_attach_review_annotation_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::CreateFollowUpTask => {
+                self.apply_create_follow_up_task_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::LinkTaskDependency => {
+                self.apply_link_task_dependency_action(task_id, changed_by, input)?
+            }
             _ => return Ok(None),
         };
 
         Ok(Some(task))
     }
 
-    #[allow(clippy::too_many_lines)]
+    fn apply_record_decision_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let task = get_task_in_connection(conn, task_id)?;
+            if task.status != TaskStatus::ReviewRequired
+                || task.verification_state != VerificationState::Pending
+            {
+                return Err(StoreError::Validation(
+                    "record_decision requires a task awaiting review decision".to_string(),
+                ));
+            }
+
+            let task_events = super::helpers::list_task_events_in_connection(conn, task_id)?;
+            let review_cycle_context =
+                crate::models::derive_review_cycle_context(&task_events);
+            if !review_cycle_context.has_evidence {
+                return Err(StoreError::Validation(
+                    "record_decision requires current-cycle evidence support".to_string(),
+                ));
+            }
+            if review_cycle_context.has_council_decision {
+                return Err(StoreError::Validation(
+                    "record_decision requires a task without a current-cycle decision"
+                        .to_string(),
+                ));
+            }
+            if has_active_blockers_in_connection(conn, task_id)?
+                || super::helpers::has_open_follow_up_children_in_connection(conn, task_id)?
+            {
+                return Err(StoreError::Validation(
+                    "record_decision requires review tasks without graph pressure".to_string(),
+                ));
+            }
+            if super::helpers::has_unresolved_review_handoffs_in_connection(
+                conn,
+                task_id,
+                &[
+                    HandoffType::RequestReview,
+                    HandoffType::RequestVerification,
+                ],
+            )? {
+                return Err(StoreError::Validation(
+                    "record_decision requires review handoff follow-through to resolve first"
+                        .to_string(),
+                ));
+            }
+            if super::helpers::has_unresolved_review_handoffs_in_connection(
+                conn,
+                task_id,
+                &[HandoffType::RecordDecision, HandoffType::CloseTask],
+            )? {
+                return Err(StoreError::Validation(
+                    "record_decision requires decision handoff follow-through to resolve first"
+                        .to_string(),
+                ));
+            }
+
+            let message = add_council_message_in_connection(
+                conn,
+                task_id,
+                input.author_agent_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "record_decision requires an author_agent_id".to_string(),
+                    )
+                })?,
+                CouncilMessageType::Decision,
+                input
+                    .message_body
+                    .filter(|body| !body.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "record_decision requires a message_body".to_string(),
+                        )
+                    })?,
+            )?;
+            let note = format!(
+                "action=record_decision; message_id={}; author_agent_id={}; message_type={}; body={}",
+                message.message_id, message.author_agent_id, message.message_type, message.body
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::CouncilMessagePosted,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note.as_str()),
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_summon_council_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let task = get_task_in_connection(conn, task_id)?;
+            summon_task_council_in_connection(conn, &task, None)?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::CouncilSessionSummoned,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(
+                        "council_session=reviewer,architect; transcript_ref=none; state=open",
+                    ),
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_create_handoff_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let handoff = create_handoff_in_connection(
+                conn,
+                task_id,
+                input.from_agent_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "create_handoff requires a from_agent_id".to_string(),
+                    )
+                })?,
+                input.to_agent_id.ok_or_else(|| {
+                    StoreError::Validation("create_handoff requires a to_agent_id".to_string())
+                })?,
+                input.handoff_type.ok_or_else(|| {
+                    StoreError::Validation("create_handoff requires a handoff_type".to_string())
+                })?,
+                input
+                    .handoff_summary
+                    .filter(|summary| !summary.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "create_handoff requires a handoff_summary".to_string(),
+                        )
+                    })?,
+                input.requested_action,
+                None,
+                None,
+                None,
+                HandoffTiming {
+                    due_at: input.due_at,
+                    expires_at: input.expires_at,
+                },
+            )?;
+            let task = get_task_in_connection(conn, task_id)?;
+            let note = format!(
+                "handoff_id={}; from_agent_id={}; to_agent_id={}; handoff_type={}; summary={}",
+                handoff.handoff_id,
+                handoff.from_agent_id,
+                handoff.to_agent_id,
+                handoff.handoff_type,
+                handoff.summary
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::HandoffCreated,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note.as_str()),
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_post_council_message_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let message = add_council_message_in_connection(
+                conn,
+                task_id,
+                input.author_agent_id.ok_or_else(|| {
+                    StoreError::Validation(
+                        "post_council_message requires an author_agent_id".to_string(),
+                    )
+                })?,
+                input.message_type.ok_or_else(|| {
+                    StoreError::Validation(
+                        "post_council_message requires a message_type".to_string(),
+                    )
+                })?,
+                input
+                    .message_body
+                    .filter(|body| !body.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "post_council_message requires a message_body".to_string(),
+                        )
+                    })?,
+            )?;
+            let task = get_task_in_connection(conn, task_id)?;
+            let note = format!(
+                "message_id={}; author_agent_id={}; message_type={}; body={}",
+                message.message_id, message.author_agent_id, message.message_type, message.body
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::CouncilMessagePosted,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(task.verification_state),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note.as_str()),
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_attach_evidence_action(
+        &self,
+        task_id: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let _evidence = add_evidence_in_connection(
+                conn,
+                task_id,
+                input.evidence_source_kind.ok_or_else(|| {
+                    StoreError::Validation(
+                        "attach_evidence requires an evidence_source_kind".to_string(),
+                    )
+                })?,
+                input
+                    .evidence_source_ref
+                    .filter(|source_ref| !source_ref.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "attach_evidence requires an evidence_source_ref".to_string(),
+                        )
+                    })?,
+                input
+                    .evidence_label
+                    .filter(|label| !label.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "attach_evidence requires an evidence_label".to_string(),
+                        )
+                    })?,
+                input.evidence_summary,
+                EvidenceLinkRefs {
+                    related_handoff_id: input.related_handoff_id,
+                    session_id: input.related_session_id,
+                    memory_query: input.related_memory_query,
+                    symbol: input.related_symbol,
+                    file: input.related_file,
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_attach_review_annotation_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            use crate::models::ReviewAnnotationAction;
+            let task = get_task_in_connection(conn, task_id)?;
+            let file_path = input.review_annotation_file_path.ok_or_else(|| {
+                StoreError::Validation("attach_review_annotation requires a file_path".to_string())
+            })?;
+            let start_line = input.review_annotation_start_line.ok_or_else(|| {
+                StoreError::Validation("attach_review_annotation requires a start_line".to_string())
+            })?;
+            let end_line = input.review_annotation_end_line.ok_or_else(|| {
+                StoreError::Validation("attach_review_annotation requires an end_line".to_string())
+            })?;
+            let action = input.review_annotation_action.ok_or_else(|| {
+                StoreError::Validation("attach_review_annotation requires an action".to_string())
+            })?;
+            let comment = input.review_annotation_comment.unwrap_or("");
+            let anchor_hash = input.review_annotation_anchor_hash.ok_or_else(|| {
+                StoreError::Validation("attach_review_annotation requires an anchor_hash".to_string())
+            })?;
+
+            insert_review_annotation_in_connection(
+                conn, task_id, file_path, start_line, end_line, action, comment, anchor_hash, changed_by,
+            )?;
+
+            let new_verification = match action {
+                ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise => {
+                    crate::models::VerificationState::Failed
+                }
+                ReviewAnnotationAction::Approve => {
+                    let non_approve_count: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM review_annotations WHERE task_id = ?1 AND action != 'approve'",
+                        [task_id],
+                        |r| r.get(0),
+                    )?;
+                    if non_approve_count == 0 {
+                        crate::models::VerificationState::Passed
+                    } else {
+                        task.verification_state
+                    }
+                }
+            };
+            conn.execute(
+                "UPDATE tasks SET verification_state = ?2, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+                params![task_id, new_verification.to_string()],
+            )?;
+
+            let note = format!("annotation: {action} {file_path}:{start_line}-{end_line}");
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ReviewAnnotationAdded,
+                    actor: changed_by,
+                    from_status: Some(task.status),
+                    to_status: task.status,
+                    verification_state: Some(new_verification),
+                    owner_agent_id: task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(&note),
+                },
+            )?;
+
+            if matches!(action, ReviewAnnotationAction::Reject | ReviewAnnotationAction::Revise) {
+                if let Some(ref owner_id) = task.owner_agent_id {
+                    let notif = Notification {
+                        notification_id: ulid::Ulid::new().to_string(),
+                        event_type: NotificationEventType::EvidenceReceived,
+                        task_id: Some(task_id.to_string()),
+                        agent_id: Some(owner_id.clone()),
+                        payload: serde_json::json!({
+                            "kind": "review_annotation",
+                            "action": action.to_string(),
+                            "file_path": file_path,
+                            "start_line": start_line,
+                            "end_line": end_line,
+                        }),
+                        seen: false,
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ = super::notifications::insert_notification(conn, &notif);
+                }
+            }
+
+            touch_task_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_create_follow_up_task_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let parent_task = get_task_in_connection(conn, task_id)?;
+            let follow_up = create_task_in_connection(
+                conn,
+                input
+                    .follow_up_title
+                    .filter(|title| !title.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::Validation(
+                            "create_follow_up_task requires a follow_up_title".to_string(),
+                        )
+                    })?,
+                input.follow_up_description,
+                changed_by,
+                &parent_task.project_root,
+                &TaskCreationOptions::default(),
+            )?;
+            let note = format!(
+                "follow_up_task_id={}; title={}",
+                follow_up.task_id, follow_up.title
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::FollowUpTaskCreated,
+                    actor: changed_by,
+                    from_status: Some(parent_task.status),
+                    to_status: parent_task.status,
+                    verification_state: Some(parent_task.verification_state),
+                    owner_agent_id: parent_task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note.as_str()),
+                },
+            )?;
+            let relationship = create_task_relationship_in_connection(
+                conn,
+                task_id,
+                &follow_up.task_id,
+                TaskRelationshipKind::FollowUp,
+                changed_by,
+            )?;
+            let relation_note = format!(
+                "relationship_id={}; kind={}; related_task_id={}",
+                relationship.relationship_id, relationship.kind, follow_up.task_id
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::RelationshipUpdated,
+                    actor: changed_by,
+                    from_status: Some(parent_task.status),
+                    to_status: parent_task.status,
+                    verification_state: Some(parent_task.verification_state),
+                    owner_agent_id: parent_task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(relation_note.as_str()),
+                },
+            )?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id: &follow_up.task_id,
+                    event_type: TaskEventType::RelationshipUpdated,
+                    actor: changed_by,
+                    from_status: Some(follow_up.status),
+                    to_status: follow_up.status,
+                    verification_state: Some(follow_up.verification_state),
+                    owner_agent_id: follow_up.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(relation_note.as_str()),
+                },
+            )?;
+            let _ = get_task_in_connection(conn, &follow_up.task_id)?;
+            touch_task_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_link_task_dependency_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let current_task = get_task_in_connection(conn, task_id)?;
+            let related_task_id = input.related_task_id.ok_or_else(|| {
+                StoreError::Validation(
+                    "link_task_dependency requires a related_task_id".to_string(),
+                )
+            })?;
+            let relationship_role = input.relationship_role.ok_or_else(|| {
+                StoreError::Validation(
+                    "link_task_dependency requires a relationship_role".to_string(),
+                )
+            })?;
+            let (source_task_id, target_task_id, note_role, rel_kind) = match relationship_role {
+                TaskRelationshipRole::Blocks => {
+                    (task_id, related_task_id, TaskRelationshipRole::Blocks, TaskRelationshipKind::Blocks)
+                }
+                TaskRelationshipRole::BlockedBy => {
+                    (related_task_id, task_id, TaskRelationshipRole::BlockedBy, TaskRelationshipKind::Blocks)
+                }
+                TaskRelationshipRole::DependsOn => {
+                    (task_id, related_task_id, TaskRelationshipRole::DependsOn, TaskRelationshipKind::DependsOn)
+                }
+                TaskRelationshipRole::DependencyOf => {
+                    (related_task_id, task_id, TaskRelationshipRole::DependencyOf, TaskRelationshipKind::DependsOn)
+                }
+                TaskRelationshipRole::FollowUpParent
+                | TaskRelationshipRole::FollowUpChild
+                | TaskRelationshipRole::Parent
+                | TaskRelationshipRole::Child => {
+                    return Err(StoreError::Validation(
+                        "link_task_dependency only supports blocks, blocked_by, depends_on, or dependency_of roles"
+                            .to_string(),
+                    ));
+                }
+            };
+            let relationship = create_task_relationship_in_connection(
+                conn,
+                source_task_id,
+                target_task_id,
+                rel_kind,
+                changed_by,
+            )?;
+            let related_task = get_task_in_connection(conn, related_task_id)?;
+            let note = format!(
+                "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+                relationship.relationship_id,
+                relationship.kind,
+                note_role,
+                related_task.task_id,
+                related_task.title
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::RelationshipUpdated,
+                    actor: changed_by,
+                    from_status: Some(current_task.status),
+                    to_status: current_task.status,
+                    verification_state: Some(current_task.verification_state),
+                    owner_agent_id: current_task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(note.as_str()),
+                },
+            )?;
+            let inverse_role = match relationship_role {
+                TaskRelationshipRole::Blocks => TaskRelationshipRole::BlockedBy,
+                TaskRelationshipRole::BlockedBy => TaskRelationshipRole::Blocks,
+                TaskRelationshipRole::DependsOn => TaskRelationshipRole::DependencyOf,
+                TaskRelationshipRole::DependencyOf => TaskRelationshipRole::DependsOn,
+                TaskRelationshipRole::FollowUpParent
+                | TaskRelationshipRole::FollowUpChild
+                | TaskRelationshipRole::Parent
+                | TaskRelationshipRole::Child => {
+                    unreachable!("validated above")
+                }
+            };
+            let inverse_note = format!(
+                "relationship_id={}; kind={}; role={}; related_task_id={}; related_title={}",
+                relationship.relationship_id,
+                relationship.kind,
+                inverse_role,
+                current_task.task_id,
+                current_task.title
+            );
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id: &related_task.task_id,
+                    event_type: TaskEventType::RelationshipUpdated,
+                    actor: changed_by,
+                    from_status: Some(related_task.status),
+                    to_status: related_task.status,
+                    verification_state: Some(related_task.verification_state),
+                    owner_agent_id: related_task.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: Some(inverse_note.as_str()),
+                },
+            )?;
+            touch_task_in_connection(conn, related_task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
     pub(super) fn apply_task_execution_action(
         &self,
         task_id: &str,
@@ -590,339 +668,385 @@ impl Store {
         input: &TaskOperatorActionInput<'_>,
     ) -> StoreResult<Option<Task>> {
         let task = match action {
-            OperatorActionKind::ClaimTask => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                if current_task.owner_agent_id.is_some() || current_task.status != TaskStatus::Open
-                {
-                    return Err(StoreError::Validation(
-                        "claim_task requires an unowned open task".to_string(),
-                    ));
-                }
-                if has_active_blockers_in_connection(conn, task_id)? {
-                    return Err(StoreError::Validation(
-                        "claim_task requires the task to have no unresolved hard blockers"
-                            .to_string(),
-                    ));
-                }
-                let acting_agent_id = input.acting_agent_id.ok_or_else(|| {
-                    StoreError::Validation("claim_task requires an acting_agent_id".to_string())
-                })?;
-                super::ensure_agent_fresh_for_claim(
-                    self,
-                    acting_agent_id,
-                    CLAIM_STALE_THRESHOLD_SECS,
-                )?;
-                assign_task_in_connection(
-                    conn,
-                    task_id,
-                    acting_agent_id,
-                    acting_agent_id,
-                    input.note,
-                )?;
-                let updated = get_task_in_connection(conn, task_id)?;
-                let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ExecutionUpdated,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: updated.status,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: Some(ExecutionActionKind::ClaimTask),
-                        execution_duration_seconds: None,
-                        note: event_note.as_deref(),
-                    },
-                )?;
-                get_task_in_connection(conn, task_id)
-            })?,
+            OperatorActionKind::ClaimTask => self.apply_claim_task_action(task_id, changed_by, input)?,
             OperatorActionKind::StartTask | OperatorActionKind::ResumeTask => {
-                self.in_transaction(|conn| {
-                    let action_name = match action {
-                        OperatorActionKind::StartTask => "start_task",
-                        OperatorActionKind::ResumeTask => "resume_task",
-                        _ => unreachable!("execution branch only handles start/resume"),
-                    };
-                    let execution_action = match action {
-                        OperatorActionKind::StartTask => ExecutionActionKind::StartTask,
-                        OperatorActionKind::ResumeTask => ExecutionActionKind::ResumeTask,
-                        _ => unreachable!("execution branch only handles start/resume"),
-                    };
-                    let requires_prior_execution = action == OperatorActionKind::ResumeTask;
-                    let current_task = get_task_in_connection(conn, task_id)?;
-                    if current_task.status != TaskStatus::Assigned {
-                        return Err(StoreError::Validation(format!(
-                            "{action_name} requires an assigned task"
-                        )));
-                    }
-                    if has_active_blockers_in_connection(conn, task_id)? {
-                        return Err(StoreError::Validation(format!(
-                            "{action_name} requires the task to have no unresolved hard blockers"
-                        )));
-                    }
-                    let has_prior_execution =
-                        task_has_prior_execution_in_connection(conn, task_id)?;
-                    if requires_prior_execution && !has_prior_execution {
-                        return Err(StoreError::Validation(
-                            "resume_task requires a previously started task".to_string(),
-                        ));
-                    }
-                    if !requires_prior_execution && has_prior_execution {
-                        return Err(StoreError::Validation(
-                            "start_task requires a task that has not started execution yet"
-                                .to_string(),
-                        ));
-                    }
-                    let acting_agent_id = validate_execution_actor(
-                        &current_task,
-                        input.acting_agent_id,
-                        action_name,
-                    )?;
-                    conn.execute(
-                        r"
-                    UPDATE tasks
-                    SET status = 'in_progress',
-                        blocked_reason = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE task_id = ?1
-                    ",
-                        [task_id],
-                    )?;
-                    sync_owner_for_task_status(conn, task_id, TaskStatus::InProgress)?;
-                    let updated = get_task_in_connection(conn, task_id)?;
-                    record_task_event_in_connection(
-                        conn,
-                        &TaskEventWrite {
-                            task_id,
-                            event_type: TaskEventType::StatusChanged,
-                            actor: acting_agent_id,
-                            from_status: Some(current_task.status),
-                            to_status: TaskStatus::InProgress,
-                            verification_state: Some(updated.verification_state),
-                            owner_agent_id: updated.owner_agent_id.as_deref(),
-                            execution_action: None,
-                            execution_duration_seconds: None,
-                            note: None,
-                        },
-                    )?;
-                    let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                    record_task_event_in_connection(
-                        conn,
-                        &TaskEventWrite {
-                            task_id,
-                            event_type: TaskEventType::ExecutionUpdated,
-                            actor: acting_agent_id,
-                            from_status: Some(current_task.status),
-                            to_status: updated.status,
-                            verification_state: Some(updated.verification_state),
-                            owner_agent_id: updated.owner_agent_id.as_deref(),
-                            execution_action: Some(execution_action),
-                            execution_duration_seconds: None,
-                            note: event_note.as_deref(),
-                        },
-                    )?;
-                    sync_task_workflow_in_connection(conn, task_id)?;
-                    get_task_in_connection(conn, task_id)
-                })?
+                self.apply_start_or_resume_task_action(task_id, action, changed_by, input)?
             }
-            OperatorActionKind::PauseTask => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                if current_task.status != TaskStatus::InProgress {
-                    return Err(StoreError::Validation(
-                        "pause_task requires an in-progress task".to_string(),
-                    ));
-                }
-                let acting_agent_id =
-                    validate_execution_actor(&current_task, input.acting_agent_id, "pause_task")?;
-                let duration_seconds =
-                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?;
-                conn.execute(
-                    r"
-                    UPDATE tasks
-                    SET status = 'assigned',
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE task_id = ?1
-                    ",
-                    [task_id],
-                )?;
-                sync_owner_for_task_status(conn, task_id, TaskStatus::Assigned)?;
-                let updated = get_task_in_connection(conn, task_id)?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::StatusChanged,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: TaskStatus::Assigned,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: None,
-                    },
-                )?;
-                let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ExecutionUpdated,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: updated.status,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: Some(ExecutionActionKind::PauseTask),
-                        execution_duration_seconds: duration_seconds,
-                        note: event_note.as_deref(),
-                    },
-                )?;
-                sync_task_workflow_in_connection(conn, task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::YieldTask => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                if !matches!(
-                    current_task.status,
-                    TaskStatus::Assigned | TaskStatus::InProgress
-                ) {
-                    return Err(StoreError::Validation(
-                        "yield_task requires an assigned or in-progress task".to_string(),
-                    ));
-                }
-                let acting_agent_id =
-                    validate_execution_actor(&current_task, input.acting_agent_id, "yield_task")?;
-                let duration_seconds = if current_task.status == TaskStatus::InProgress {
-                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
-                } else {
-                    None
-                };
-                conn.execute(
-                    r"
-                    UPDATE tasks
-                    SET owner_agent_id = NULL,
-                        status = 'open',
-                        blocked_reason = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE task_id = ?1
-                    ",
-                    [task_id],
-                )?;
-                release_agent_current_task_in_connection(conn, acting_agent_id, task_id)?;
-                let updated = get_task_in_connection(conn, task_id)?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::StatusChanged,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: TaskStatus::Open,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: None,
-                    },
-                )?;
-                let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ExecutionUpdated,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: updated.status,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: None,
-                        execution_action: Some(ExecutionActionKind::YieldTask),
-                        execution_duration_seconds: duration_seconds,
-                        note: event_note.as_deref(),
-                    },
-                )?;
-                sync_task_workflow_in_connection(conn, task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
-            OperatorActionKind::CompleteTask => self.in_transaction(|conn| {
-                let current_task = get_task_in_connection(conn, task_id)?;
-                if current_task.status == TaskStatus::Blocked {
-                    return Err(StoreError::Validation(
-                        "complete_task cannot complete a blocked task".to_string(),
-                    ));
-                }
-                if !matches!(
-                    current_task.status,
-                    TaskStatus::Assigned | TaskStatus::InProgress
-                ) {
-                    return Err(StoreError::Validation(
-                        "complete_task requires an assigned or in-progress task".to_string(),
-                    ));
-                }
-                let acting_agent_id = validate_execution_actor(
-                    &current_task,
-                    input.acting_agent_id,
-                    "complete_task",
-                )?;
-                let duration_seconds = if current_task.status == TaskStatus::InProgress {
-                    compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
-                } else {
-                    None
-                };
-                conn.execute(
-                    r"
-                    UPDATE tasks
-                    SET status = 'review_required',
-                        verification_state = ?2,
-                        blocked_reason = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE task_id = ?1
-                    ",
-                    params![task_id, VerificationState::Pending.to_string()],
-                )?;
-                sync_owner_for_task_status(conn, task_id, TaskStatus::ReviewRequired)?;
-                let updated = get_task_in_connection(conn, task_id)?;
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::StatusChanged,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: TaskStatus::ReviewRequired,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: None,
-                        execution_duration_seconds: None,
-                        note: None,
-                    },
-                )?;
-                let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
-                record_task_event_in_connection(
-                    conn,
-                    &TaskEventWrite {
-                        task_id,
-                        event_type: TaskEventType::ExecutionUpdated,
-                        actor: acting_agent_id,
-                        from_status: Some(current_task.status),
-                        to_status: updated.status,
-                        verification_state: Some(updated.verification_state),
-                        owner_agent_id: updated.owner_agent_id.as_deref(),
-                        execution_action: Some(ExecutionActionKind::CompleteTask),
-                        execution_duration_seconds: duration_seconds,
-                        note: event_note.as_deref(),
-                    },
-                )?;
-                sync_task_workflow_in_connection(conn, task_id)?;
-                get_task_in_connection(conn, task_id)
-            })?,
+            OperatorActionKind::PauseTask => self.apply_pause_task_action(task_id, changed_by, input)?,
+            OperatorActionKind::YieldTask => self.apply_yield_task_action(task_id, changed_by, input)?,
+            OperatorActionKind::CompleteTask => self.apply_complete_task_action(task_id, changed_by, input)?,
             _ => return Ok(None),
         };
 
         Ok(Some(task))
+    }
+
+    fn apply_claim_task_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let current_task = get_task_in_connection(conn, task_id)?;
+            if current_task.owner_agent_id.is_some() || current_task.status != TaskStatus::Open
+            {
+                return Err(StoreError::Validation(
+                    "claim_task requires an unowned open task".to_string(),
+                ));
+            }
+            if has_active_blockers_in_connection(conn, task_id)? {
+                return Err(StoreError::Validation(
+                    "claim_task requires the task to have no unresolved hard blockers"
+                        .to_string(),
+                ));
+            }
+            let acting_agent_id = input.acting_agent_id.ok_or_else(|| {
+                StoreError::Validation("claim_task requires an acting_agent_id".to_string())
+            })?;
+            super::ensure_agent_fresh_for_claim(
+                self,
+                acting_agent_id,
+                CLAIM_STALE_THRESHOLD_SECS,
+            )?;
+            assign_task_in_connection(
+                conn,
+                task_id,
+                acting_agent_id,
+                acting_agent_id,
+                input.note,
+            )?;
+            let updated = get_task_in_connection(conn, task_id)?;
+            let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ExecutionUpdated,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: Some(ExecutionActionKind::ClaimTask),
+                    execution_duration_seconds: None,
+                    note: event_note.as_deref(),
+                },
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_start_or_resume_task_action(
+        &self,
+        task_id: &str,
+        action: OperatorActionKind,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let action_name = match action {
+                OperatorActionKind::StartTask => "start_task",
+                OperatorActionKind::ResumeTask => "resume_task",
+                _ => unreachable!("execution branch only handles start/resume"),
+            };
+            let execution_action = match action {
+                OperatorActionKind::StartTask => ExecutionActionKind::StartTask,
+                OperatorActionKind::ResumeTask => ExecutionActionKind::ResumeTask,
+                _ => unreachable!("execution branch only handles start/resume"),
+            };
+            let requires_prior_execution = action == OperatorActionKind::ResumeTask;
+            let current_task = get_task_in_connection(conn, task_id)?;
+            if current_task.status != TaskStatus::Assigned {
+                return Err(StoreError::Validation(format!(
+                    "{action_name} requires an assigned task"
+                )));
+            }
+            if has_active_blockers_in_connection(conn, task_id)? {
+                return Err(StoreError::Validation(format!(
+                    "{action_name} requires the task to have no unresolved hard blockers"
+                )));
+            }
+            let has_prior_execution =
+                task_has_prior_execution_in_connection(conn, task_id)?;
+            if requires_prior_execution && !has_prior_execution {
+                return Err(StoreError::Validation(
+                    "resume_task requires a previously started task".to_string(),
+                ));
+            }
+            if !requires_prior_execution && has_prior_execution {
+                return Err(StoreError::Validation(
+                    "start_task requires a task that has not started execution yet"
+                        .to_string(),
+                ));
+            }
+            let acting_agent_id = validate_execution_actor(
+                &current_task,
+                input.acting_agent_id,
+                action_name,
+            )?;
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET status = 'in_progress',
+                    blocked_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                [task_id],
+            )?;
+            sync_owner_for_task_status(conn, task_id, TaskStatus::InProgress)?;
+            let updated = get_task_in_connection(conn, task_id)?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::StatusChanged,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: TaskStatus::InProgress,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: None,
+                },
+            )?;
+            let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ExecutionUpdated,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: Some(execution_action),
+                    execution_duration_seconds: None,
+                    note: event_note.as_deref(),
+                },
+            )?;
+            sync_task_workflow_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_pause_task_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let current_task = get_task_in_connection(conn, task_id)?;
+            if current_task.status != TaskStatus::InProgress {
+                return Err(StoreError::Validation(
+                    "pause_task requires an in-progress task".to_string(),
+                ));
+            }
+            let acting_agent_id =
+                validate_execution_actor(&current_task, input.acting_agent_id, "pause_task")?;
+            let duration_seconds =
+                compute_open_execution_duration_seconds(conn, task_id, Utc::now())?;
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET status = 'assigned',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                [task_id],
+            )?;
+            sync_owner_for_task_status(conn, task_id, TaskStatus::Assigned)?;
+            let updated = get_task_in_connection(conn, task_id)?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::StatusChanged,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: TaskStatus::Assigned,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: None,
+                },
+            )?;
+            let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ExecutionUpdated,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: Some(ExecutionActionKind::PauseTask),
+                    execution_duration_seconds: duration_seconds,
+                    note: event_note.as_deref(),
+                },
+            )?;
+            sync_task_workflow_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_yield_task_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let current_task = get_task_in_connection(conn, task_id)?;
+            if !matches!(
+                current_task.status,
+                TaskStatus::Assigned | TaskStatus::InProgress
+            ) {
+                return Err(StoreError::Validation(
+                    "yield_task requires an assigned or in-progress task".to_string(),
+                ));
+            }
+            let acting_agent_id =
+                validate_execution_actor(&current_task, input.acting_agent_id, "yield_task")?;
+            let duration_seconds = if current_task.status == TaskStatus::InProgress {
+                compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
+            } else {
+                None
+            };
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET owner_agent_id = NULL,
+                    status = 'open',
+                    blocked_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                [task_id],
+            )?;
+            release_agent_current_task_in_connection(conn, acting_agent_id, task_id)?;
+            let updated = get_task_in_connection(conn, task_id)?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::StatusChanged,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: TaskStatus::Open,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: None,
+                },
+            )?;
+            let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ExecutionUpdated,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: None,
+                    execution_action: Some(ExecutionActionKind::YieldTask),
+                    execution_duration_seconds: duration_seconds,
+                    note: event_note.as_deref(),
+                },
+            )?;
+            sync_task_workflow_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    fn apply_complete_task_action(
+        &self,
+        task_id: &str,
+        changed_by: &str,
+        input: &TaskOperatorActionInput<'_>,
+    ) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            let current_task = get_task_in_connection(conn, task_id)?;
+            if current_task.status == TaskStatus::Blocked {
+                return Err(StoreError::Validation(
+                    "complete_task cannot complete a blocked task".to_string(),
+                ));
+            }
+            if !matches!(
+                current_task.status,
+                TaskStatus::Assigned | TaskStatus::InProgress
+            ) {
+                return Err(StoreError::Validation(
+                    "complete_task requires an assigned or in-progress task".to_string(),
+                ));
+            }
+            let acting_agent_id = validate_execution_actor(
+                &current_task,
+                input.acting_agent_id,
+                "complete_task",
+            )?;
+            let duration_seconds = if current_task.status == TaskStatus::InProgress {
+                compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
+            } else {
+                None
+            };
+            conn.execute(
+                r"
+                UPDATE tasks
+                SET status = 'review_required',
+                    verification_state = ?2,
+                    blocked_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE task_id = ?1
+                ",
+                params![task_id, VerificationState::Pending.to_string()],
+            )?;
+            sync_owner_for_task_status(conn, task_id, TaskStatus::ReviewRequired)?;
+            let updated = get_task_in_connection(conn, task_id)?;
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::StatusChanged,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: TaskStatus::ReviewRequired,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: None,
+                    execution_duration_seconds: None,
+                    note: None,
+                },
+            )?;
+            let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
+            record_task_event_in_connection(
+                conn,
+                &TaskEventWrite {
+                    task_id,
+                    event_type: TaskEventType::ExecutionUpdated,
+                    actor: acting_agent_id,
+                    from_status: Some(current_task.status),
+                    to_status: updated.status,
+                    verification_state: Some(updated.verification_state),
+                    owner_agent_id: updated.owner_agent_id.as_deref(),
+                    execution_action: Some(ExecutionActionKind::CompleteTask),
+                    execution_duration_seconds: duration_seconds,
+                    note: event_note.as_deref(),
+                },
+            )?;
+            sync_task_workflow_in_connection(conn, task_id)?;
+            get_task_in_connection(conn, task_id)
+        })
     }
 }
 
@@ -1006,125 +1130,152 @@ pub(super) fn task_operator_deadline_update<'a>(
     Ok(Some(update))
 }
 
-#[allow(clippy::too_many_lines)]
 pub(super) fn task_operator_status_update<'a>(
     task: &Task,
     action: OperatorActionKind,
     input: &'a TaskOperatorActionInput<'a>,
 ) -> StoreResult<Option<(TaskStatus, TaskStatusUpdate<'a>)>> {
     let update = match action {
-        OperatorActionKind::VerifyTask => {
-            if !(task.status == TaskStatus::ReviewRequired
-                || matches!(
-                    task.verification_state,
-                    VerificationState::Pending | VerificationState::Failed
-                ))
-            {
-                return Err(StoreError::Validation(
-                    "verify_task requires a task that is awaiting or repeating review".to_string(),
-                ));
-            }
-            let verification_state = input.verification_state.ok_or_else(|| {
-                StoreError::Validation(
-                    "verify_task requires a verification_state value".to_string(),
-                )
-            })?;
-            if verification_state == VerificationState::Unknown {
-                return Err(StoreError::Validation(
-                    "verify_task requires a concrete verification_state".to_string(),
-                ));
-            }
-            if verification_state == VerificationState::Passed {
-                return Err(StoreError::Validation(
-                    "verify_task no longer accepts passed; use close_task".to_string(),
-                ));
-            }
-
-            (
-                TaskStatus::ReviewRequired,
-                TaskStatusUpdate {
-                    verification_state: Some(verification_state),
-                    event_note: input.note,
-                    ..TaskStatusUpdate::default()
-                },
-            )
-        }
-        OperatorActionKind::CloseTask => {
-            if task.status != TaskStatus::ReviewRequired
-                || task.verification_state != VerificationState::Pending
-            {
-                return Err(StoreError::Validation(
-                    "close_task requires a task awaiting review closeout".to_string(),
-                ));
-            }
-            if input
-                .closure_summary
-                .is_none_or(|summary| summary.trim().is_empty())
-            {
-                return Err(StoreError::Validation(
-                    "close_task requires a closure summary".to_string(),
-                ));
-            }
-
-            (
-                TaskStatus::Completed,
-                TaskStatusUpdate {
-                    verification_state: Some(VerificationState::Passed),
-                    closure_summary: input.closure_summary,
-                    event_note: input.note,
-                    ..TaskStatusUpdate::default()
-                },
-            )
-        }
-        OperatorActionKind::BlockTask => (
-            TaskStatus::Blocked,
-            TaskStatusUpdate {
-                blocked_reason: Some(input.blocked_reason.ok_or_else(|| {
-                    StoreError::Validation("block_task requires a blocked reason".to_string())
-                })?),
-                event_note: input.note,
-                ..TaskStatusUpdate::default()
-            },
-        ),
-        OperatorActionKind::UnblockTask => {
-            if task.status != TaskStatus::Blocked {
-                return Err(StoreError::Validation(
-                    "only blocked tasks can be unblocked".to_string(),
-                ));
-            }
-            let target_status = if task.owner_agent_id.is_some() {
-                TaskStatus::Assigned
-            } else {
-                TaskStatus::Open
-            };
-            (
-                target_status,
-                TaskStatusUpdate {
-                    event_note: input.note,
-                    ..TaskStatusUpdate::default()
-                },
-            )
-        }
+        OperatorActionKind::VerifyTask => verify_task_status_update(task, input)?,
+        OperatorActionKind::CloseTask => close_task_status_update(task, input)?,
+        OperatorActionKind::BlockTask => block_task_status_update(input)?,
+        OperatorActionKind::UnblockTask => unblock_task_status_update(task, input)?,
         OperatorActionKind::ReopenBlockedTaskWhenUnblocked => {
-            if task.status != TaskStatus::Blocked {
-                return Err(StoreError::Validation(
-                    "reopen_blocked_task_when_unblocked requires a blocked task".to_string(),
-                ));
-            }
-            (
-                if task.owner_agent_id.is_some() {
-                    TaskStatus::Assigned
-                } else {
-                    TaskStatus::Open
-                },
-                TaskStatusUpdate {
-                    event_note: input.note,
-                    ..TaskStatusUpdate::default()
-                },
-            )
+            reopen_blocked_task_status_update(task, input)?
         }
         _ => return Ok(None),
     };
 
     Ok(Some(update))
+}
+
+fn verify_task_status_update<'a>(
+    task: &Task,
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<(TaskStatus, TaskStatusUpdate<'a>)> {
+    if !(task.status == TaskStatus::ReviewRequired
+        || matches!(
+            task.verification_state,
+            VerificationState::Pending | VerificationState::Failed
+        ))
+    {
+        return Err(StoreError::Validation(
+            "verify_task requires a task that is awaiting or repeating review".to_string(),
+        ));
+    }
+    let verification_state = input.verification_state.ok_or_else(|| {
+        StoreError::Validation(
+            "verify_task requires a verification_state value".to_string(),
+        )
+    })?;
+    if verification_state == VerificationState::Unknown {
+        return Err(StoreError::Validation(
+            "verify_task requires a concrete verification_state".to_string(),
+        ));
+    }
+    if verification_state == VerificationState::Passed {
+        return Err(StoreError::Validation(
+            "verify_task no longer accepts passed; use close_task".to_string(),
+        ));
+    }
+
+    Ok((
+        TaskStatus::ReviewRequired,
+        TaskStatusUpdate {
+            verification_state: Some(verification_state),
+            event_note: input.note,
+            ..TaskStatusUpdate::default()
+        },
+    ))
+}
+
+fn close_task_status_update<'a>(
+    task: &Task,
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<(TaskStatus, TaskStatusUpdate<'a>)> {
+    if task.status != TaskStatus::ReviewRequired
+        || task.verification_state != VerificationState::Pending
+    {
+        return Err(StoreError::Validation(
+            "close_task requires a task awaiting review closeout".to_string(),
+        ));
+    }
+    if input
+        .closure_summary
+        .is_none_or(|summary| summary.trim().is_empty())
+    {
+        return Err(StoreError::Validation(
+            "close_task requires a closure summary".to_string(),
+        ));
+    }
+
+    Ok((
+        TaskStatus::Completed,
+        TaskStatusUpdate {
+            verification_state: Some(VerificationState::Passed),
+            closure_summary: input.closure_summary,
+            event_note: input.note,
+            ..TaskStatusUpdate::default()
+        },
+    ))
+}
+
+fn block_task_status_update<'a>(
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<(TaskStatus, TaskStatusUpdate<'a>)> {
+    Ok((
+        TaskStatus::Blocked,
+        TaskStatusUpdate {
+            blocked_reason: Some(input.blocked_reason.ok_or_else(|| {
+                StoreError::Validation("block_task requires a blocked reason".to_string())
+            })?),
+            event_note: input.note,
+            ..TaskStatusUpdate::default()
+        },
+    ))
+}
+
+fn unblock_task_status_update<'a>(
+    task: &Task,
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<(TaskStatus, TaskStatusUpdate<'a>)> {
+    if task.status != TaskStatus::Blocked {
+        return Err(StoreError::Validation(
+            "only blocked tasks can be unblocked".to_string(),
+        ));
+    }
+    let target_status = if task.owner_agent_id.is_some() {
+        TaskStatus::Assigned
+    } else {
+        TaskStatus::Open
+    };
+    Ok((
+        target_status,
+        TaskStatusUpdate {
+            event_note: input.note,
+            ..TaskStatusUpdate::default()
+        },
+    ))
+}
+
+fn reopen_blocked_task_status_update<'a>(
+    task: &Task,
+    input: &'a TaskOperatorActionInput<'a>,
+) -> StoreResult<(TaskStatus, TaskStatusUpdate<'a>)> {
+    if task.status != TaskStatus::Blocked {
+        return Err(StoreError::Validation(
+            "reopen_blocked_task_when_unblocked requires a blocked task".to_string(),
+        ));
+    }
+    Ok((
+        if task.owner_agent_id.is_some() {
+            TaskStatus::Assigned
+        } else {
+            TaskStatus::Open
+        },
+        TaskStatusUpdate {
+            event_note: input.note,
+            ..TaskStatusUpdate::default()
+        },
+    ))
 }

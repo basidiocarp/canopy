@@ -192,12 +192,101 @@ fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
     }
 }
 
+fn filter_snapshot_data(
+    task_ids: &HashSet<String>,
+    agent_ids: &HashSet<String>,
+    task_attention: Vec<TaskAttention>,
+    project_deadline_summaries: Vec<TaskDeadlineSummary>,
+    task_sla_summaries: Vec<TaskSlaSummary>,
+    handoff_attention: Vec<HandoffAttention>,
+    agent_attention: Vec<AgentAttention>,
+    project_assignments: Vec<TaskAssignment>,
+    project_execution_summaries: Vec<TaskExecutionSummary>,
+    project_workflow_contexts: Vec<TaskWorkflowContext>,
+    handoffs: Vec<Handoff>,
+    relationship_summaries: Vec<TaskRelationshipSummary>,
+    relationships: Vec<TaskRelationship>,
+) -> (
+    Vec<TaskAttention>,
+    Vec<TaskDeadlineSummary>,
+    Vec<TaskSlaSummary>,
+    Vec<HandoffAttention>,
+    Vec<AgentAttention>,
+    Vec<TaskAssignment>,
+    Vec<TaskExecutionSummary>,
+    Vec<TaskWorkflowContext>,
+    Vec<Handoff>,
+    Vec<TaskRelationshipSummary>,
+    Vec<TaskRelationship>,
+) {
+    let filtered_task_attention = task_attention
+        .into_iter()
+        .filter(|attention| task_ids.contains(&attention.task_id))
+        .collect::<Vec<_>>();
+    let filtered_deadline_summaries = project_deadline_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
+    let filtered_task_sla_summaries = task_sla_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
+    let filtered_handoff_attention = handoff_attention
+        .into_iter()
+        .filter(|attention| task_ids.contains(&attention.task_id))
+        .collect::<Vec<_>>();
+    let filtered_agent_attention = agent_attention
+        .into_iter()
+        .filter(|attention| agent_ids.contains(&attention.agent_id))
+        .collect::<Vec<_>>();
+    let filtered_assignments = project_assignments
+        .into_iter()
+        .filter(|assignment| task_ids.contains(&assignment.task_id))
+        .collect::<Vec<_>>();
+    let execution_summaries = project_execution_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
+    let workflow_contexts = project_workflow_contexts
+        .into_iter()
+        .filter(|context| task_ids.contains(&context.task_id))
+        .collect::<Vec<_>>();
+    let filtered_handoffs = handoffs
+        .into_iter()
+        .filter(|handoff| task_ids.contains(&handoff.task_id))
+        .collect::<Vec<_>>();
+    let filtered_relationship_summaries = relationship_summaries
+        .into_iter()
+        .filter(|summary| task_ids.contains(&summary.task_id))
+        .collect::<Vec<_>>();
+    let filtered_relationships = relationships
+        .into_iter()
+        .filter(|relationship| {
+            task_ids.contains(&relationship.source_task_id)
+                || task_ids.contains(&relationship.target_task_id)
+        })
+        .collect::<Vec<_>>();
+
+    (
+        filtered_task_attention,
+        filtered_deadline_summaries,
+        filtered_task_sla_summaries,
+        filtered_handoff_attention,
+        filtered_agent_attention,
+        filtered_assignments,
+        execution_summaries,
+        workflow_contexts,
+        filtered_handoffs,
+        filtered_relationship_summaries,
+        filtered_relationships,
+    )
+}
+
 /// Builds a stable read snapshot for operator surfaces.
 ///
 /// # Errors
 ///
 /// Returns an error if any underlying store query fails.
-#[allow(clippy::too_many_lines)]
 pub fn snapshot(
     store: &(impl CanopyStore + ?Sized),
     options: SnapshotOptions<'_>,
@@ -205,11 +294,7 @@ pub fn snapshot(
     let options = resolve_snapshot_options(options);
     let project_root = options.project_root.as_deref();
 
-    // Load only agents, tasks, handoffs, events, assignments, relationships and
-    // evidence that belong to the requested project. When no project filter is
-    // set each method falls back to loading everything.
     let agents = store.list_agents_filtered(project_root)?;
-
     let handoffs = store.list_handoffs_for_project(project_root)?;
     let mut tasks = store.list_tasks_filtered(project_root, None, None)?;
     let now = Utc::now();
@@ -235,8 +320,6 @@ pub fn snapshot(
         now,
     );
 
-    // Heartbeats are pre-scoped to the project's agents; the .take(50) cap is
-    // preserved as an explicit limit parameter.
     let all_heartbeats = store.list_agent_heartbeats_for_project(project_root, Some(50))?;
     let agent_attention = derive_agent_attention(&agents, now);
     let handoff_attention = derive_handoff_attention(&handoffs, now);
@@ -266,8 +349,7 @@ pub fn snapshot(
 
     let task_ids: HashSet<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
     let agent_ids: HashSet<_> = agents.iter().map(|agent| agent.agent_id.clone()).collect();
-    // all_heartbeats is already scoped to project agents; only retain those
-    // associated with the visible (view-filtered) task set.
+
     let heartbeats = all_heartbeats
         .into_iter()
         .filter(|heartbeat| {
@@ -278,58 +360,41 @@ pub fn snapshot(
             )
         })
         .collect::<Vec<_>>();
-    let filtered_task_attention = task_attention
-        .into_iter()
-        .filter(|attention| task_ids.contains(&attention.task_id))
-        .collect::<Vec<_>>();
-    let filtered_deadline_summaries = project_deadline_summaries
-        .into_iter()
-        .filter(|summary| task_ids.contains(&summary.task_id))
-        .collect::<Vec<_>>();
-    let filtered_task_sla_summaries = task_sla_summaries
-        .into_iter()
-        .filter(|summary| task_ids.contains(&summary.task_id))
-        .collect::<Vec<_>>();
-    let filtered_handoff_attention = handoff_attention
-        .into_iter()
-        .filter(|attention| task_ids.contains(&attention.task_id))
-        .collect::<Vec<_>>();
-    let filtered_agent_attention = agent_attention
-        .into_iter()
-        .filter(|attention| agent_ids.contains(&attention.agent_id))
-        .collect::<Vec<_>>();
-    let filtered_assignments = project_assignments
-        .into_iter()
-        .filter(|assignment| task_ids.contains(&assignment.task_id))
-        .collect::<Vec<_>>();
+
+    let (
+        filtered_task_attention,
+        filtered_deadline_summaries,
+        filtered_task_sla_summaries,
+        filtered_handoff_attention,
+        filtered_agent_attention,
+        filtered_assignments,
+        execution_summaries,
+        workflow_contexts,
+        filtered_handoffs,
+        filtered_relationship_summaries,
+        relationships,
+    ) = filter_snapshot_data(
+        &task_ids,
+        &agent_ids,
+        task_attention,
+        project_deadline_summaries,
+        task_sla_summaries,
+        handoff_attention,
+        agent_attention,
+        project_assignments,
+        project_execution_summaries,
+        project_workflow_contexts,
+        handoffs,
+        relationship_summaries,
+        relationships,
+    );
+
     let ownership = derive_task_ownership_summaries(&tasks, &filtered_assignments);
     let task_heartbeat_summaries =
         derive_task_heartbeat_summaries(&tasks, &heartbeats, &filtered_agent_attention);
-    let execution_summaries = project_execution_summaries
-        .into_iter()
-        .filter(|summary| task_ids.contains(&summary.task_id))
-        .collect::<Vec<_>>();
-    let workflow_contexts = project_workflow_contexts
-        .into_iter()
-        .filter(|context| task_ids.contains(&context.task_id))
-        .collect::<Vec<_>>();
     let agent_heartbeat_summaries =
         derive_agent_heartbeat_summaries(&agents, &heartbeats, &filtered_agent_attention);
-    let filtered_handoffs = handoffs
-        .into_iter()
-        .filter(|handoff| task_ids.contains(&handoff.task_id))
-        .collect::<Vec<_>>();
-    let relationships = relationships
-        .into_iter()
-        .filter(|relationship| {
-            task_ids.contains(&relationship.source_task_id)
-                || task_ids.contains(&relationship.target_task_id)
-        })
-        .collect::<Vec<_>>();
-    let filtered_relationship_summaries = relationship_summaries
-        .into_iter()
-        .filter(|summary| task_ids.contains(&summary.task_id))
-        .collect::<Vec<_>>();
+
     let operator_actions = derive_operator_actions(
         &tasks,
         &filtered_task_attention,
@@ -386,7 +451,6 @@ pub fn snapshot(
 ///
 /// Returns an error if the task does not exist or any underlying store query
 /// fails.
-#[allow(clippy::too_many_lines)]
 pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreResult<TaskDetail> {
     let task = store.get_task(task_id)?;
     let handoffs = store.list_handoffs(Some(task_id))?;
@@ -572,7 +636,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     })
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn derive_task_ownership_summaries(
     tasks: &[Task],
     assignments: &[TaskAssignment],
