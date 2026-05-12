@@ -3,7 +3,7 @@
 //! Sessions are file-backed (in `~/.local/share/basidiocarp/canopy/sessions/`)
 //! and use lockfile-mediated atomic writes to support concurrent access.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -56,34 +56,14 @@ fn load_session(path: &Path) -> HResult<HandoffSession> {
     serde_json::from_str(&content).map_err(|e| format!("deserialize session: {e}"))
 }
 
-/// Write a new session to disk atomically using a lockfile and temp file.
+/// Write a new session to disk atomically using a lockfile.
 ///
 /// Intended only for the creation path (`tool_session_start`), where there is
 /// nothing to load first. For mutations that need to read-modify-write, use
 /// [`modify_session_locked`] instead so the load is inside the lock window.
 fn write_session_atomic(path: &Path, session: &HandoffSession) -> HResult<()> {
-    let lock_path = path.with_extension("json.lock");
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|e| format!("acquire lock: {e}"))?;
-
-    let result = (|| {
-        let content =
-            serde_json::to_string_pretty(session).map_err(|e| format!("serialize: {e}"))?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, &content).map_err(|e| format!("write tmp: {e}"))?;
-        fs::rename(&tmp, path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            format!("rename: {e}")
-        })?;
-        Ok(())
-    })();
-
-    drop(lock_file);
-    let _ = fs::remove_file(&lock_path);
-    result
+    let _lock = spore::FileLock::acquire(path).map_err(|e| format!("acquire lock: {e}"))?;
+    spore::atomic_write_json(path, session).map_err(|e| format!("write session: {e}"))
 }
 
 /// Acquire the lock, load the session, call `f` to mutate it, then write
@@ -93,30 +73,11 @@ fn modify_session_locked<F, T>(path: &Path, f: F) -> HResult<T>
 where
     F: FnOnce(&mut HandoffSession) -> HResult<T>,
 {
-    let lock_path = path.with_extension("json.lock");
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|e| format!("acquire lock: {e}"))?;
-
-    let result: HResult<T> = (|| {
-        let mut session = load_session(path)?;
-        let value = f(&mut session)?;
-        let content =
-            serde_json::to_string_pretty(&session).map_err(|e| format!("serialize: {e}"))?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, &content).map_err(|e| format!("write tmp: {e}"))?;
-        fs::rename(&tmp, path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            format!("rename: {e}")
-        })?;
-        Ok(value)
-    })();
-
-    drop(lock_file);
-    let _ = fs::remove_file(&lock_path);
-    result
+    let _lock = spore::FileLock::acquire(path).map_err(|e| format!("acquire lock: {e}"))?;
+    let mut session = load_session(path)?;
+    let value = f(&mut session)?;
+    spore::atomic_write_json(path, &session).map_err(|e| format!("write session: {e}"))?;
+    Ok(value)
 }
 
 /// Start a new coordination session.
