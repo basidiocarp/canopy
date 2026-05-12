@@ -265,11 +265,11 @@ impl SnapshotContext {
             now,
             open_handoff_task_ids: handoff_sets.open_handoff_task_ids,
             pending_handoff_acceptance_task_ids: handoff_sets.pending_handoff_acceptance_task_ids,
-            due_soon_handoff_acceptance_task_ids: handoff_sets
-                .due_soon_handoff_acceptance_task_ids,
+            due_soon_handoff_acceptance_task_ids: handoff_sets.due_soon_handoff_acceptance_task_ids,
             overdue_handoff_acceptance_task_ids: handoff_sets.overdue_handoff_acceptance_task_ids,
             assigned_awaiting_claim_task_ids: task_state_sets.assigned_awaiting_claim_task_ids,
-            review_with_graph_pressure_task_ids: task_state_sets.review_with_graph_pressure_task_ids,
+            review_with_graph_pressure_task_ids: task_state_sets
+                .review_with_graph_pressure_task_ids,
             review_handoff_follow_through_task_ids: task_state_sets
                 .review_handoff_follow_through_task_ids,
             due_soon_review_handoff_follow_through_task_ids: task_state_sets

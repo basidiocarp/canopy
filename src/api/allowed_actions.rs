@@ -34,7 +34,11 @@ pub(super) fn derive_allowed_actions(
     actions
 }
 
-fn build_basic_task_actions(task: &Task, execution_summary: &TaskExecutionSummary, task_level: AttentionLevel) -> Vec<OperatorAction> {
+fn build_basic_task_actions(
+    task: &Task,
+    execution_summary: &TaskExecutionSummary,
+    task_level: AttentionLevel,
+) -> Vec<OperatorAction> {
     vec![
         make_task_allowed_action(
             task,
@@ -44,7 +48,11 @@ fn build_basic_task_actions(task: &Task, execution_summary: &TaskExecutionSummar
                 OperatorActionKind::StartTask
             },
             task_level,
-            if execution_summary.run_count > 0 { "resume" } else { "start" },
+            if execution_summary.run_count > 0 {
+                "resume"
+            } else {
+                "start"
+            },
             if execution_summary.run_count > 0 {
                 format!("Resume {}", task.title)
             } else {
@@ -101,7 +109,11 @@ fn build_lifecycle_actions(task: &Task, task_level: AttentionLevel) -> Vec<Opera
                 OperatorActionKind::BlockTask
             },
             task_level,
-            if task.status == TaskStatus::Blocked { "unblock" } else { "block" },
+            if task.status == TaskStatus::Blocked {
+                "unblock"
+            } else {
+                "block"
+            },
             if task.status == TaskStatus::Blocked {
                 format!("Unblock {}", task.title)
             } else {
@@ -112,7 +124,11 @@ fn build_lifecycle_actions(task: &Task, task_level: AttentionLevel) -> Vec<Opera
     ]
 }
 
-fn build_triage_actions(task: &Task, attention: &TaskAttention, task_level: AttentionLevel) -> Vec<OperatorAction> {
+fn build_triage_actions(
+    task: &Task,
+    attention: &TaskAttention,
+    task_level: AttentionLevel,
+) -> Vec<OperatorAction> {
     vec![
         make_task_allowed_action(
             task,
@@ -122,7 +138,11 @@ fn build_triage_actions(task: &Task, attention: &TaskAttention, task_level: Atte
                 OperatorActionKind::AcknowledgeTask
             },
             task_level,
-            if attention.acknowledged { "unacknowledge" } else { "acknowledge" },
+            if attention.acknowledged {
+                "unacknowledge"
+            } else {
+                "acknowledge"
+            },
             if attention.acknowledged {
                 format!("Unacknowledge {}", task.title)
             } else {
@@ -449,7 +469,11 @@ pub(super) fn derive_allowed_task_actions(
     actions.extend(build_lifecycle_actions(task, task_level));
     actions.extend(build_triage_actions(task, attention, task_level));
     actions.extend(build_deadline_actions(task, task_level));
-    actions.extend(build_basic_task_actions(task, execution_summary, task_level));
+    actions.extend(build_basic_task_actions(
+        task,
+        execution_summary,
+        task_level,
+    ));
     actions.extend(build_coordination_actions(task, task_level));
     actions.extend(build_review_actions(task, task_level));
 

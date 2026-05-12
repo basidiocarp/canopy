@@ -93,10 +93,10 @@ fn count_due_soon_conditions(
     task: &Task,
     queue_sets: &SlaQueueSets<'_>,
 ) -> usize {
-    let execution_due_soon = deadline_summary
-        .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon);
-    let review_due_soon = deadline_summary
-        .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon);
+    let execution_due_soon =
+        deadline_summary.is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon);
+    let review_due_soon =
+        deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::DueSoon);
 
     [
         execution_due_soon,
@@ -124,10 +124,10 @@ fn count_overdue_conditions(
     task: &Task,
     queue_sets: &SlaQueueSets<'_>,
 ) -> usize {
-    let execution_overdue = deadline_summary
-        .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue);
-    let review_overdue = deadline_summary
-        .is_some_and(|summary| summary.review_state == DeadlineState::Overdue);
+    let execution_overdue =
+        deadline_summary.is_some_and(|summary| summary.execution_state == DeadlineState::Overdue);
+    let review_overdue =
+        deadline_summary.is_some_and(|summary| summary.review_state == DeadlineState::Overdue);
 
     [
         execution_overdue,
@@ -175,8 +175,7 @@ fn compute_oldest_overdue_seconds(
     overdue_queue_flags: OverdueTaskSlaQueues,
     now: OffsetDateTime,
 ) -> Option<i64> {
-    let deadline_overdue_seconds =
-        deadline_summary.and_then(|summary| summary.overdue_by_seconds);
+    let deadline_overdue_seconds = deadline_summary.and_then(|summary| summary.overdue_by_seconds);
     let handoff_overdue_seconds = task_handoffs
         .iter()
         .filter_map(|handoff| {

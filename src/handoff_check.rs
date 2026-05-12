@@ -284,9 +284,7 @@ fn check_residual_work_section(content: &str) -> Option<String> {
     let section_start = content.find("## Residual Work")?;
     // Slice from the section heading to the next same-level heading or end-of-doc.
     let after_heading = &content[section_start + "## Residual Work".len()..];
-    let section_end = after_heading
-        .find("\n## ")
-        .unwrap_or(after_heading.len());
+    let section_end = after_heading.find("\n## ").unwrap_or(after_heading.len());
     let section = &after_heading[..section_end];
 
     // A "real" table row: starts with `|`, has 3+ pipes, is not a separator row,
@@ -376,10 +374,7 @@ fn find_empty_paste_markers(content: &str) -> Vec<usize> {
 /// - Directory envelope: `<slug>/handoff.md` → `<slug>/verify.sh`
 /// - Flat: `<slug>.md` → `verify-<slug>.sh` in the same directory
 fn derive_verify_script_path(handoff_path: &Path) -> PathBuf {
-    if handoff_path
-        .file_name()
-        .is_some_and(|n| n == "handoff.md")
-    {
+    if handoff_path.file_name().is_some_and(|n| n == "handoff.md") {
         return handoff_path.with_file_name("verify.sh");
     }
     let stem = handoff_path
@@ -653,7 +648,10 @@ filled output
     fn derive_verify_script_path_directory_envelope() {
         let path = PathBuf::from(".handoffs/canopy/my-feature/handoff.md");
         let verify = derive_verify_script_path(&path);
-        assert_eq!(verify, PathBuf::from(".handoffs/canopy/my-feature/verify.sh"));
+        assert_eq!(
+            verify,
+            PathBuf::from(".handoffs/canopy/my-feature/verify.sh")
+        );
     }
 
     #[test]
@@ -698,10 +696,12 @@ filled output
         fs::write(envelope_dir.join("handoff.md"), "# Envelope").unwrap();
         let result = resolve_handoff_path(&dir.path().join("my-feature"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Ambiguous handoff"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Ambiguous handoff")
+        );
     }
 
     #[test]

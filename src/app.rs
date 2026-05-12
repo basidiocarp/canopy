@@ -366,14 +366,7 @@ fn handle_task_list(store: &Store, tree: bool) -> Result<()> {
         for (idx, root_id) in root_ids.iter().enumerate() {
             let is_last = idx == root_ids.len() - 1;
             if let Some(root_task) = tasks.iter().find(|t| t.task_id == *root_id) {
-                render_task_tree(
-                    &mut output,
-                    root_task,
-                    &tasks,
-                    &children_map,
-                    "",
-                    is_last,
-                );
+                render_task_tree(&mut output, root_task, &tasks, &children_map, "", is_last);
             }
         }
         println!("{output}");
@@ -420,22 +413,13 @@ fn handle_task_claim(
     worktree: bool,
 ) -> Result<()> {
     if !force_claim {
-        canopy::store::ensure_agent_fresh_for_claim(
-            store,
-            agent_id,
-            CLAIM_STALE_THRESHOLD_SECS,
-        )?;
+        canopy::store::ensure_agent_fresh_for_claim(store, agent_id, CLAIM_STALE_THRESHOLD_SECS)?;
     }
 
     canopy::store::ensure_capabilities_match(store, task_id, agent_id)?;
 
     if let Some(ref blocker_id) = after {
-        store.add_task_relationship(
-            task_id,
-            blocker_id,
-            TaskRelationshipKind::Blocks,
-            agent_id,
-        )?;
+        store.add_task_relationship(task_id, blocker_id, TaskRelationshipKind::Blocks, agent_id)?;
         warn!(
             task_id = %task_id,
             blocker_id = %blocker_id,
@@ -529,8 +513,7 @@ fn handle_task_complete(
         if !open_children.is_empty() {
             let mut child_list = String::new();
             for (child_id, child_title, child_status) in &open_children {
-                let _ =
-                    writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
+                let _ = writeln!(child_list, "  {child_id}  {child_title}  [{child_status}]");
             }
             return Err(anyhow::anyhow!(
                 "task {task_id} has {} open sub-task(s).\n\n\
@@ -811,14 +794,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             after,
             worktree,
         } => {
-            handle_task_claim(
-                store,
-                &agent_id,
-                &task_id,
-                force_claim,
-                after,
-                worktree,
-            )?;
+            handle_task_claim(store, &agent_id, &task_id, force_claim, after, worktree)?;
         }
         TaskCommand::Complete {
             agent_id,
@@ -1126,9 +1102,17 @@ fn handle_import_handoff(store: &Store, path: &Path, assign: Option<&str>) -> Re
         add_parent_verification_evidence(store, &parent_task, path, &verify_script)?;
     }
 
-    let imported_steps = create_imported_steps(store, &parent_task, &steps, path, &verify_script, verify_script_exists)?;
+    let imported_steps = create_imported_steps(
+        store,
+        &parent_task,
+        &steps,
+        path,
+        &verify_script,
+        verify_script_exists,
+    )?;
 
-    let (parent_task, assigned_to, review_hold_reason) = apply_task_assignment(store, parent_task, path, assign)?;
+    let (parent_task, assigned_to, review_hold_reason) =
+        apply_task_assignment(store, parent_task, path, assign)?;
 
     print_json(&ImportedHandoff {
         path: path.display().to_string(),
@@ -1150,17 +1134,15 @@ fn validate_parallel_groups(steps: &[ParsedHandoffStep]) {
     }
     for (group, count) in &group_counts {
         if *count < 2 {
-            tracing::warn!(group, "parallel group has only one step — annotation has no effect");
+            tracing::warn!(
+                group,
+                "parallel group has only one step — annotation has no effect"
+            );
         }
     }
 }
 
-fn create_parent_task(
-    store: &Store,
-    title: &str,
-    path: &Path,
-    project_root: &str,
-) -> Result<Task> {
+fn create_parent_task(store: &Store, title: &str, path: &Path, project_root: &str) -> Result<Task> {
     let parent_description = Some(format!("Imported from {}", path.display()));
     Ok(store
         .create_task_with_options(

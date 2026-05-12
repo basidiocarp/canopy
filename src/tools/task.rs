@@ -294,7 +294,10 @@ mod tests {
         let hash1 = compute_body_hash(title, Some("Original description"), &scope);
         let hash2 = compute_body_hash(title, Some("Modified description"), &scope);
 
-        assert_ne!(hash1, hash2, "Body hash should change when description changes");
+        assert_ne!(
+            hash1, hash2,
+            "Body hash should change when description changes"
+        );
     }
 
     #[test]
@@ -450,14 +453,24 @@ pub fn tool_task_complete(
         Err(e) => return e,
     };
 
-    let _ = record_completion_evidence(store, task_id, summary, &residual_work_warning, &task_record, force);
+    let _ = record_completion_evidence(
+        store,
+        task_id,
+        summary,
+        &residual_work_warning,
+        &task_record,
+        force,
+    );
 
     persist_task_output(store, task_id, args);
 
     ToolResult::json(&task)
 }
 
-fn check_handoff_completeness(_task_id: &str, args: &Value) -> std::result::Result<Option<String>, ToolResult> {
+fn check_handoff_completeness(
+    _task_id: &str,
+    args: &Value,
+) -> std::result::Result<Option<String>, ToolResult> {
     let mut residual_work_warning: Option<String> = None;
     if let Some(handoff_path_str) = get_str(args, "handoff_path") {
         let handoff_path = std::path::Path::new(handoff_path_str);

@@ -135,7 +135,11 @@ fn collect_deadline_reasons(
     }
 }
 
-fn collect_review_reasons(task: &Task, context: &SnapshotContext, reasons: &mut Vec<TaskAttentionReason>) {
+fn collect_review_reasons(
+    task: &Task,
+    context: &SnapshotContext,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
     if task.status == TaskStatus::ReviewRequired {
         reasons.push(TaskAttentionReason::ReviewRequired);
     }
@@ -193,7 +197,11 @@ fn collect_relationship_reasons(
     }
 }
 
-fn collect_ownership_reasons(task: &Task, context: &SnapshotContext, reasons: &mut Vec<TaskAttentionReason>) {
+fn collect_ownership_reasons(
+    task: &Task,
+    context: &SnapshotContext,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
     if context
         .assigned_awaiting_claim_task_ids
         .contains(&task.task_id)

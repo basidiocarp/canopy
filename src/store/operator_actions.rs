@@ -173,11 +173,7 @@ impl Store {
         })
     }
 
-    fn apply_summon_council_action(
-        &self,
-        task_id: &str,
-        changed_by: &str,
-    ) -> StoreResult<Task> {
+    fn apply_summon_council_action(&self, task_id: &str, changed_by: &str) -> StoreResult<Task> {
         self.in_transaction(|conn| {
             let task = get_task_in_connection(conn, task_id)?;
             summon_task_council_in_connection(conn, &task, None)?;
@@ -213,9 +209,7 @@ impl Store {
                 conn,
                 task_id,
                 input.from_agent_id.ok_or_else(|| {
-                    StoreError::Validation(
-                        "create_handoff requires a from_agent_id".to_string(),
-                    )
+                    StoreError::Validation("create_handoff requires a from_agent_id".to_string())
                 })?,
                 input.to_agent_id.ok_or_else(|| {
                     StoreError::Validation("create_handoff requires a to_agent_id".to_string())
@@ -599,13 +593,21 @@ impl Store {
         input: &TaskOperatorActionInput<'_>,
     ) -> StoreResult<Option<Task>> {
         let task = match action {
-            OperatorActionKind::ClaimTask => self.apply_claim_task_action(task_id, changed_by, input)?,
+            OperatorActionKind::ClaimTask => {
+                self.apply_claim_task_action(task_id, changed_by, input)?
+            }
             OperatorActionKind::StartTask | OperatorActionKind::ResumeTask => {
                 self.apply_start_or_resume_task_action(task_id, action, changed_by, input)?
             }
-            OperatorActionKind::PauseTask => self.apply_pause_task_action(task_id, changed_by, input)?,
-            OperatorActionKind::YieldTask => self.apply_yield_task_action(task_id, changed_by, input)?,
-            OperatorActionKind::CompleteTask => self.apply_complete_task_action(task_id, changed_by, input)?,
+            OperatorActionKind::PauseTask => {
+                self.apply_pause_task_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::YieldTask => {
+                self.apply_yield_task_action(task_id, changed_by, input)?
+            }
+            OperatorActionKind::CompleteTask => {
+                self.apply_complete_task_action(task_id, changed_by, input)?
+            }
             _ => return Ok(None),
         };
 
@@ -620,33 +622,21 @@ impl Store {
     ) -> StoreResult<Task> {
         self.in_transaction(|conn| {
             let current_task = get_task_in_connection(conn, task_id)?;
-            if current_task.owner_agent_id.is_some() || current_task.status != TaskStatus::Open
-            {
+            if current_task.owner_agent_id.is_some() || current_task.status != TaskStatus::Open {
                 return Err(StoreError::Validation(
                     "claim_task requires an unowned open task".to_string(),
                 ));
             }
             if has_active_blockers_in_connection(conn, task_id)? {
                 return Err(StoreError::Validation(
-                    "claim_task requires the task to have no unresolved hard blockers"
-                        .to_string(),
+                    "claim_task requires the task to have no unresolved hard blockers".to_string(),
                 ));
             }
             let acting_agent_id = input.acting_agent_id.ok_or_else(|| {
                 StoreError::Validation("claim_task requires an acting_agent_id".to_string())
             })?;
-            super::ensure_agent_fresh_for_claim(
-                self,
-                acting_agent_id,
-                CLAIM_STALE_THRESHOLD_SECS,
-            )?;
-            assign_task_in_connection(
-                conn,
-                task_id,
-                acting_agent_id,
-                acting_agent_id,
-                input.note,
-            )?;
+            super::ensure_agent_fresh_for_claim(self, acting_agent_id, CLAIM_STALE_THRESHOLD_SECS)?;
+            assign_task_in_connection(conn, task_id, acting_agent_id, acting_agent_id, input.note)?;
             let updated = get_task_in_connection(conn, task_id)?;
             let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
             record_task_event_in_connection(
@@ -698,8 +688,7 @@ impl Store {
                     "{action_name} requires the task to have no unresolved hard blockers"
                 )));
             }
-            let has_prior_execution =
-                task_has_prior_execution_in_connection(conn, task_id)?;
+            let has_prior_execution = task_has_prior_execution_in_connection(conn, task_id)?;
             if requires_prior_execution && !has_prior_execution {
                 return Err(StoreError::Validation(
                     "resume_task requires a previously started task".to_string(),
@@ -707,15 +696,11 @@ impl Store {
             }
             if !requires_prior_execution && has_prior_execution {
                 return Err(StoreError::Validation(
-                    "start_task requires a task that has not started execution yet"
-                        .to_string(),
+                    "start_task requires a task that has not started execution yet".to_string(),
                 ));
             }
-            let acting_agent_id = validate_execution_actor(
-                &current_task,
-                input.acting_agent_id,
-                action_name,
-            )?;
+            let acting_agent_id =
+                validate_execution_actor(&current_task, input.acting_agent_id, action_name)?;
             conn.execute(
                 r"
                 UPDATE tasks
@@ -921,11 +906,8 @@ impl Store {
                     "complete_task requires an assigned or in-progress task".to_string(),
                 ));
             }
-            let acting_agent_id = validate_execution_actor(
-                &current_task,
-                input.acting_agent_id,
-                "complete_task",
-            )?;
+            let acting_agent_id =
+                validate_execution_actor(&current_task, input.acting_agent_id, "complete_task")?;
             let duration_seconds = if current_task.status == TaskStatus::InProgress {
                 compute_open_execution_duration_seconds(conn, task_id, Utc::now())?
             } else {
@@ -1196,9 +1178,7 @@ fn verify_task_status_update<'a>(
         ));
     }
     let verification_state = input.verification_state.ok_or_else(|| {
-        StoreError::Validation(
-            "verify_task requires a verification_state value".to_string(),
-        )
+        StoreError::Validation("verify_task requires a verification_state value".to_string())
     })?;
     if verification_state == VerificationState::Unknown {
         return Err(StoreError::Validation(

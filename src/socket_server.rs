@@ -325,16 +325,12 @@ fn handle_task_action(params: &Value) -> Value {
 
     // Build TaskAction using the pattern from app.rs
     let task_action = match action_kind {
-        canopy::models::OperatorActionKind::AcknowledgeTask => {
-            TaskAction::Acknowledge {
-                note: params.note.as_deref(),
-            }
-        }
-        canopy::models::OperatorActionKind::UnacknowledgeTask => {
-            TaskAction::Unacknowledge {
-                note: params.note.as_deref(),
-            }
-        }
+        canopy::models::OperatorActionKind::AcknowledgeTask => TaskAction::Acknowledge {
+            note: params.note.as_deref(),
+        },
+        canopy::models::OperatorActionKind::UnacknowledgeTask => TaskAction::Unacknowledge {
+            note: params.note.as_deref(),
+        },
         canopy::models::OperatorActionKind::SetTaskPriority => {
             if priority.is_none() {
                 return json!({ "error": "set_task_priority requires priority" });
@@ -353,13 +349,11 @@ fn handle_task_action(params: &Value) -> Value {
                 note: params.note.as_deref(),
             }
         }
-        canopy::models::OperatorActionKind::UpdateTaskNote => {
-            TaskAction::UpdateNote {
-                owner_note: params.owner_note.as_deref(),
-                clear_owner_note: params.clear_owner_note.unwrap_or(false),
-                note: params.note.as_deref(),
-            }
-        }
+        canopy::models::OperatorActionKind::UpdateTaskNote => TaskAction::UpdateNote {
+            owner_note: params.owner_note.as_deref(),
+            clear_owner_note: params.clear_owner_note.unwrap_or(false),
+            note: params.note.as_deref(),
+        },
         canopy::models::OperatorActionKind::SetTaskDueAt => {
             if params.due_at.is_none() {
                 return json!({ "error": "set_task_due_at requires due_at" });
@@ -369,11 +363,9 @@ fn handle_task_action(params: &Value) -> Value {
                 note: params.note.as_deref(),
             }
         }
-        canopy::models::OperatorActionKind::ClearTaskDueAt => {
-            TaskAction::ClearDueAt {
-                note: params.note.as_deref(),
-            }
-        }
+        canopy::models::OperatorActionKind::ClearTaskDueAt => TaskAction::ClearDueAt {
+            note: params.note.as_deref(),
+        },
         canopy::models::OperatorActionKind::SetReviewDueAt => {
             if params.review_due_at.is_none() {
                 return json!({ "error": "set_review_due_at requires review_due_at" });
@@ -383,11 +375,9 @@ fn handle_task_action(params: &Value) -> Value {
                 note: params.note.as_deref(),
             }
         }
-        canopy::models::OperatorActionKind::ClearReviewDueAt => {
-            TaskAction::ClearReviewDueAt {
-                note: params.note.as_deref(),
-            }
-        }
+        canopy::models::OperatorActionKind::ClearReviewDueAt => TaskAction::ClearReviewDueAt {
+            note: params.note.as_deref(),
+        },
         canopy::models::OperatorActionKind::VerifyTask => {
             if verification_state.is_none() {
                 return json!({ "error": "verify_task requires verification_state" });
@@ -415,11 +405,9 @@ fn handle_task_action(params: &Value) -> Value {
                 note: params.note.as_deref(),
             }
         }
-        canopy::models::OperatorActionKind::UnblockTask => {
-            TaskAction::Unblock {
-                note: params.note.as_deref(),
-            }
-        }
+        canopy::models::OperatorActionKind::UnblockTask => TaskAction::Unblock {
+            note: params.note.as_deref(),
+        },
         canopy::models::OperatorActionKind::ReopenBlockedTaskWhenUnblocked => {
             TaskAction::ReopenWhenUnblocked {
                 note: params.note.as_deref(),
@@ -568,7 +556,9 @@ fn handle_task_action(params: &Value) -> Value {
             if params.review_annotation_file_path.is_none() {
                 return json!({ "error": "attach_review_annotation requires review_annotation_file_path" });
             }
-            if params.review_annotation_start_line.is_none() || params.review_annotation_end_line.is_none() {
+            if params.review_annotation_start_line.is_none()
+                || params.review_annotation_end_line.is_none()
+            {
                 return json!({ "error": "attach_review_annotation requires review_annotation_start_line and review_annotation_end_line" });
             }
             if review_annotation_action.is_none() {
@@ -626,9 +616,7 @@ fn handle_task_action(params: &Value) -> Value {
                 related_task_id: params.related_task_id.as_deref().unwrap(),
             }
         }
-        canopy::models::OperatorActionKind::CloseFollowUpChain => {
-            TaskAction::CloseFollowUpChain
-        }
+        canopy::models::OperatorActionKind::CloseFollowUpChain => TaskAction::CloseFollowUpChain,
         // Handoff-related actions are not valid for task actions
         canopy::models::OperatorActionKind::AcceptHandoff
         | canopy::models::OperatorActionKind::RejectHandoff

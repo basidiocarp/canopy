@@ -163,9 +163,7 @@ impl Store {
         self.in_transaction(|conn| {
             let current_task = get_task_in_connection(conn, task_id)?;
             let related_task_id = input.related_task_id.ok_or_else(|| {
-                StoreError::Validation(
-                    "resolve_dependency requires a related_task_id".to_string(),
-                )
+                StoreError::Validation("resolve_dependency requires a related_task_id".to_string())
             })?;
             let related_task = get_task_in_connection(conn, related_task_id)?;
             let relationship = find_task_relationship_between_in_connection(
@@ -176,8 +174,7 @@ impl Store {
             )?
             .ok_or_else(|| {
                 StoreError::Validation(
-                    "resolve_dependency requires an existing dependency relationship"
-                        .to_string(),
+                    "resolve_dependency requires an existing dependency relationship".to_string(),
                 )
             })?;
             delete_task_relationship_in_connection(conn, &relationship.relationship_id)?;
@@ -229,9 +226,7 @@ impl Store {
         self.in_transaction(|conn| {
             let current_task = get_task_in_connection(conn, task_id)?;
             let related_task_id = input.related_task_id.ok_or_else(|| {
-                StoreError::Validation(
-                    "promote_follow_up requires a related_task_id".to_string(),
-                )
+                StoreError::Validation("promote_follow_up requires a related_task_id".to_string())
             })?;
             let related_task = get_task_in_connection(conn, related_task_id)?;
             let relationship = find_task_relationship_between_in_connection(
@@ -242,8 +237,7 @@ impl Store {
             )?
             .ok_or_else(|| {
                 StoreError::Validation(
-                    "promote_follow_up requires an existing follow-up relationship"
-                        .to_string(),
+                    "promote_follow_up requires an existing follow-up relationship".to_string(),
                 )
             })?;
             delete_task_relationship_in_connection(conn, &relationship.relationship_id)?;

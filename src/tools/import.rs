@@ -424,10 +424,7 @@ fn process_assignment(
                 if let Err(e) =
                     crate::store::ensure_capabilities_match(store, &parent_task.task_id, agent_id)
                 {
-                    warn!(
-                        "import succeeded but cannot assign to '{}': {e}",
-                        agent_id
-                    );
+                    warn!("import succeeded but cannot assign to '{}': {e}", agent_id);
                 } else if let Err(e) = store.assign_task(
                     &parent_task.task_id,
                     agent_id,

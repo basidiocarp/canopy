@@ -245,7 +245,12 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
     }
 }
 
-fn matches_execution_status_view(task: &Task, context: &SnapshotContext, task_attention: Option<&TaskAttention>, view: TaskView) -> Option<bool> {
+fn matches_execution_status_view(
+    task: &Task,
+    context: &SnapshotContext,
+    task_attention: Option<&TaskAttention>,
+    view: TaskView,
+) -> Option<bool> {
     Some(match view {
         TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
         TaskView::AssignedAwaitingClaim => context
@@ -303,7 +308,11 @@ fn matches_queue_view(task: &Task, context: &SnapshotContext, view: TaskView) ->
     })
 }
 
-fn matches_review_status_view(task: &Task, context: &SnapshotContext, view: TaskView) -> Option<bool> {
+fn matches_review_status_view(
+    task: &Task,
+    context: &SnapshotContext,
+    view: TaskView,
+) -> Option<bool> {
     Some(match view {
         TaskView::Review => {
             let workflow_context = context.workflow_context(&task.task_id);
@@ -372,7 +381,9 @@ pub(super) fn matches_view(
         return matches;
     }
 
-    if let Some(matches) = matches_deadline_view(task, context.deadline_summary(&task.task_id), view) {
+    if let Some(matches) =
+        matches_deadline_view(task, context.deadline_summary(&task.task_id), view)
+    {
         return matches;
     }
 
@@ -680,7 +691,12 @@ pub(super) fn derive_task_relationship_summaries(
         .collect();
     let mut summaries: HashMap<String, TaskRelationshipSummary> = tasks
         .iter()
-        .map(|task| (task.task_id.clone(), create_empty_relationship_summary(task.task_id.clone())))
+        .map(|task| {
+            (
+                task.task_id.clone(),
+                create_empty_relationship_summary(task.task_id.clone()),
+            )
+        })
         .collect();
 
     for relationship in relationships {

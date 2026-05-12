@@ -324,7 +324,8 @@ impl Store {
             )?;
             touch_task_in_connection(conn, &handoff.task_id)?;
             let task = get_task_in_connection(conn, &handoff.task_id)?;
-            let base_note = format!("handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true");
+            let base_note =
+                format!("handoff_action=follow_up; handoff_id={handoff_id}; refreshed=true");
             let note_str = note.map_or(base_note.clone(), |extra| {
                 format!("{base_note}; note={extra}")
             });

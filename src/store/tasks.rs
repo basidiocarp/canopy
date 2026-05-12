@@ -52,10 +52,7 @@ pub fn compute_body_hash(title: &str, description: Option<&str>, scope: &[String
 ///
 /// Both `atomic_claim_task` variants bypass `update_task_status`, so they call
 /// this helper directly after their raw SQL UPDATE succeeds.
-fn record_body_hash_if_needed(
-    conn: &rusqlite::Connection,
-    task_id: &str,
-) -> StoreResult<()> {
+fn record_body_hash_if_needed(conn: &rusqlite::Connection, task_id: &str) -> StoreResult<()> {
     let task = get_task_in_connection(conn, task_id)?;
     if task.immutable_once_dispatched && task.body_hash.is_none() {
         let hash = compute_body_hash(&task.title, task.description.as_deref(), &task.scope);

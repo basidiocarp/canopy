@@ -317,10 +317,7 @@ struct ReviewCycleMetrics {
     events: Vec<TaskEvent>,
 }
 
-fn load_review_cycle_metrics(
-    conn: &Connection,
-    task_id: &str,
-) -> StoreResult<ReviewCycleMetrics> {
+fn load_review_cycle_metrics(conn: &Connection, task_id: &str) -> StoreResult<ReviewCycleMetrics> {
     let council_session_id = conn
         .query_row(
             "SELECT council_session_id FROM council_sessions WHERE task_id = ?1",
