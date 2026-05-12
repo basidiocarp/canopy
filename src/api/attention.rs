@@ -99,7 +99,213 @@ pub(super) fn derive_handoff_attention(
         .collect()
 }
 
-#[allow(clippy::too_many_lines)]
+fn collect_blocking_reasons(
+    task: &Task,
+    relationship_summary: Option<&TaskRelationshipSummary>,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
+    if task.status == TaskStatus::Blocked {
+        reasons.push(TaskAttentionReason::Blocked);
+        if let Some(summary) = relationship_summary {
+            if summary.active_blocker_count > 0 {
+                reasons.push(TaskAttentionReason::BlockedByActiveDependency);
+            }
+            if summary.stale_blocker_count > 0 {
+                reasons.push(TaskAttentionReason::BlockedByStaleDependency);
+            }
+        }
+    }
+}
+
+fn collect_deadline_reasons(
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
+    if let Some(summary) = deadline_summary {
+        match summary.execution_state {
+            DeadlineState::DueSoon => reasons.push(TaskAttentionReason::DueSoonExecution),
+            DeadlineState::Overdue => reasons.push(TaskAttentionReason::OverdueExecution),
+            DeadlineState::None | DeadlineState::Scheduled => {}
+        }
+        match summary.review_state {
+            DeadlineState::DueSoon => reasons.push(TaskAttentionReason::DueSoonReview),
+            DeadlineState::Overdue => reasons.push(TaskAttentionReason::OverdueReview),
+            DeadlineState::None | DeadlineState::Scheduled => {}
+        }
+    }
+}
+
+fn collect_review_reasons(task: &Task, context: &SnapshotContext, reasons: &mut Vec<TaskAttentionReason>) {
+    if task.status == TaskStatus::ReviewRequired {
+        reasons.push(TaskAttentionReason::ReviewRequired);
+    }
+    if context
+        .review_with_graph_pressure_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewWithGraphPressure);
+    }
+    if context
+        .review_handoff_follow_through_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewHandoffFollowThrough);
+    }
+    if context
+        .review_decision_follow_through_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewDecisionFollowThrough);
+    }
+    if context
+        .review_awaiting_support_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewAwaitingSupport);
+    }
+    if context
+        .review_ready_for_decision_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewReadyForDecision);
+    }
+    if context
+        .review_ready_for_closeout_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::ReviewReadyForCloseout);
+    }
+}
+
+fn collect_relationship_reasons(
+    is_open: bool,
+    relationship_summary: Option<&TaskRelationshipSummary>,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
+    if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
+        reasons.push(TaskAttentionReason::HasOpenFollowUps);
+    }
+    if is_open && relationship_summary.is_some_and(|summary| summary.children_complete) {
+        reasons.push(TaskAttentionReason::AllChildrenComplete);
+    }
+    if is_open && relationship_summary.is_some_and(|summary| summary.open_child_count > 0) {
+        reasons.push(TaskAttentionReason::BlockedOnChildren);
+    }
+}
+
+fn collect_ownership_reasons(task: &Task, context: &SnapshotContext, reasons: &mut Vec<TaskAttentionReason>) {
+    if context
+        .assigned_awaiting_claim_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::AssignedAwaitingClaim);
+    }
+    if context.claimed_not_started_task_ids.contains(&task.task_id) {
+        reasons.push(TaskAttentionReason::ClaimedNotStarted);
+    }
+    if context.paused_resumable_task_ids.contains(&task.task_id) {
+        reasons.push(TaskAttentionReason::PausedResumable);
+    }
+    if context
+        .pending_handoff_acceptance_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::AwaitingHandoffAcceptance);
+    }
+    if context
+        .accepted_handoff_follow_through_task_ids
+        .contains(&task.task_id)
+    {
+        reasons.push(TaskAttentionReason::AcceptedHandoffPendingExecution);
+    }
+}
+
+fn collect_priority_severity_reasons(task: &Task, reasons: &mut Vec<TaskAttentionReason>) {
+    match task.priority {
+        TaskPriority::High => reasons.push(TaskAttentionReason::HighPriority),
+        TaskPriority::Critical => reasons.push(TaskAttentionReason::CriticalPriority),
+        TaskPriority::Low | TaskPriority::Medium => {}
+    }
+    match task.severity {
+        TaskSeverity::High => reasons.push(TaskAttentionReason::HighSeverity),
+        TaskSeverity::Critical => reasons.push(TaskAttentionReason::CriticalSeverity),
+        TaskSeverity::None | TaskSeverity::Low | TaskSeverity::Medium => {}
+    }
+}
+
+fn collect_freshness_reasons(
+    task: &Task,
+    freshness: Freshness,
+    owner_heartbeat_freshness: Option<Freshness>,
+    open_handoff_freshness: Option<Freshness>,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
+    if task.verification_state == VerificationState::Failed {
+        reasons.push(TaskAttentionReason::VerificationFailed);
+    }
+    match freshness {
+        Freshness::Aging => reasons.push(TaskAttentionReason::AgingUpdate),
+        Freshness::Stale => reasons.push(TaskAttentionReason::StaleUpdate),
+        Freshness::Fresh | Freshness::Missing => {}
+    }
+    match owner_heartbeat_freshness {
+        Some(Freshness::Aging) => reasons.push(TaskAttentionReason::AgingOwnerHeartbeat),
+        Some(Freshness::Stale) => reasons.push(TaskAttentionReason::StaleOwnerHeartbeat),
+        Some(Freshness::Missing) => {
+            reasons.push(TaskAttentionReason::MissingOwnerHeartbeat);
+        }
+        Some(Freshness::Fresh) | None => {}
+    }
+    match open_handoff_freshness {
+        Some(Freshness::Aging) => reasons.push(TaskAttentionReason::AgingOpenHandoff),
+        Some(Freshness::Stale) => reasons.push(TaskAttentionReason::StaleOpenHandoff),
+        Some(Freshness::Fresh | Freshness::Missing) | None => {}
+    }
+}
+
+fn add_unacknowledged_if_warranted(
+    task: &Task,
+    acknowledged: bool,
+    reasons: &mut Vec<TaskAttentionReason>,
+) {
+    if !acknowledged
+        && (task_priority_rank(task.priority) >= task_priority_rank(TaskPriority::High)
+            || task_severity_rank(task.severity) >= task_severity_rank(TaskSeverity::High)
+            || !reasons.is_empty())
+    {
+        reasons.push(TaskAttentionReason::Unacknowledged);
+    }
+}
+
+fn compute_attention_level(task: &Task, reasons: &[TaskAttentionReason]) -> AttentionLevel {
+    if reasons.iter().any(|reason| {
+        matches!(
+            reason,
+            TaskAttentionReason::Blocked
+                | TaskAttentionReason::BlockedByStaleDependency
+                | TaskAttentionReason::OverdueExecution
+                | TaskAttentionReason::OverdueReview
+                | TaskAttentionReason::CriticalPriority
+                | TaskAttentionReason::CriticalSeverity
+                | TaskAttentionReason::VerificationFailed
+                | TaskAttentionReason::StaleUpdate
+                | TaskAttentionReason::StaleOwnerHeartbeat
+                | TaskAttentionReason::MissingOwnerHeartbeat
+                | TaskAttentionReason::StaleOpenHandoff
+        )
+    }) || (reasons.contains(&TaskAttentionReason::Unacknowledged)
+        && task_priority_rank(task.priority) >= task_priority_rank(TaskPriority::Critical))
+        || (reasons.contains(&TaskAttentionReason::Unacknowledged)
+            && task_severity_rank(task.severity) >= task_severity_rank(TaskSeverity::Critical))
+    {
+        AttentionLevel::Critical
+    } else if reasons.is_empty() {
+        AttentionLevel::Normal
+    } else {
+        AttentionLevel::NeedsAttention
+    }
+}
+
 pub(super) fn derive_task_attention(
     tasks: &[Task],
     handoffs: &[Handoff],
@@ -150,175 +356,22 @@ pub(super) fn derive_task_attention(
             let acknowledged = task.acknowledged_at.is_some();
 
             let mut reasons = Vec::new();
-            if task.status == TaskStatus::Blocked {
-                reasons.push(TaskAttentionReason::Blocked);
-                if let Some(summary) = relationship_summary {
-                    if summary.active_blocker_count > 0 {
-                        reasons.push(TaskAttentionReason::BlockedByActiveDependency);
-                    }
-                    if summary.stale_blocker_count > 0 {
-                        reasons.push(TaskAttentionReason::BlockedByStaleDependency);
-                    }
-                }
-            }
-            if deadline_summary
-                .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon)
-            {
-                reasons.push(TaskAttentionReason::DueSoonExecution);
-            }
-            if deadline_summary
-                .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue)
-            {
-                reasons.push(TaskAttentionReason::OverdueExecution);
-            }
-            if deadline_summary
-                .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon)
-            {
-                reasons.push(TaskAttentionReason::DueSoonReview);
-            }
-            if deadline_summary
-                .is_some_and(|summary| summary.review_state == DeadlineState::Overdue)
-            {
-                reasons.push(TaskAttentionReason::OverdueReview);
-            }
-            if task.status == TaskStatus::ReviewRequired {
-                reasons.push(TaskAttentionReason::ReviewRequired);
-            }
-            if context
-                .review_with_graph_pressure_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewWithGraphPressure);
-            }
-            if context
-                .review_handoff_follow_through_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewHandoffFollowThrough);
-            }
-            if context
-                .review_decision_follow_through_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewDecisionFollowThrough);
-            }
-            if context
-                .review_awaiting_support_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewAwaitingSupport);
-            }
-            if context
-                .review_ready_for_decision_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewReadyForDecision);
-            }
-            if context
-                .review_ready_for_closeout_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::ReviewReadyForCloseout);
-            }
-            if task.verification_state == VerificationState::Failed {
-                reasons.push(TaskAttentionReason::VerificationFailed);
-            }
-            if relationship_summary.is_some_and(|summary| summary.open_follow_up_child_count > 0) {
-                reasons.push(TaskAttentionReason::HasOpenFollowUps);
-            }
-            if is_open && relationship_summary.is_some_and(|summary| summary.children_complete) {
-                reasons.push(TaskAttentionReason::AllChildrenComplete);
-            }
-            if is_open && relationship_summary.is_some_and(|summary| summary.open_child_count > 0) {
-                reasons.push(TaskAttentionReason::BlockedOnChildren);
-            }
-            if context
-                .assigned_awaiting_claim_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::AssignedAwaitingClaim);
-            }
-            if context.claimed_not_started_task_ids.contains(&task.task_id) {
-                reasons.push(TaskAttentionReason::ClaimedNotStarted);
-            }
-            if context.paused_resumable_task_ids.contains(&task.task_id) {
-                reasons.push(TaskAttentionReason::PausedResumable);
-            }
-            if context
-                .pending_handoff_acceptance_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::AwaitingHandoffAcceptance);
-            }
-            if context
-                .accepted_handoff_follow_through_task_ids
-                .contains(&task.task_id)
-            {
-                reasons.push(TaskAttentionReason::AcceptedHandoffPendingExecution);
-            }
-            match task.priority {
-                TaskPriority::High => reasons.push(TaskAttentionReason::HighPriority),
-                TaskPriority::Critical => reasons.push(TaskAttentionReason::CriticalPriority),
-                TaskPriority::Low | TaskPriority::Medium => {}
-            }
-            match task.severity {
-                TaskSeverity::High => reasons.push(TaskAttentionReason::HighSeverity),
-                TaskSeverity::Critical => reasons.push(TaskAttentionReason::CriticalSeverity),
-                TaskSeverity::None | TaskSeverity::Low | TaskSeverity::Medium => {}
-            }
-            match freshness {
-                Freshness::Aging => reasons.push(TaskAttentionReason::AgingUpdate),
-                Freshness::Stale => reasons.push(TaskAttentionReason::StaleUpdate),
-                Freshness::Fresh | Freshness::Missing => {}
-            }
-            match owner_heartbeat_freshness {
-                Some(Freshness::Aging) => reasons.push(TaskAttentionReason::AgingOwnerHeartbeat),
-                Some(Freshness::Stale) => reasons.push(TaskAttentionReason::StaleOwnerHeartbeat),
-                Some(Freshness::Missing) => {
-                    reasons.push(TaskAttentionReason::MissingOwnerHeartbeat);
-                }
-                Some(Freshness::Fresh) | None => {}
-            }
-            match open_handoff_freshness {
-                Some(Freshness::Aging) => reasons.push(TaskAttentionReason::AgingOpenHandoff),
-                Some(Freshness::Stale) => reasons.push(TaskAttentionReason::StaleOpenHandoff),
-                Some(Freshness::Fresh | Freshness::Missing) | None => {}
-            }
-            if !acknowledged
-                && (task_priority_rank(task.priority) >= task_priority_rank(TaskPriority::High)
-                    || task_severity_rank(task.severity) >= task_severity_rank(TaskSeverity::High)
-                    || !reasons.is_empty())
-            {
-                reasons.push(TaskAttentionReason::Unacknowledged);
-            }
+            collect_blocking_reasons(task, relationship_summary, &mut reasons);
+            collect_deadline_reasons(deadline_summary, &mut reasons);
+            collect_review_reasons(task, context, &mut reasons);
+            collect_relationship_reasons(is_open, relationship_summary, &mut reasons);
+            collect_ownership_reasons(task, context, &mut reasons);
+            collect_priority_severity_reasons(task, &mut reasons);
+            collect_freshness_reasons(
+                task,
+                freshness,
+                owner_heartbeat_freshness,
+                open_handoff_freshness,
+                &mut reasons,
+            );
+            add_unacknowledged_if_warranted(task, acknowledged, &mut reasons);
 
-            let level = if reasons.iter().any(|reason| {
-                matches!(
-                    reason,
-                    TaskAttentionReason::Blocked
-                        | TaskAttentionReason::BlockedByStaleDependency
-                        | TaskAttentionReason::OverdueExecution
-                        | TaskAttentionReason::OverdueReview
-                        | TaskAttentionReason::CriticalPriority
-                        | TaskAttentionReason::CriticalSeverity
-                        | TaskAttentionReason::VerificationFailed
-                        | TaskAttentionReason::StaleUpdate
-                        | TaskAttentionReason::StaleOwnerHeartbeat
-                        | TaskAttentionReason::MissingOwnerHeartbeat
-                        | TaskAttentionReason::StaleOpenHandoff
-                )
-            }) || (reasons.contains(&TaskAttentionReason::Unacknowledged)
-                && task_priority_rank(task.priority) >= task_priority_rank(TaskPriority::Critical))
-                || (reasons.contains(&TaskAttentionReason::Unacknowledged)
-                    && task_severity_rank(task.severity)
-                        >= task_severity_rank(TaskSeverity::Critical))
-            {
-                AttentionLevel::Critical
-            } else if reasons.is_empty() {
-                AttentionLevel::Normal
-            } else {
-                AttentionLevel::NeedsAttention
-            };
+            let level = compute_attention_level(task, &reasons);
 
             TaskAttention {
                 task_id: task.task_id.clone(),

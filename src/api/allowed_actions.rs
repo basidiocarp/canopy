@@ -34,65 +34,8 @@ pub(super) fn derive_allowed_actions(
     actions
 }
 
-#[allow(clippy::too_many_lines)]
-pub(super) fn derive_allowed_task_actions(
-    task: &Task,
-    attention: &TaskAttention,
-    deadline_summary: &TaskDeadlineSummary,
-    relationship_summary: &TaskRelationshipSummary,
-    execution_summary: &TaskExecutionSummary,
-    council_session: Option<&CouncilSession>,
-) -> Vec<OperatorAction> {
-    let task_level = if attention.level == AttentionLevel::Normal {
-        AttentionLevel::NeedsAttention
-    } else {
-        attention.level
-    };
-
-    if matches!(
-        task.status,
-        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
-    ) {
-        return Vec::new();
-    }
-
-    let mut actions = vec![
-        make_task_allowed_action(
-            task,
-            if attention.acknowledged {
-                OperatorActionKind::UnacknowledgeTask
-            } else {
-                OperatorActionKind::AcknowledgeTask
-            },
-            task_level,
-            if attention.acknowledged {
-                "unacknowledge"
-            } else {
-                "acknowledge"
-            },
-            if attention.acknowledged {
-                format!("Unacknowledge {}", task.title)
-            } else {
-                format!("Acknowledge {}", task.title)
-            },
-            "Update operator acknowledgment for this task.",
-        ),
-        make_task_allowed_action(
-            task,
-            OperatorActionKind::ReassignTask,
-            task_level,
-            "reassign",
-            format!("Reassign {}", task.title),
-            "Transfer task ownership to another agent.",
-        ),
-        make_task_allowed_action(
-            task,
-            OperatorActionKind::ClaimTask,
-            task_level,
-            "claim",
-            format!("Claim {}", task.title),
-            "Claim this unowned task for agent execution.",
-        ),
+fn build_basic_task_actions(task: &Task, execution_summary: &TaskExecutionSummary, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
         make_task_allowed_action(
             task,
             if execution_summary.run_count > 0 {
@@ -101,11 +44,7 @@ pub(super) fn derive_allowed_task_actions(
                 OperatorActionKind::StartTask
             },
             task_level,
-            if execution_summary.run_count > 0 {
-                "resume"
-            } else {
-                "start"
-            },
+            if execution_summary.run_count > 0 { "resume" } else { "start" },
             if execution_summary.run_count > 0 {
                 format!("Resume {}", task.title)
             } else {
@@ -141,6 +80,64 @@ pub(super) fn derive_allowed_task_actions(
             format!("Complete {}", task.title),
             "Mark execution complete and move this task to review.",
         ),
+    ]
+}
+
+fn build_lifecycle_actions(task: &Task, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::ClaimTask,
+            task_level,
+            "claim",
+            format!("Claim {}", task.title),
+            "Claim this unowned task for agent execution.",
+        ),
+        make_task_allowed_action(
+            task,
+            if task.status == TaskStatus::Blocked {
+                OperatorActionKind::UnblockTask
+            } else {
+                OperatorActionKind::BlockTask
+            },
+            task_level,
+            if task.status == TaskStatus::Blocked { "unblock" } else { "block" },
+            if task.status == TaskStatus::Blocked {
+                format!("Unblock {}", task.title)
+            } else {
+                format!("Block {}", task.title)
+            },
+            "Update task lifecycle state for operator triage.",
+        ),
+    ]
+}
+
+fn build_triage_actions(task: &Task, attention: &TaskAttention, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
+        make_task_allowed_action(
+            task,
+            if attention.acknowledged {
+                OperatorActionKind::UnacknowledgeTask
+            } else {
+                OperatorActionKind::AcknowledgeTask
+            },
+            task_level,
+            if attention.acknowledged { "unacknowledge" } else { "acknowledge" },
+            if attention.acknowledged {
+                format!("Unacknowledge {}", task.title)
+            } else {
+                format!("Acknowledge {}", task.title)
+            },
+            "Update operator acknowledgment for this task.",
+        ),
+        make_task_allowed_action(
+            task,
+            OperatorActionKind::ReassignTask,
+            task_level,
+            "reassign",
+            format!("Reassign {}", task.title),
+            "Transfer task ownership to another agent.",
+        ),
         make_task_allowed_action(
             task,
             OperatorActionKind::SetTaskPriority,
@@ -165,6 +162,11 @@ pub(super) fn derive_allowed_task_actions(
             format!("Update note for {}", task.title),
             "Add or clear operator context on the task.",
         ),
+    ]
+}
+
+fn build_deadline_actions(task: &Task, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
         make_task_allowed_action(
             task,
             OperatorActionKind::SetTaskDueAt,
@@ -197,6 +199,11 @@ pub(super) fn derive_allowed_task_actions(
             format!("Clear review due date for {}", task.title),
             "Clear the review deadline for this task.",
         ),
+    ]
+}
+
+fn build_coordination_actions(task: &Task, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
         make_task_allowed_action(
             task,
             OperatorActionKind::SummonCouncilSession,
@@ -253,26 +260,11 @@ pub(super) fn derive_allowed_task_actions(
             format!("Link dependency for {}", task.title),
             "Link this task to another task as blocking or blocked-by.",
         ),
-        make_task_allowed_action(
-            task,
-            if task.status == TaskStatus::Blocked {
-                OperatorActionKind::UnblockTask
-            } else {
-                OperatorActionKind::BlockTask
-            },
-            task_level,
-            if task.status == TaskStatus::Blocked {
-                "unblock"
-            } else {
-                "block"
-            },
-            if task.status == TaskStatus::Blocked {
-                format!("Unblock {}", task.title)
-            } else {
-                format!("Block {}", task.title)
-            },
-            "Update task lifecycle state for operator triage.",
-        ),
+    ]
+}
+
+fn build_review_actions(task: &Task, task_level: AttentionLevel) -> Vec<OperatorAction> {
+    vec![
         make_task_allowed_action(
             task,
             OperatorActionKind::RecordDecision,
@@ -289,8 +281,18 @@ pub(super) fn derive_allowed_task_actions(
             format!("Close {}", task.title),
             "Finalize review closeout and mark the task complete.",
         ),
-    ];
+    ]
+}
 
+fn filter_allowed_actions(
+    actions: &mut Vec<OperatorAction>,
+    task: &Task,
+    attention: &TaskAttention,
+    deadline_summary: &TaskDeadlineSummary,
+    relationship_summary: &TaskRelationshipSummary,
+    execution_summary: &TaskExecutionSummary,
+    council_session: Option<&CouncilSession>,
+) {
     actions.retain(|action| match action.kind {
         OperatorActionKind::ClaimTask => {
             task.status == TaskStatus::Open
@@ -351,7 +353,14 @@ pub(super) fn derive_allowed_task_actions(
         OperatorActionKind::PostCouncilMessage => council_session.is_some(),
         _ => true,
     });
+}
 
+fn add_conditional_actions(
+    actions: &mut Vec<OperatorAction>,
+    task: &Task,
+    relationship_summary: &TaskRelationshipSummary,
+    task_level: AttentionLevel,
+) {
     if task.status == TaskStatus::ReviewRequired
         || matches!(
             task.verification_state,
@@ -413,6 +422,48 @@ pub(super) fn derive_allowed_task_actions(
             "Detach resolved follow-up tasks from this task chain.",
         ));
     }
+}
+
+pub(super) fn derive_allowed_task_actions(
+    task: &Task,
+    attention: &TaskAttention,
+    deadline_summary: &TaskDeadlineSummary,
+    relationship_summary: &TaskRelationshipSummary,
+    execution_summary: &TaskExecutionSummary,
+    council_session: Option<&CouncilSession>,
+) -> Vec<OperatorAction> {
+    let task_level = if attention.level == AttentionLevel::Normal {
+        AttentionLevel::NeedsAttention
+    } else {
+        attention.level
+    };
+
+    if matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+    ) {
+        return Vec::new();
+    }
+
+    let mut actions = Vec::new();
+    actions.extend(build_lifecycle_actions(task, task_level));
+    actions.extend(build_triage_actions(task, attention, task_level));
+    actions.extend(build_deadline_actions(task, task_level));
+    actions.extend(build_basic_task_actions(task, execution_summary, task_level));
+    actions.extend(build_coordination_actions(task, task_level));
+    actions.extend(build_review_actions(task, task_level));
+
+    filter_allowed_actions(
+        &mut actions,
+        task,
+        attention,
+        deadline_summary,
+        relationship_summary,
+        execution_summary,
+        council_session,
+    );
+
+    add_conditional_actions(&mut actions, task, relationship_summary, task_level);
 
     actions
 }

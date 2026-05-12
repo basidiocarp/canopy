@@ -40,14 +40,8 @@ pub(super) fn resolve_snapshot_options(options: SnapshotOptions<'_>) -> Resolved
     resolved
 }
 
-#[allow(clippy::too_many_lines)]
-pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+fn apply_review_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
     match preset {
-        SnapshotPreset::Default => {}
-        SnapshotPreset::Attention => {
-            options.view = TaskView::Attention;
-            options.sort = TaskSort::Attention;
-        }
         SnapshotPreset::ReviewQueue => {
             options.view = TaskView::Review;
             options.sort = TaskSort::Verification;
@@ -93,6 +87,12 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
             options.view = TaskView::ReviewReadyForCloseout;
             options.sort = TaskSort::Attention;
         }
+        _ => {}
+    }
+}
+
+fn apply_execution_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
         SnapshotPreset::Unclaimed => {
             options.view = TaskView::Unclaimed;
             options.sort = TaskSort::UpdatedAt;
@@ -117,6 +117,12 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
             options.view = TaskView::PausedResumable;
             options.sort = TaskSort::UpdatedAt;
         }
+        _ => {}
+    }
+}
+
+fn apply_deadline_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
         SnapshotPreset::DueSoon => {
             options.view = TaskView::DueSoon;
             options.sort = TaskSort::Attention;
@@ -145,6 +151,12 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
             options.view = TaskView::OverdueReview;
             options.sort = TaskSort::Attention;
         }
+        _ => {}
+    }
+}
+
+fn apply_handoff_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
         SnapshotPreset::AwaitingHandoffAcceptance => {
             options.view = TaskView::AwaitingHandoffAcceptance;
             options.sort = TaskSort::UpdatedAt;
@@ -169,6 +181,16 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
             options.view = TaskView::OverdueAcceptedHandoffFollowThrough;
             options.sort = TaskSort::UpdatedAt;
         }
+        SnapshotPreset::Handoffs => {
+            options.view = TaskView::Handoffs;
+            options.sort = TaskSort::UpdatedAt;
+        }
+        _ => {}
+    }
+}
+
+fn apply_state_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
         SnapshotPreset::Blocked => {
             options.view = TaskView::Blocked;
             options.sort = TaskSort::Attention;
@@ -177,42 +199,148 @@ pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: Snapsh
             options.view = TaskView::BlockedByDependencies;
             options.sort = TaskSort::Attention;
         }
-        SnapshotPreset::Handoffs => {
-            options.view = TaskView::Handoffs;
-            options.sort = TaskSort::UpdatedAt;
-        }
         SnapshotPreset::FollowUpChains => {
             options.view = TaskView::FollowUpChains;
             options.sort = TaskSort::Attention;
         }
+        _ => {}
+    }
+}
+
+fn apply_attention_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
         SnapshotPreset::Critical => {
             options.view = TaskView::Attention;
             options.sort = TaskSort::Attention;
             options.attention_at_least = Some(AttentionLevel::Critical);
+        }
+        SnapshotPreset::Attention => {
+            options.view = TaskView::Attention;
+            options.sort = TaskSort::Attention;
         }
         SnapshotPreset::Unacknowledged => {
             options.view = TaskView::Attention;
             options.sort = TaskSort::Attention;
             options.acknowledged = Some(false);
         }
+        _ => {}
+    }
+}
+
+pub(super) fn apply_preset(options: &mut ResolvedSnapshotOptions, preset: SnapshotPreset) {
+    match preset {
+        SnapshotPreset::Default => {}
         SnapshotPreset::FileConflicts => {
             options.view = TaskView::FileConflicts;
             options.sort = TaskSort::UpdatedAt;
         }
+        _ => {
+            apply_review_preset(options, preset);
+            apply_execution_preset(options, preset);
+            apply_deadline_preset(options, preset);
+            apply_handoff_preset(options, preset);
+            apply_state_preset(options, preset);
+            apply_attention_preset(options, preset);
+        }
     }
 }
 
-#[allow(clippy::too_many_lines)]
+fn matches_execution_status_view(task: &Task, context: &SnapshotContext, task_attention: Option<&TaskAttention>, view: TaskView) -> Option<bool> {
+    Some(match view {
+        TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
+        TaskView::AssignedAwaitingClaim => context
+            .assigned_awaiting_claim_task_ids
+            .contains(&task.task_id),
+        TaskView::ClaimedNotStarted => context.claimed_not_started_task_ids.contains(&task.task_id),
+        TaskView::InProgress => task.status == TaskStatus::InProgress,
+        TaskView::Stalled => {
+            matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+                && task_attention.is_some_and(|attention| {
+                    matches!(
+                        attention.owner_heartbeat_freshness,
+                        Some(Freshness::Stale | Freshness::Missing)
+                    )
+                })
+        }
+        _ => return None,
+    })
+}
+
+fn matches_workflow_view(task: &Task, context: &SnapshotContext, view: TaskView) -> Option<bool> {
+    Some(match view {
+        TaskView::Blocked => {
+            task.status == TaskStatus::Blocked
+                || task.verification_state == VerificationState::Failed
+        }
+        TaskView::BlockedByDependencies => {
+            let relationship_summary = context.relationship_summary(&task.task_id);
+            task.status == TaskStatus::Blocked
+                && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
+        }
+        TaskView::FollowUpChains => {
+            let relationship_summary = context.relationship_summary(&task.task_id);
+            relationship_summary.is_some_and(|summary| {
+                summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
+            })
+        }
+        _ => return None,
+    })
+}
+
+fn matches_queue_view(task: &Task, context: &SnapshotContext, view: TaskView) -> Option<bool> {
+    Some(match view {
+        TaskView::PausedResumable => {
+            let workflow_context = context.workflow_context(&task.task_id);
+            context.paused_resumable_task_ids.contains(&task.task_id)
+                || workflow_context.is_some_and(|context| {
+                    context
+                        .queue_state
+                        .as_ref()
+                        .is_some_and(|queue| queue.status == TaskQueueStatus::Paused)
+                })
+        }
+        _ => return None,
+    })
+}
+
+fn matches_review_status_view(task: &Task, context: &SnapshotContext, view: TaskView) -> Option<bool> {
+    Some(match view {
+        TaskView::Review => {
+            let workflow_context = context.workflow_context(&task.task_id);
+            task.status == TaskStatus::ReviewRequired
+                || task.verification_state == VerificationState::Pending
+                || workflow_context.is_some_and(|context| {
+                    context.review_cycle.as_ref().is_some_and(|cycle| {
+                        matches!(
+                            cycle.state,
+                            ReviewCycleState::Pending
+                                | ReviewCycleState::InReview
+                                | ReviewCycleState::DecisionReady
+                        )
+                    })
+                })
+        }
+        _ => return None,
+    })
+}
+
+fn matches_scope_view(task: &Task, view: TaskView) -> Option<bool> {
+    Some(match view {
+        TaskView::FileConflicts => {
+            !task.scope.is_empty()
+                && matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn matches_view(
     task: &Task,
     context: &SnapshotContext,
     task_attention: Option<&TaskAttention>,
     view: TaskView,
 ) -> bool {
-    let deadline_summary = context.deadline_summary(&task.task_id);
-    let relationship_summary = context.relationship_summary(&task.task_id);
-    let workflow_context = context.workflow_context(&task.task_id);
-
+    // Try specialized view matchers first
     if let Some(matches) = matches_review_view(
         &task.task_id,
         view,
@@ -244,97 +372,42 @@ pub(super) fn matches_view(
         return matches;
     }
 
-    if let Some(matches) = matches_deadline_view(task, deadline_summary, view) {
+    if let Some(matches) = matches_deadline_view(task, context.deadline_summary(&task.task_id), view) {
         return matches;
     }
 
+    // Try general matchers
+    if let Some(matches) = matches_execution_status_view(task, context, task_attention, view) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_workflow_view(task, context, view) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_queue_view(task, context, view) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_review_status_view(task, context, view) {
+        return matches;
+    }
+
+    if let Some(matches) = matches_scope_view(task, view) {
+        return matches;
+    }
+
+    // Default case
     match view {
         TaskView::All => true,
         TaskView::Active => matches!(
             task.status,
             TaskStatus::Open | TaskStatus::Assigned | TaskStatus::InProgress
         ),
-        TaskView::Unclaimed => task.status == TaskStatus::Open && task.owner_agent_id.is_none(),
-        TaskView::AssignedAwaitingClaim => context
-            .assigned_awaiting_claim_task_ids
-            .contains(&task.task_id),
-        TaskView::ClaimedNotStarted => context.claimed_not_started_task_ids.contains(&task.task_id),
-        TaskView::InProgress => task.status == TaskStatus::InProgress,
-        TaskView::Stalled => {
-            matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
-                && task_attention.is_some_and(|attention| {
-                    matches!(
-                        attention.owner_heartbeat_freshness,
-                        Some(Freshness::Stale | Freshness::Missing)
-                    )
-                })
-        }
-        TaskView::PausedResumable => {
-            context.paused_resumable_task_ids.contains(&task.task_id)
-                || workflow_context.is_some_and(|context| {
-                    context
-                        .queue_state
-                        .as_ref()
-                        .is_some_and(|queue| queue.status == TaskQueueStatus::Paused)
-                })
-        }
-        TaskView::DueSoon
-        | TaskView::DueSoonExecution
-        | TaskView::DueSoonReview
-        | TaskView::OverdueExecution
-        | TaskView::OverdueExecutionOwned
-        | TaskView::OverdueExecutionUnclaimed
-        | TaskView::OverdueReview => unreachable!("deadline views handled above"),
-        TaskView::AwaitingHandoffAcceptance
-        | TaskView::DueSoonHandoffAcceptance
-        | TaskView::OverdueHandoffAcceptance
-        | TaskView::AcceptedHandoffFollowThrough
-        | TaskView::DueSoonAcceptedHandoffFollowThrough
-        | TaskView::OverdueAcceptedHandoffFollowThrough
-        | TaskView::Handoffs => unreachable!("handoff views handled above"),
-        TaskView::Blocked => {
-            task.status == TaskStatus::Blocked
-                || task.verification_state == VerificationState::Failed
-        }
-        TaskView::BlockedByDependencies => {
-            task.status == TaskStatus::Blocked
-                && relationship_summary.is_some_and(|summary| summary.blocker_count > 0)
-        }
-        TaskView::ReviewWithGraphPressure
-        | TaskView::DueSoonReviewHandoffFollowThrough
-        | TaskView::OverdueReviewHandoffFollowThrough
-        | TaskView::DueSoonReviewDecisionFollowThrough
-        | TaskView::OverdueReviewDecisionFollowThrough
-        | TaskView::ReviewHandoffFollowThrough
-        | TaskView::ReviewDecisionFollowThrough
-        | TaskView::ReviewAwaitingSupport
-        | TaskView::ReviewReadyForDecision
-        | TaskView::ReviewReadyForCloseout => unreachable!("review queue views handled above"),
-        TaskView::Review => {
-            task.status == TaskStatus::ReviewRequired
-                || task.verification_state == VerificationState::Pending
-                || workflow_context.is_some_and(|context| {
-                    context.review_cycle.as_ref().is_some_and(|cycle| {
-                        matches!(
-                            cycle.state,
-                            ReviewCycleState::Pending
-                                | ReviewCycleState::InReview
-                                | ReviewCycleState::DecisionReady
-                        )
-                    })
-                })
-        }
-        TaskView::FollowUpChains => relationship_summary.is_some_and(|summary| {
-            summary.follow_up_parent_count > 0 || summary.follow_up_child_count > 0
-        }),
         TaskView::Attention => {
             task_attention.is_some_and(|attention| attention.level != AttentionLevel::Normal)
         }
-        TaskView::FileConflicts => {
-            // Include tasks that have a non-empty scope and are active
-            !task.scope.is_empty()
-                && matches!(task.status, TaskStatus::Assigned | TaskStatus::InProgress)
-        }
+        _ => unreachable!("all view cases should be handled above"),
     }
 }
 
@@ -509,7 +582,93 @@ pub(super) fn is_open_task_status(status: TaskStatus) -> bool {
     )
 }
 
-#[allow(clippy::too_many_lines)]
+fn process_follow_up_relationship(
+    relationship: &TaskRelationship,
+    summaries: &mut HashMap<String, TaskRelationshipSummary>,
+    target_task: &Task,
+) {
+    if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+        summary.follow_up_child_count += 1;
+        if is_open_task_status(target_task.status) {
+            summary.open_follow_up_child_count += 1;
+        }
+    }
+    if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+        summary.follow_up_parent_count += 1;
+    }
+}
+
+fn process_blocks_relationship(
+    relationship: &TaskRelationship,
+    summaries: &mut HashMap<String, TaskRelationshipSummary>,
+    source_task: &Task,
+    now: OffsetDateTime,
+) {
+    if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+        summary.blocking_count += 1;
+    }
+    if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+        summary.blocker_count += 1;
+        if relationship_blocker_is_stale(source_task, now) {
+            summary.stale_blocker_count += 1;
+        } else {
+            summary.active_blocker_count += 1;
+        }
+    }
+}
+
+fn process_depends_on_relationship(
+    relationship: &TaskRelationship,
+    summaries: &mut HashMap<String, TaskRelationshipSummary>,
+    target_task: &Task,
+    now: OffsetDateTime,
+) {
+    if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+        summary.blocker_count += 1;
+        if relationship_blocker_is_stale(target_task, now) {
+            summary.stale_blocker_count += 1;
+        } else {
+            summary.active_blocker_count += 1;
+        }
+    }
+    if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+        summary.blocking_count += 1;
+    }
+}
+
+fn process_parent_relationship(
+    relationship: &TaskRelationship,
+    summaries: &mut HashMap<String, TaskRelationshipSummary>,
+    source_task: &Task,
+) {
+    if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
+        summary.parent_count += 1;
+    }
+    if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
+        summary.child_count += 1;
+        if is_open_task_status(source_task.status) {
+            summary.open_child_count += 1;
+        }
+    }
+}
+
+fn create_empty_relationship_summary(task_id: String) -> TaskRelationshipSummary {
+    TaskRelationshipSummary {
+        task_id,
+        blocker_count: 0,
+        active_blocker_count: 0,
+        stale_blocker_count: 0,
+        blocking_count: 0,
+        follow_up_parent_count: 0,
+        follow_up_child_count: 0,
+        open_follow_up_child_count: 0,
+        parent_count: 0,
+        child_count: 0,
+        open_child_count: 0,
+        children_complete: false,
+    }
+}
+
 pub(super) fn derive_task_relationship_summaries(
     tasks: &[Task],
     relationships: &[TaskRelationship],
@@ -521,25 +680,7 @@ pub(super) fn derive_task_relationship_summaries(
         .collect();
     let mut summaries: HashMap<String, TaskRelationshipSummary> = tasks
         .iter()
-        .map(|task| {
-            (
-                task.task_id.clone(),
-                TaskRelationshipSummary {
-                    task_id: task.task_id.clone(),
-                    blocker_count: 0,
-                    active_blocker_count: 0,
-                    stale_blocker_count: 0,
-                    blocking_count: 0,
-                    follow_up_parent_count: 0,
-                    follow_up_child_count: 0,
-                    open_follow_up_child_count: 0,
-                    parent_count: 0,
-                    child_count: 0,
-                    open_child_count: 0,
-                    children_complete: false,
-                },
-            )
-        })
+        .map(|task| (task.task_id.clone(), create_empty_relationship_summary(task.task_id.clone())))
         .collect();
 
     for relationship in relationships {
@@ -552,53 +693,16 @@ pub(super) fn derive_task_relationship_summaries(
 
         match relationship.kind {
             TaskRelationshipKind::FollowUp => {
-                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
-                    summary.follow_up_child_count += 1;
-                    if is_open_task_status(target_task.status) {
-                        summary.open_follow_up_child_count += 1;
-                    }
-                }
-                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
-                    summary.follow_up_parent_count += 1;
-                }
+                process_follow_up_relationship(relationship, &mut summaries, target_task);
             }
             TaskRelationshipKind::Blocks => {
-                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
-                    summary.blocking_count += 1;
-                }
-                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
-                    summary.blocker_count += 1;
-                    if relationship_blocker_is_stale(source_task, now) {
-                        summary.stale_blocker_count += 1;
-                    } else {
-                        summary.active_blocker_count += 1;
-                    }
-                }
+                process_blocks_relationship(relationship, &mut summaries, source_task, now);
             }
             TaskRelationshipKind::DependsOn => {
-                // dependency edges: source depends on target — surface as blocker context
-                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
-                    summary.blocker_count += 1;
-                    if relationship_blocker_is_stale(target_task, now) {
-                        summary.stale_blocker_count += 1;
-                    } else {
-                        summary.active_blocker_count += 1;
-                    }
-                }
-                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
-                    summary.blocking_count += 1;
-                }
+                process_depends_on_relationship(relationship, &mut summaries, target_task, now);
             }
             TaskRelationshipKind::Parent => {
-                if let Some(summary) = summaries.get_mut(&relationship.source_task_id) {
-                    summary.parent_count += 1;
-                }
-                if let Some(summary) = summaries.get_mut(&relationship.target_task_id) {
-                    summary.child_count += 1;
-                    if is_open_task_status(source_task.status) {
-                        summary.open_child_count += 1;
-                    }
-                }
+                process_parent_relationship(relationship, &mut summaries, source_task);
             }
         }
     }
@@ -608,20 +712,7 @@ pub(super) fn derive_task_relationship_summaries(
         .map(|task| {
             let mut summary = summaries
                 .remove(&task.task_id)
-                .unwrap_or(TaskRelationshipSummary {
-                    task_id: task.task_id.clone(),
-                    blocker_count: 0,
-                    active_blocker_count: 0,
-                    stale_blocker_count: 0,
-                    blocking_count: 0,
-                    follow_up_parent_count: 0,
-                    follow_up_child_count: 0,
-                    open_follow_up_child_count: 0,
-                    parent_count: 0,
-                    child_count: 0,
-                    open_child_count: 0,
-                    children_complete: false,
-                });
+                .unwrap_or_else(|| create_empty_relationship_summary(task.task_id.clone()));
             summary.children_complete = summary.child_count > 0 && summary.open_child_count == 0;
             summary
         })

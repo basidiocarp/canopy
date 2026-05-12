@@ -88,7 +88,114 @@ pub(super) fn derive_task_deadline_summaries(
         .collect()
 }
 
-#[allow(clippy::too_many_lines)]
+fn count_due_soon_conditions(
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    task: &Task,
+    queue_sets: &SlaQueueSets<'_>,
+) -> usize {
+    let execution_due_soon = deadline_summary
+        .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon);
+    let review_due_soon = deadline_summary
+        .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon);
+
+    [
+        execution_due_soon,
+        review_due_soon,
+        queue_sets
+            .due_soon_handoff_acceptance_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .due_soon_accepted_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .due_soon_review_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .due_soon_review_decision_follow_through_task_ids
+            .contains(&task.task_id),
+    ]
+    .into_iter()
+    .filter(|flag| *flag)
+    .count()
+}
+
+fn count_overdue_conditions(
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    task: &Task,
+    queue_sets: &SlaQueueSets<'_>,
+) -> usize {
+    let execution_overdue = deadline_summary
+        .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue);
+    let review_overdue = deadline_summary
+        .is_some_and(|summary| summary.review_state == DeadlineState::Overdue);
+
+    [
+        execution_overdue,
+        review_overdue,
+        queue_sets
+            .overdue_handoff_acceptance_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .overdue_accepted_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .overdue_review_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        queue_sets
+            .overdue_review_decision_follow_through_task_ids
+            .contains(&task.task_id),
+    ]
+    .into_iter()
+    .filter(|flag| *flag)
+    .count()
+}
+
+fn build_overdue_queue_flags(task: &Task, queue_sets: &SlaQueueSets<'_>) -> OverdueTaskSlaQueues {
+    OverdueTaskSlaQueues {
+        handoff_acceptance: queue_sets
+            .overdue_handoff_acceptance_task_ids
+            .contains(&task.task_id),
+        accepted_handoff_follow_through: queue_sets
+            .overdue_accepted_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        review_handoff_follow_through: queue_sets
+            .overdue_review_handoff_follow_through_task_ids
+            .contains(&task.task_id),
+        review_decision_follow_through: queue_sets
+            .overdue_review_decision_follow_through_task_ids
+            .contains(&task.task_id),
+    }
+}
+
+fn compute_oldest_overdue_seconds(
+    deadline_summary: Option<&TaskDeadlineSummary>,
+    task_handoffs: &[&Handoff],
+    task: &Task,
+    execution_by_task_id: &HashMap<&str, &TaskExecutionSummary>,
+    overdue_queue_flags: OverdueTaskSlaQueues,
+    now: OffsetDateTime,
+) -> Option<i64> {
+    let deadline_overdue_seconds =
+        deadline_summary.and_then(|summary| summary.overdue_by_seconds);
+    let handoff_overdue_seconds = task_handoffs
+        .iter()
+        .filter_map(|handoff| {
+            overdue_handoff_age_seconds(
+                handoff,
+                task,
+                execution_by_task_id.get(task.task_id.as_str()).copied(),
+                now,
+                overdue_queue_flags,
+            )
+        })
+        .max();
+
+    [deadline_overdue_seconds, handoff_overdue_seconds]
+        .into_iter()
+        .flatten()
+        .max()
+}
+
 pub(super) fn derive_task_sla_summaries(
     tasks: &[Task],
     deadline_summaries: &[TaskDeadlineSummary],
@@ -123,86 +230,18 @@ pub(super) fn derive_task_sla_summaries(
                 .get(task.task_id.as_str())
                 .map_or(&[][..], Vec::as_slice);
 
-            let execution_due_soon = deadline_summary
-                .is_some_and(|summary| summary.execution_state == DeadlineState::DueSoon);
-            let execution_overdue = deadline_summary
-                .is_some_and(|summary| summary.execution_state == DeadlineState::Overdue);
-            let review_due_soon = deadline_summary
-                .is_some_and(|summary| summary.review_state == DeadlineState::DueSoon);
-            let review_overdue = deadline_summary
-                .is_some_and(|summary| summary.review_state == DeadlineState::Overdue);
+            let due_soon_count = count_due_soon_conditions(deadline_summary, task, queue_sets);
+            let overdue_count = count_overdue_conditions(deadline_summary, task, queue_sets);
 
-            let due_soon_count = [
-                execution_due_soon,
-                review_due_soon,
-                queue_sets
-                    .due_soon_handoff_acceptance_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .due_soon_accepted_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .due_soon_review_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .due_soon_review_decision_follow_through_task_ids
-                    .contains(&task.task_id),
-            ]
-            .into_iter()
-            .filter(|flag| *flag)
-            .count();
-            let overdue_count = [
-                execution_overdue,
-                review_overdue,
-                queue_sets
-                    .overdue_handoff_acceptance_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .overdue_accepted_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .overdue_review_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                queue_sets
-                    .overdue_review_decision_follow_through_task_ids
-                    .contains(&task.task_id),
-            ]
-            .into_iter()
-            .filter(|flag| *flag)
-            .count();
-
-            let deadline_overdue_seconds =
-                deadline_summary.and_then(|summary| summary.overdue_by_seconds);
-            let overdue_queue_flags = OverdueTaskSlaQueues {
-                handoff_acceptance: queue_sets
-                    .overdue_handoff_acceptance_task_ids
-                    .contains(&task.task_id),
-                accepted_handoff_follow_through: queue_sets
-                    .overdue_accepted_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                review_handoff_follow_through: queue_sets
-                    .overdue_review_handoff_follow_through_task_ids
-                    .contains(&task.task_id),
-                review_decision_follow_through: queue_sets
-                    .overdue_review_decision_follow_through_task_ids
-                    .contains(&task.task_id),
-            };
-            let handoff_overdue_seconds = task_handoffs
-                .iter()
-                .filter_map(|handoff| {
-                    overdue_handoff_age_seconds(
-                        handoff,
-                        task,
-                        execution_by_task_id.get(task.task_id.as_str()).copied(),
-                        now,
-                        overdue_queue_flags,
-                    )
-                })
-                .max();
-            let oldest_overdue_seconds = [deadline_overdue_seconds, handoff_overdue_seconds]
-                .into_iter()
-                .flatten()
-                .max();
+            let overdue_queue_flags = build_overdue_queue_flags(task, queue_sets);
+            let oldest_overdue_seconds = compute_oldest_overdue_seconds(
+                deadline_summary,
+                task_handoffs,
+                task,
+                &execution_by_task_id,
+                overdue_queue_flags,
+                now,
+            );
             let highest_risk_queue =
                 highest_risk_queue_for_task(task, deadline_summary, queue_sets);
 
