@@ -371,13 +371,62 @@ fn find_empty_paste_markers(content: &str) -> Vec<usize> {
 }
 
 /// Derive the expected verify script path from a handoff document path.
-/// Convention: `verify-<handoff-stem>.sh` in the same directory.
+///
+/// Handles two formats:
+/// - Directory envelope: `<slug>/handoff.md` → `<slug>/verify.sh`
+/// - Flat: `<slug>.md` → `verify-<slug>.sh` in the same directory
 fn derive_verify_script_path(handoff_path: &Path) -> PathBuf {
+    if handoff_path
+        .file_name()
+        .is_some_and(|n| n == "handoff.md")
+    {
+        return handoff_path.with_file_name("verify.sh");
+    }
     let stem = handoff_path
         .file_stem()
         .and_then(|v| v.to_str())
         .unwrap_or("handoff");
     handoff_path.with_file_name(format!("verify-{stem}.sh"))
+}
+
+/// Resolve a handoff slug or path to the canonical `.md` file.
+///
+/// Accepts either a flat `.md` path or a directory envelope path (a directory
+/// containing `handoff.md`). Returns an error if both exist (ambiguous) or
+/// neither exists.
+///
+/// # Errors
+///
+/// Returns an error if both `<input>.md` and `<input>/handoff.md` exist
+/// (ambiguous) or if neither exists.
+pub fn resolve_handoff_path(input: &Path) -> Result<PathBuf> {
+    // If input already names an existing .md file, use it directly.
+    if input.extension().is_some_and(|e| e == "md") && input.is_file() {
+        return Ok(input.to_path_buf());
+    }
+    // Try directory envelope: <input>/handoff.md
+    let dir_path = input.join("handoff.md");
+    // Try flat: <input>.md — suppressed when input already carries .md to avoid
+    // double-extension expansion (foo.md → foo.md.md).
+    let flat_path = if input.extension().is_none() {
+        let mut p = input.to_path_buf();
+        p.set_extension("md");
+        Some(p)
+    } else {
+        None
+    };
+    let dir_exists = dir_path.is_file();
+    let flat_exists = flat_path.as_ref().is_some_and(|p| p.is_file());
+    match (dir_exists, flat_exists, flat_path) {
+        (true, true, Some(flat)) => anyhow::bail!(
+            "Ambiguous handoff: both {} and {} exist",
+            dir_path.display(),
+            flat.display()
+        ),
+        (true, _, _) => Ok(dir_path),
+        (false, true, Some(flat)) => Ok(flat),
+        _ => anyhow::bail!("No handoff found at {}", input.display()),
+    }
 }
 
 /// Parse "Results: N passed, M failed" from script output.
@@ -598,6 +647,78 @@ filled output
             |---------|-------------|-------------|\n\
             \n## Completion\n";
         assert!(check_residual_work_section(content).is_some());
+    }
+
+    #[test]
+    fn derive_verify_script_path_directory_envelope() {
+        let path = PathBuf::from(".handoffs/canopy/my-feature/handoff.md");
+        let verify = derive_verify_script_path(&path);
+        assert_eq!(verify, PathBuf::from(".handoffs/canopy/my-feature/verify.sh"));
+    }
+
+    #[test]
+    fn derive_verify_script_path_flat_format() {
+        let path = PathBuf::from(".handoffs/canopy/my-feature.md");
+        let verify = derive_verify_script_path(&path);
+        assert_eq!(
+            verify,
+            PathBuf::from(".handoffs/canopy/verify-my-feature.sh")
+        );
+    }
+
+    #[test]
+    fn resolve_handoff_path_flat() {
+        let dir = TempDir::new().unwrap();
+        let flat = dir.path().join("my-feature.md");
+        fs::write(&flat, "# Test").unwrap();
+        let resolved = resolve_handoff_path(&dir.path().join("my-feature")).unwrap();
+        assert_eq!(resolved, flat);
+    }
+
+    #[test]
+    fn resolve_handoff_path_directory_envelope() {
+        let dir = TempDir::new().unwrap();
+        let envelope_dir = dir.path().join("my-feature");
+        fs::create_dir(&envelope_dir).unwrap();
+        let handoff_md = envelope_dir.join("handoff.md");
+        fs::write(&handoff_md, "# Test").unwrap();
+        let resolved = resolve_handoff_path(&envelope_dir).unwrap();
+        assert_eq!(resolved, handoff_md);
+    }
+
+    #[test]
+    fn resolve_handoff_path_ambiguous_returns_error() {
+        let dir = TempDir::new().unwrap();
+        // flat
+        let flat = dir.path().join("my-feature.md");
+        fs::write(&flat, "# Flat").unwrap();
+        // directory envelope
+        let envelope_dir = dir.path().join("my-feature");
+        fs::create_dir(&envelope_dir).unwrap();
+        fs::write(envelope_dir.join("handoff.md"), "# Envelope").unwrap();
+        let result = resolve_handoff_path(&dir.path().join("my-feature"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Ambiguous handoff"));
+    }
+
+    #[test]
+    fn resolve_handoff_path_missing_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let result = resolve_handoff_path(&dir.path().join("nonexistent"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No handoff found"));
+    }
+
+    #[test]
+    fn resolve_handoff_path_direct_md_file() {
+        let dir = TempDir::new().unwrap();
+        let flat = dir.path().join("my-feature.md");
+        fs::write(&flat, "# Test").unwrap();
+        let resolved = resolve_handoff_path(&flat).unwrap();
+        assert_eq!(resolved, flat);
     }
 
     #[test]

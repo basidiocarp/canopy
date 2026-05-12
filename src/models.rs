@@ -312,6 +312,17 @@ pub enum TaskSeverity {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 #[value(rename_all = "snake_case")]
+pub enum BranchOutcome {
+    Merged,
+    Discarded,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString, Display, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
 pub enum VerificationState {
     Unknown,
     Pending,
@@ -988,6 +999,12 @@ pub struct Task {
     /// FNV-1a (64-bit) hash of the plan body (title + description + scope) recorded
     /// at the moment the task is first dispatched. Used to detect silent rewrites.
     pub body_hash: Option<String>,
+    /// If this task is a branch exploration, the parent task's ID.
+    pub branch_of: Option<String>,
+    /// Checkpoint label or step description where the branch diverged.
+    pub branch_at: Option<String>,
+    /// Outcome of this branch after parallel exploration.
+    pub branch_outcome: Option<BranchOutcome>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

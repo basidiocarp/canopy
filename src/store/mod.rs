@@ -33,9 +33,10 @@ pub use traits::{
 };
 
 use crate::models::{
-    AgentHeartbeatSource, AgentRole, AgentStatus, CouncilMessageType, EvidenceSourceKind,
-    ExecutionActionKind, Freshness, HandoffType, ReviewAnnotationAction, TaskAction, TaskEventType,
-    TaskPriority, TaskRelationshipRole, TaskSeverity, TaskStatus, VerificationState,
+    AgentHeartbeatSource, AgentRole, AgentStatus, BranchOutcome, CouncilMessageType,
+    EvidenceSourceKind, ExecutionActionKind, Freshness, HandoffType, ReviewAnnotationAction,
+    TaskAction, TaskEventType, TaskPriority, TaskRelationshipRole, TaskSeverity, TaskStatus,
+    VerificationState,
 };
 use chrono::Utc;
 use rusqlite::Connection;
@@ -250,6 +251,9 @@ pub struct TaskCreationOptions {
     pub workflow_id: Option<String>,
     pub phase_id: Option<String>,
     pub workspace: Option<String>,
+    pub branch_of: Option<String>,
+    pub branch_at: Option<String>,
+    pub branch_outcome: Option<BranchOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

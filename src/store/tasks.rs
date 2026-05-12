@@ -326,10 +326,11 @@ impl Store {
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash,
+                   branch_of, branch_at, branch_outcome
             FROM tasks
             ORDER BY rowid
-            ",
+",
         )?;
         let rows = stmt.query_map([], map_task)?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -1001,7 +1002,8 @@ impl Store {
                    required_role, required_capabilities, auto_review, verification_required, status, verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash,
+                   branch_of, branch_at, branch_outcome
             FROM tasks
         ";
 
@@ -1287,7 +1289,8 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash,
+                   branch_of, branch_at, branch_outcome
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1343,7 +1346,8 @@ impl Store {
                    verification_state, priority, severity, owner_agent_id, owner_note,
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
-                   scope, created_at, updated_at, immutable_once_dispatched, body_hash
+                   scope, created_at, updated_at, immutable_once_dispatched, body_hash,
+                   branch_of, branch_at, branch_outcome
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC

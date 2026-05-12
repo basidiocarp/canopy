@@ -245,6 +245,9 @@ mod tests {
             prior_task_id: None,
             immutable_once_dispatched: true,
             body_hash: None,
+            branch_of: None,
+            branch_at: None,
+            branch_outcome: None,
         }
     }
 

@@ -12,6 +12,11 @@ pub(crate) fn create_task_in_connection(
     project_root: &str,
     options: &TaskCreationOptions,
 ) -> StoreResult<Task> {
+    // Validate branch_of: if set, the referenced task must exist.
+    if let Some(ref branch_of_id) = options.branch_of {
+        get_task_in_connection(conn, branch_of_id)?;
+    }
+
     let task = Task {
         task_id: Ulid::new().to_string(),
         title: title.to_string(),
@@ -52,6 +57,9 @@ pub(crate) fn create_task_in_connection(
         prior_task_id: None,
         immutable_once_dispatched: true,
         body_hash: None,
+        branch_of: options.branch_of.clone(),
+        branch_at: options.branch_at.clone(),
+        branch_outcome: options.branch_outcome,
     };
     conn.execute(
         r"
@@ -62,8 +70,8 @@ pub(crate) fn create_task_in_connection(
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at,
-            immutable_once_dispatched, body_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?35, ?36)
+            immutable_once_dispatched, body_hash, branch_of, branch_at, branch_outcome
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?35, ?36, ?37, ?38, ?39)
         ",
         params![
             task.task_id,
@@ -102,6 +110,9 @@ pub(crate) fn create_task_in_connection(
             serialize_capabilities(&task.scope)?,
             i64::from(task.immutable_once_dispatched),
             task.body_hash,
+            task.branch_of,
+            task.branch_at,
+            task.branch_outcome.map(|v| v.to_string()),
         ],
     )?;
     record_task_event_in_connection(

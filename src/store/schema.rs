@@ -413,6 +413,11 @@ fn migrations() -> Migrations<'static> {
             ALTER TABLE tasks ADD COLUMN body_hash TEXT;
         ",
         ),
+        M::up("
+            ALTER TABLE tasks ADD COLUMN branch_of TEXT NULL;
+            ALTER TABLE tasks ADD COLUMN branch_at TEXT NULL;
+            ALTER TABLE tasks ADD COLUMN branch_outcome TEXT NULL;
+        "),
     ])
 }
 
