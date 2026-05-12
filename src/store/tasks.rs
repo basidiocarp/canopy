@@ -418,8 +418,8 @@ impl Store {
             }
 
             if status == TaskStatus::Completed {
-                let open_children = list_open_children_in_connection(conn, task_id)?;
-                if !open_children.is_empty() {
+                if super::helpers::has_open_child_tasks_in_connection(conn, task_id)? {
+                    let open_children = list_open_children_in_connection(conn, task_id)?;
                     let blocking = open_children
                         .iter()
                         .map(|(id, title, st)| format!("{id} ({title}, status={st})"))

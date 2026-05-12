@@ -201,3 +201,57 @@ fn deleting_parent_orphans_children_and_removes_relationship() {
         "task_relationships parent row must be removed when parent task is deleted"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: completing a parent with open deep descendant is rejected
+//         (guards against recursive open descendants, not just direct children)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn complete_parent_with_open_deep_descendant_is_rejected() {
+    let (store, _temp) = open_store();
+
+    // Create a deep chain: parent -> child -> grandchild
+    let parent = store
+        .create_task("Parent", None, "operator", "/tmp/proj", None)
+        .expect("create parent");
+    let child = store
+        .create_subtask(&parent.task_id, "Child", None, "operator", None)
+        .expect("create child");
+    let _grandchild = store
+        .create_subtask(&child.task_id, "Grandchild", None, "operator", None)
+        .expect("create grandchild");
+
+    // Transition parent to in_progress so it can attempt to complete
+    store
+        .update_task_status(
+            &parent.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("parent in progress");
+
+    // Try to complete parent while grandchild is still open.
+    // Note: child itself is also still open (in Open status by default),
+    // so this tests the recursive guard: parent -> child (open) -> grandchild (open)
+    let err = store
+        .update_task_status(
+            &parent.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect_err("should reject completion with open descendant");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("child tasks remain open"),
+        "error should mention open descendants: {msg}"
+    );
+    // The error should include the direct child task_id (child)
+    assert!(
+        msg.contains(&child.task_id),
+        "error should include direct child task_id: {msg}"
+    );
+}

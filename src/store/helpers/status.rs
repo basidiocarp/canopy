@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[allow(dead_code)]
 pub(crate) fn has_open_child_tasks_in_connection(
     conn: &Connection,
     task_id: &str,

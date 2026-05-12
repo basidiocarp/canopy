@@ -120,20 +120,26 @@ src/
 |----------|--------|----------|--------|
 | `evidence-ref-v1` | Cap and other readers | Local SQLite refs | `septa/evidence-ref-v1.schema.json` |
 | `handoff-context-v1` | Receiving agent, Canopy, Cap | Handoff creation flow | `septa/handoff-context-v1.schema.json` |
-| `canopy-snapshot-v1` | Cap | HTTP (planned) — currently CLI `canopy api snapshot` | `septa/canopy-snapshot-v1.schema.json` |
-| `canopy-task-detail-v1` | Cap | HTTP (planned) — currently CLI `canopy api task --task-id <id>` | `septa/canopy-task-detail-v1.schema.json` |
+| `canopy-snapshot-v1` | Cap | Unix socket (`canopy_snapshot` JSON-RPC method) — CLI fallback | `septa/canopy-snapshot-v1.schema.json` |
+| `canopy-task-detail-v1` | Cap | Unix socket (`canopy_task` JSON-RPC method) — CLI fallback | `septa/canopy-task-detail-v1.schema.json` |
 | `canopy-notification-v1` | Cap and Annulus | Notification events | `septa/canopy-notification-v1.schema.json` |
+| `task-output-v1` | Hymenium | Stored in SQLite via `set_task_output`, read via `get_task_output` | `septa/task-output-v1.schema.json` |
 
 **Source files:**
 - `src/models.rs`: evidence and handoff types
 - `src/api.rs`: snapshot and task-detail read models
 - `src/store/`: persistence for those records
+- `src/socket_server.rs`: Unix socket endpoint (JSON-RPC 2.0) for snapshot, task, and agents
 
 Breaking change impact: Cap and any other reader will misparse task, handoff, or evidence data.
 
 ### Inbound (this project receives)
 
-Canopy does not accept pushed runtime payloads from sibling tools. It only stores its own coordination records and external references.
+| Contract | Source | Protocol | Schema |
+|----------|--------|----------|--------|
+| `workflow-outcome-v1` | Hymenium | CLI `canopy outcome record` | `septa/workflow-outcome-v1.schema.json` |
+
+Canopy also stores its own coordination records (tasks, handoffs, evidence) as internal state — these are not cross-tool inbound contracts.
 
 ### Shared Dependencies
 
