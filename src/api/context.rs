@@ -63,7 +63,7 @@ struct SummaryMaps {
 }
 
 fn build_handoff_context_sets(
-    tasks: &[Task],
+    _tasks: &[Task],
     handoffs: &[Handoff],
     now: OffsetDateTime,
 ) -> HandoffContextSets {
