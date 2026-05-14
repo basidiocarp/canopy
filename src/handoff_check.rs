@@ -20,6 +20,9 @@ pub struct CompletenessReport {
     /// This is a warning, not a hard block: an empty section is valid when
     /// every Stage 1 and Stage 2 finding was fixed.
     pub residual_work_warning: Option<String>,
+    /// Dispatch blockers found: `[NEEDS CLARIFICATION]`, `[TBD]`, or `[OPEN QUESTION]`.
+    /// Handoffs with these markers cannot be dispatched.
+    pub blocking_markers: Vec<String>,
 }
 
 /// Result of running a verification script.
@@ -49,6 +52,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
     let (total_checkboxes, checked_checkboxes) = count_checkboxes(&content);
     let empty_paste_markers = find_empty_paste_markers(&content);
     let residual_work_warning = check_residual_work_section(&content);
+    let blocking_markers = find_dispatch_blockers(&content);
 
     let verify_script = derive_verify_script_path(handoff_path);
     let has_verify_script = verify_script.exists();
@@ -56,7 +60,8 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
 
     let is_complete = total_checkboxes > 0
         && total_checkboxes == checked_checkboxes
-        && empty_paste_markers.is_empty();
+        && empty_paste_markers.is_empty()
+        && blocking_markers.is_empty();
 
     if is_complete {
         warn!(
@@ -73,6 +78,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
             total_checkboxes,
             checked_checkboxes,
             empty_paste_markers = empty_paste_markers.len(),
+            blocking_markers = blocking_markers.len(),
             has_verify_script,
             "handoff completeness check found outstanding work"
         );
@@ -86,6 +92,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
         has_verify_script,
         verify_script_path,
         residual_work_warning,
+        blocking_markers,
     })
 }
 
@@ -93,6 +100,13 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
 #[must_use]
 pub fn format_incomplete_report(report: &CompletenessReport) -> String {
     let mut parts = Vec::new();
+
+    if !report.blocking_markers.is_empty() {
+        parts.push(format!(
+            "unresolved markers found: {} — resolve before dispatch",
+            report.blocking_markers.join(", ")
+        ));
+    }
 
     let unchecked = report.total_checkboxes - report.checked_checkboxes;
     if unchecked > 0 {
@@ -319,6 +333,17 @@ fn check_residual_work_section(content: &str) -> Option<String> {
     )
 }
 
+/// Find dispatch blocker markers in the content.
+/// Returns a list of markers found: `[NEEDS CLARIFICATION]`, `[TBD]`, or `[OPEN QUESTION]`.
+fn find_dispatch_blockers(content: &str) -> Vec<String> {
+    const DISPATCH_BLOCKERS: &[&str] = &["[NEEDS CLARIFICATION]", "[TBD]", "[OPEN QUESTION]"];
+    DISPATCH_BLOCKERS
+        .iter()
+        .filter(|&&m| content.contains(m))
+        .map(|&m| m.to_string())
+        .collect()
+}
+
 /// Count total and checked markdown checkboxes in the content.
 /// Returns (total, checked).
 fn count_checkboxes(content: &str) -> (usize, usize) {
@@ -536,6 +561,7 @@ filled output
             has_verify_script: false,
             verify_script_path: None,
             residual_work_warning: None,
+            blocking_markers: vec![],
         };
         let msg = format_incomplete_report(&report);
         assert!(msg.contains("2 of 5 checklist items remain unchecked"));
@@ -567,6 +593,7 @@ filled output
             has_verify_script: false,
             verify_script_path: None,
             residual_work_warning: None,
+            blocking_markers: vec![],
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
@@ -600,6 +627,7 @@ filled output
             has_verify_script: true,
             verify_script_path: Some(script),
             residual_work_warning: None,
+            blocking_markers: vec![],
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
@@ -731,5 +759,76 @@ filled output
 
         let workspace_root = workspace_root_from_handoff_path(&handoff_path).unwrap();
         assert_eq!(workspace_root, project_root);
+    }
+
+    #[test]
+    fn blocking_marker_needs_clarification() {
+        let dir = TempDir::new().unwrap();
+        let content = r"# Test Handoff
+
+[NEEDS CLARIFICATION]
+
+- [x] Item done
+";
+        let handoff_path = write_handoff(&dir, "test.md", content);
+        let report = check_completeness(&handoff_path).unwrap();
+        assert!(!report.is_complete);
+        assert!(
+            report
+                .blocking_markers
+                .contains(&"[NEEDS CLARIFICATION]".to_string())
+        );
+    }
+
+    #[test]
+    fn blocking_marker_tbd() {
+        let dir = TempDir::new().unwrap();
+        let content = r"# Test Handoff
+
+[TBD]
+
+- [x] Item done
+";
+        let handoff_path = write_handoff(&dir, "test.md", content);
+        let report = check_completeness(&handoff_path).unwrap();
+        assert!(!report.is_complete);
+        assert!(report.blocking_markers.contains(&"[TBD]".to_string()));
+    }
+
+    #[test]
+    fn blocking_marker_open_question() {
+        let dir = TempDir::new().unwrap();
+        let content = r"# Test Handoff
+
+[OPEN QUESTION]
+
+- [x] Item done
+";
+        let handoff_path = write_handoff(&dir, "test.md", content);
+        let report = check_completeness(&handoff_path).unwrap();
+        assert!(!report.is_complete);
+        assert!(
+            report
+                .blocking_markers
+                .contains(&"[OPEN QUESTION]".to_string())
+        );
+    }
+
+    #[test]
+    fn no_blocking_markers_allows_complete() {
+        let dir = TempDir::new().unwrap();
+        let content = r"# Test Handoff
+
+- [x] First item done
+- [x] Second item done
+
+<!-- PASTE START -->
+output here
+<!-- PASTE END -->
+";
+        let handoff_path = write_handoff(&dir, "clean.md", content);
+        let report = check_completeness(&handoff_path).unwrap();
+        assert!(report.is_complete);
+        assert!(report.blocking_markers.is_empty());
     }
 }
