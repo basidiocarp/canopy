@@ -395,7 +395,10 @@ pub(crate) fn add_evidence_in_connection(
         seen: false,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let _ = super::super::notifications::insert_notification(conn, &notif);
+    // Notification failure must not fail the evidence attach, but log so it is visible.
+    if let Err(e) = super::super::notifications::insert_notification(conn, &notif) {
+        tracing::warn!(error = %e, "notification insert failed — evidence attachment succeeded");
+    }
 
     Ok(evidence)
 }

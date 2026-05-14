@@ -527,8 +527,10 @@ impl Store {
                     seen: false,
                     created_at: chrono::Utc::now().to_rfc3339(),
                 };
-                // Ignore notification emission errors — notification failure must not fail the task update
-                let _ = super::notifications::insert_notification(conn, &notif);
+                // Notification failure must not fail the task update, but log so it is visible.
+                if let Err(e) = super::notifications::insert_notification(conn, &notif) {
+                    tracing::warn!(error = %e, "notification insert failed — task update succeeded");
+                }
             }
 
             let updated = get_task_in_connection(conn, task_id)?;

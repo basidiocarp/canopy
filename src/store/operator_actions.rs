@@ -444,7 +444,10 @@ impl Store {
                         seen: false,
                         created_at: chrono::Utc::now().to_rfc3339(),
                     };
-                    let _ = super::notifications::insert_notification(conn, &notif);
+                    // Notification failure must not fail the operator action, but log so it is visible.
+                    if let Err(e) = super::notifications::insert_notification(conn, &notif) {
+                        tracing::warn!(error = %e, "notification insert failed — operator action succeeded");
+                    }
                 }
             }
 
