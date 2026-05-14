@@ -419,7 +419,7 @@ mod tests {
 
         // Assign the task to the agent
         store
-            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None, false)
             .expect("assign task");
 
         // Query work queue without include_assigned - should not see the assigned task
@@ -459,7 +459,7 @@ mod tests {
 
         // Assign the task to the agent
         store
-            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None, false)
             .expect("assign task");
 
         // Query work queue with include_assigned=true - should see the assigned task
@@ -507,7 +507,13 @@ mod tests {
             .create_task("Assigned task", None, "operator", "/repo", None)
             .expect("create task");
         store
-            .assign_task(&assigned_task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(
+                &assigned_task.task_id,
+                &agent.agent_id,
+                "operator",
+                None,
+                false,
+            )
             .expect("assign task");
 
         // Default mode should only show the open task
@@ -562,7 +568,7 @@ mod tests {
         // Assign, start, then complete the task so it reaches a terminal status.
         // The state machine requires: assigned → in_progress → completed.
         store
-            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None, false)
             .expect("assign task");
         store
             .update_task_status(

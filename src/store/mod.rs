@@ -312,6 +312,7 @@ pub(crate) struct TaskOperatorActionInput<'a> {
     pub review_annotation_action: Option<ReviewAnnotationAction>,
     pub review_annotation_comment: Option<&'a str>,
     pub review_annotation_anchor_hash: Option<&'a str>,
+    pub force_reassign: bool,
 }
 
 impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
@@ -401,9 +402,14 @@ impl<'a> From<&TaskAction<'a>> for TaskOperatorActionInput<'a> {
                 input.acting_agent_id = Some(acting_agent_id);
                 input.note = note;
             }
-            TaskAction::Reassign { assigned_to, note } => {
+            TaskAction::Reassign {
+                assigned_to,
+                note,
+                force,
+            } => {
                 input.assigned_to = Some(assigned_to);
                 input.note = note;
+                input.force_reassign = force;
             }
             TaskAction::RecordDecision {
                 author_agent_id,

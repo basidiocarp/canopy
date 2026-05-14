@@ -210,7 +210,7 @@ mod tests {
             .create_task("Assigned workflow", None, "operator", "/repo/demo", None)
             .expect("create task");
         store
-            .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(&task.task_id, &agent.agent_id, "operator", None, false)
             .expect("assign task");
 
         let conn = Connection::open(&db_path).expect("open sqlite");

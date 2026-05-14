@@ -185,7 +185,7 @@ fn handle_task_assign(
     reason: Option<String>,
 ) -> Result<()> {
     canopy::store::ensure_capabilities_match(store, task_id, assigned_to)?;
-    let task = store.assign_task(task_id, assigned_to, assigned_by, reason.as_deref())?;
+    let task = store.assign_task(task_id, assigned_to, assigned_by, reason.as_deref(), false)?;
     print_json(&task)?;
     Ok(())
 }
@@ -285,6 +285,7 @@ fn handle_task_action(
     review_annotation_action: Option<canopy::models::ReviewAnnotationAction>,
     review_annotation_comment: Option<String>,
     review_annotation_anchor_hash: Option<String>,
+    force: bool,
 ) -> Result<()> {
     let fallback_session_id = runtime_session_id_from_env();
     let resolved_session_id = related_session_id
@@ -332,6 +333,7 @@ fn handle_task_action(
         review_annotation_action,
         review_annotation_comment.as_deref(),
         review_annotation_anchor_hash.as_deref(),
+        force,
     )?;
     let task = store.apply_task_operator_action(task_id, changed_by, task_action)?;
     print_json(&task)?;
@@ -699,6 +701,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             review_annotation_action,
             review_annotation_comment,
             review_annotation_anchor_hash,
+            force,
         } => {
             handle_task_action(
                 store,
@@ -745,6 +748,7 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
                 review_annotation_action,
                 review_annotation_comment,
                 review_annotation_anchor_hash,
+                force,
             )?;
         }
         TaskCommand::Verify {
@@ -935,6 +939,7 @@ fn cli_action_to_task_action<'a>(
     review_annotation_action: Option<canopy::models::ReviewAnnotationAction>,
     review_annotation_comment: Option<&'a str>,
     review_annotation_anchor_hash: Option<&'a str>,
+    force: bool,
 ) -> Result<TaskAction<'a>> {
     use canopy::models::OperatorActionKind as K;
     let require = |opt: Option<&'a str>, field: &str| -> Result<&'a str> {
@@ -1008,6 +1013,7 @@ fn cli_action_to_task_action<'a>(
         K::ReassignTask => Ok(TaskAction::Reassign {
             assigned_to: require(assigned_to, "assigned-to")?,
             note,
+            force,
         }),
         K::RecordDecision => Ok(TaskAction::RecordDecision {
             author_agent_id: require(author_agent_id, "author-agent-id")?,
@@ -1254,6 +1260,7 @@ fn apply_task_assignment(
                     agent_id,
                     "handoff-import",
                     Some("assigned during handoff import"),
+                    false,
                 )?
             }
             DispatchDecision::FlagForReview { reason } => {

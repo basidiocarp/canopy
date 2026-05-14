@@ -418,8 +418,9 @@ pub(crate) fn assign_task_in_connection(
     assigned_to: &str,
     assigned_by: &str,
     reason: Option<&str>,
+    force: bool,
 ) -> StoreResult<()> {
-    validate_assignment_phase(conn, task_id, assigned_to)?;
+    validate_assignment_phase(conn, task_id, assigned_to, force)?;
     let (from_status, previous_owner) = fetch_task_assignment_metadata(conn, task_id)?;
     update_task_assignment(conn, task_id, assigned_to, assigned_by, reason)?;
     record_assignment_event(
@@ -440,6 +441,7 @@ fn validate_assignment_phase(
     conn: &Connection,
     task_id: &str,
     assigned_to: &str,
+    force: bool,
 ) -> StoreResult<()> {
     let assignee_current_task = conn
         .query_row(
@@ -456,6 +458,23 @@ fn validate_assignment_phase(
         return Err(StoreError::Validation(
             "assigned agent already owns another active task".to_string(),
         ));
+    }
+
+    let current_owner = conn
+        .query_row(
+            "SELECT owner_agent_id FROM tasks WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    if let Some(owner) = &current_owner {
+        if owner != assigned_to && !force {
+            return Err(StoreError::Validation(format!(
+                "task {task_id} is already owned by {owner} — use force=true to reassign"
+            )));
+        }
     }
 
     let assignee_role_and_capabilities = conn
@@ -786,5 +805,126 @@ pub(crate) fn normalize_evidence_navigation<'a>(
             symbol,
             file,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+    use tempfile::TempDir;
+
+    fn create_test_store() -> (Store, TempDir) {
+        let temp_dir = TempDir::new().expect("failed to create temp directory");
+        let store_path = temp_dir.path().join("test.db");
+        let store = Store::open(&store_path).expect("failed to create test store");
+        (store, temp_dir)
+    }
+
+    fn setup_test_task_and_agents(store: &Store) -> (String, String, String) {
+        use crate::models::{AgentRegistration, AgentStatus};
+
+        let agent_a = "agent-a".to_string();
+        let agent_b = "agent-b".to_string();
+
+        let agent_a_registration = AgentRegistration {
+            agent_id: agent_a.clone(),
+            host_id: "test-host".to_string(),
+            host_type: "test".to_string(),
+            host_instance: "local".to_string(),
+            model: "test-model".to_string(),
+            project_root: "/tmp/project".to_string(),
+            worktree_id: "wt-test".to_string(),
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            tier: None,
+            specializations: Vec::new(),
+            heartbeat_at: None,
+            capabilities: Vec::new(),
+            role: None,
+        };
+
+        let agent_b_registration = AgentRegistration {
+            agent_id: agent_b.clone(),
+            ..agent_a_registration.clone()
+        };
+
+        store
+            .register_agent(&agent_a_registration)
+            .expect("failed to register agent-a");
+        store
+            .register_agent(&agent_b_registration)
+            .expect("failed to register agent-b");
+
+        let task = store
+            .create_task("Test Task", None, "user", "/tmp/project", None)
+            .expect("failed to create task");
+
+        (task.task_id, agent_a, agent_b)
+    }
+
+    #[test]
+    fn test_reassign_without_force_fails_when_task_owned() {
+        let (store, _temp_dir) = create_test_store();
+        let (task_id, agent_a, agent_b) = setup_test_task_and_agents(&store);
+
+        store
+            .in_transaction(|conn| {
+                assign_task_in_connection(conn, &task_id, &agent_a, "user", None, false)?;
+                Ok::<_, crate::store::StoreError>(())
+            })
+            .expect("failed to assign task to agent-a");
+
+        let result = store.in_transaction(|conn| {
+            assign_task_in_connection(conn, &task_id, &agent_b, "user", None, false)
+        });
+
+        assert!(result.is_err());
+        match result {
+            Err(crate::store::StoreError::Validation(msg)) => {
+                assert!(
+                    msg.contains("already owned by"),
+                    "error message should indicate task is already owned, got: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("use force=true to reassign"),
+                    "error message should mention force=true, got: {}",
+                    msg
+                );
+            }
+            Err(e) => panic!("expected Validation error, got: {:?}", e),
+            Ok(_) => panic!("expected error but assignment succeeded"),
+        }
+    }
+
+    #[test]
+    fn test_reassign_with_force_succeeds() {
+        let (store, _temp_dir) = create_test_store();
+        let (task_id, agent_a, agent_b) = setup_test_task_and_agents(&store);
+
+        store
+            .in_transaction(|conn| {
+                assign_task_in_connection(conn, &task_id, &agent_a, "user", None, false)?;
+                Ok::<_, crate::store::StoreError>(())
+            })
+            .expect("failed to assign task to agent-a");
+
+        let result = store.in_transaction(|conn| {
+            assign_task_in_connection(conn, &task_id, &agent_b, "user", None, true)
+        });
+
+        assert!(
+            result.is_ok(),
+            "reassign with force=true should succeed, got error: {:?}",
+            result
+        );
+
+        let task = store.get_task(&task_id).expect("failed to get task");
+        assert_eq!(
+            task.owner_agent_id.as_deref(),
+            Some(agent_b.as_str()),
+            "task should be owned by agent-b after force reassign"
+        );
     }
 }

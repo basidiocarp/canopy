@@ -165,6 +165,11 @@ impl TaskStatus {
             Self::Closed | Self::Cancelled => &[Self::Open],
         }
     }
+
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Closed | Self::Cancelled)
+    }
 }
 
 #[derive(
@@ -758,6 +763,7 @@ pub enum TaskAction<'a> {
     Reassign {
         assigned_to: &'a str,
         note: Option<&'a str>,
+        force: bool,
     },
     RecordDecision {
         author_agent_id: &'a str,

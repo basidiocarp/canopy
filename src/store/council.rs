@@ -551,7 +551,13 @@ mod tests {
             )
             .expect("task");
         store
-            .assign_task(&task.task_id, owner_agent_id, "operator", Some("seed"))
+            .assign_task(
+                &task.task_id,
+                owner_agent_id,
+                "operator",
+                Some("seed"),
+                false,
+            )
             .expect("assign");
         task.task_id
     }

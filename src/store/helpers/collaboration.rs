@@ -295,7 +295,16 @@ pub(crate) fn add_evidence_in_connection(
     summary: Option<&str>,
     links: EvidenceLinkRefs<'_>,
 ) -> StoreResult<EvidenceRef> {
-    get_task_in_connection(conn, task_id)?;
+    let task = get_task_in_connection(conn, task_id)?;
+    if matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Closed | TaskStatus::Cancelled
+    ) {
+        return Err(StoreError::Validation(format!(
+            "cannot attach evidence to task {} in terminal state {:?}",
+            task_id, task.status
+        )));
+    }
     if source_ref.trim().is_empty() || label.trim().is_empty() {
         return Err(StoreError::Validation(
             "evidence requires a non-empty source_ref and label".to_string(),

@@ -216,6 +216,7 @@ fn handle_task_action(params: &Value) -> Value {
         expires_at: Option<String>,
         follow_up_title: Option<String>,
         follow_up_description: Option<String>,
+        force: Option<bool>,
         from_agent_id: Option<String>,
         handoff_summary: Option<String>,
         handoff_type: Option<String>,
@@ -474,6 +475,7 @@ fn handle_task_action(params: &Value) -> Value {
             TaskAction::Reassign {
                 assigned_to: params.assigned_to.as_deref().unwrap(),
                 note: params.note.as_deref(),
+                force: params.force.unwrap_or(false),
             }
         }
         canopy::models::OperatorActionKind::RecordDecision => {

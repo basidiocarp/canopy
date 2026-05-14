@@ -110,6 +110,7 @@ pub trait TaskMutationStore {
         assigned_to: &str,
         assigned_by: &str,
         reason: Option<&str>,
+        force: bool,
     ) -> StoreResult<Task>;
     fn update_task_status(
         &self,
@@ -629,8 +630,9 @@ impl TaskMutationStore for super::Store {
         assigned_to: &str,
         assigned_by: &str,
         reason: Option<&str>,
+        force: bool,
     ) -> StoreResult<Task> {
-        self.assign_task(task_id, assigned_to, assigned_by, reason)
+        self.assign_task(task_id, assigned_to, assigned_by, reason, force)
     }
 
     fn update_task_status(

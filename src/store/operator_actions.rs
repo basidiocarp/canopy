@@ -636,7 +636,14 @@ impl Store {
                 StoreError::Validation("claim_task requires an acting_agent_id".to_string())
             })?;
             super::ensure_agent_fresh_for_claim(self, acting_agent_id, CLAIM_STALE_THRESHOLD_SECS)?;
-            assign_task_in_connection(conn, task_id, acting_agent_id, acting_agent_id, input.note)?;
+            assign_task_in_connection(
+                conn,
+                task_id,
+                acting_agent_id,
+                acting_agent_id,
+                input.note,
+                false,
+            )?;
             let updated = get_task_in_connection(conn, task_id)?;
             let event_note = build_execution_note(changed_by, acting_agent_id, input.note);
             record_task_event_in_connection(

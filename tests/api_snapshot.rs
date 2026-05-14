@@ -4634,7 +4634,13 @@ fn api_snapshot_deadline_presets_and_summaries_follow_runtime_deadlines() {
         )
         .expect("set overdue execution deadline");
     store
-        .assign_task(&overdue_execution_task.task_id, "codex-1", "operator", None)
+        .assign_task(
+            &overdue_execution_task.task_id,
+            "codex-1",
+            "operator",
+            None,
+            false,
+        )
         .expect("assign overdue execution owner");
 
     let overdue_execution_unclaimed_task = store

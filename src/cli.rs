@@ -409,6 +409,8 @@ pub enum TaskCommand {
         review_annotation_comment: Option<String>,
         #[arg(long)]
         review_annotation_anchor_hash: Option<String>,
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     Verify {
         #[arg(long)]

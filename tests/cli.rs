@@ -804,6 +804,7 @@ fn cli_applies_operator_actions_and_records_runtime_history() {
             "claude-1",
             "--note",
             "handoff to reviewer",
+            "--force",
         ])
         .assert()
         .success()

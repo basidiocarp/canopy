@@ -179,6 +179,7 @@ impl Store {
                     &handoff.to_agent_id,
                     acting_agent_id.unwrap_or(changed_by),
                     Some("accepted transfer ownership handoff"),
+                    true,
                 )?;
             } else {
                 touch_task_in_connection(conn, &handoff.task_id)?;

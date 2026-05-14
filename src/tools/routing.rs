@@ -21,7 +21,7 @@ pub fn tool_task_assign_ranked(
 
     if let Some(assigned_agent) = explicit_agent {
         // Explicit assignment mode
-        match store.assign_task(task_id, assigned_agent, agent_id, None) {
+        match store.assign_task(task_id, assigned_agent, agent_id, None, false) {
             Ok(_) => ToolResult::json(&json!({
                 "assigned": true,
                 "agent_id": assigned_agent

@@ -300,11 +300,12 @@ impl Store {
         assigned_to: &str,
         assigned_by: &str,
         reason: Option<&str>,
+        force: bool,
     ) -> StoreResult<Task> {
         self.ensure_agent_exists(assigned_to)?;
         self.ensure_task_exists(task_id)?;
         self.in_transaction(|conn| {
-            assign_task_in_connection(conn, task_id, assigned_to, assigned_by, reason)?;
+            assign_task_in_connection(conn, task_id, assigned_to, assigned_by, reason, force)?;
             get_task_in_connection(conn, task_id)
         })
     }
@@ -460,14 +461,19 @@ impl Store {
                 None
             };
 
+            // When reopening from a terminal state (Completed, Closed, Cancelled), clear verification metadata.
+            // Non-terminal→Open transitions (e.g., Blocked→Open) preserve verification metadata.
+            let clear_from_terminal = status == TaskStatus::Open && current.status.is_terminal();
+
             conn.execute(
                 r"
                 UPDATE tasks
                 SET status = ?2,
                     verification_state = ?3,
                     blocked_reason = ?4,
-                    verified_by = ?5,
-                    verified_at = COALESCE(?6, verified_at),
+                    verified_by = CASE WHEN ?11 THEN NULL ELSE ?5 END,
+                    verified_at = CASE WHEN ?11 THEN NULL ELSE COALESCE(?6, verified_at) END,
+                    owner_agent_id = CASE WHEN ?11 THEN NULL ELSE owner_agent_id END,
                     closed_by = ?7,
                     closure_summary = ?8,
                     closed_at = CASE WHEN ?9 THEN CURRENT_TIMESTAMP ELSE NULL END,
@@ -494,6 +500,7 @@ impl Store {
                     },
                     is_terminal,
                     body_hash,
+                    clear_from_terminal,
                 ],
             )?;
 
@@ -932,6 +939,7 @@ impl Store {
                 })?,
                 changed_by,
                 input.note,
+                input.force_reassign,
             ),
             OperatorActionKind::AcceptHandoff
             | OperatorActionKind::RejectHandoff
@@ -1502,6 +1510,330 @@ impl Store {
     pub fn delete_task(&self, task_id: &str) -> StoreResult<()> {
         self.conn
             .execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AgentRegistration, AgentStatus};
+    use tempfile::tempdir;
+
+    fn create_test_store() -> StoreResult<Store> {
+        let tmpdir = tempdir().expect("failed to create tmpdir");
+        let db_path = tmpdir.path().join("test.db");
+        Store::open(&db_path)
+    }
+
+    fn register_test_agent(store: &Store, agent_id: &str) -> StoreResult<()> {
+        let agent = AgentRegistration {
+            agent_id: agent_id.to_string(),
+            host_id: "test_host".to_string(),
+            host_type: "test".to_string(),
+            host_instance: "test_instance".to_string(),
+            model: "test_model".to_string(),
+            project_root: "/test".to_string(),
+            worktree_id: "test_worktree".to_string(),
+            role: None,
+            capabilities: vec![],
+            tier: None,
+            specializations: vec![],
+            status: AgentStatus::Idle,
+            current_task_id: None,
+            heartbeat_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+        store.register_agent(&agent)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_reopen_completed_task_clears_verification_metadata() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task(
+            "Test Task",
+            Some("Test description"),
+            agent_id,
+            "/test",
+            None,
+        )?;
+
+        // Assign the task to set owner_agent_id
+        store.assign_task(&task.task_id, agent_id, agent_id, None, false)?;
+
+        // Transition: Assigned → InProgress → Completed
+        store.update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: None,
+            },
+        )?;
+
+        let completed = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                blocked_reason: None,
+                closure_summary: Some("Task completed successfully"),
+                event_note: None,
+            },
+        )?;
+
+        // Verify that completion set the metadata
+        assert!(completed.verified_by.is_some());
+        assert!(completed.verified_at.is_some());
+        assert_eq!(completed.owner_agent_id, Some(agent_id.to_string()));
+
+        // Reopen the task from Completed
+        let reopened = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Open,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: Some("Reopening from completed"),
+            },
+        )?;
+
+        // Verify that reopening cleared the verification metadata
+        assert!(
+            reopened.verified_by.is_none(),
+            "verified_by should be cleared"
+        );
+        assert!(
+            reopened.verified_at.is_none(),
+            "verified_at should be cleared"
+        );
+        assert!(
+            reopened.owner_agent_id.is_none(),
+            "owner_agent_id should be cleared"
+        );
+        assert_eq!(reopened.status, TaskStatus::Open);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reopen_closed_task_clears_verification_metadata() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task(
+            "Test Task",
+            Some("Test description"),
+            agent_id,
+            "/test",
+            None,
+        )?;
+
+        // Assign the task to set owner_agent_id
+        store.assign_task(&task.task_id, agent_id, agent_id, None, false)?;
+
+        // Transition: Assigned → InProgress → Completed → Closed
+        store.update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: None,
+            },
+        )?;
+
+        store.update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                blocked_reason: None,
+                closure_summary: Some("Completed"),
+                event_note: None,
+            },
+        )?;
+
+        let closed = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Closed,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: Some("Closed for archival"),
+                event_note: None,
+            },
+        )?;
+
+        // Verify closure metadata is present
+        assert!(closed.verified_by.is_some());
+        assert!(closed.verified_at.is_some());
+
+        // Reopen from closed
+        let reopened = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Open,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: Some("Reopening from closed"),
+            },
+        )?;
+
+        // Verify that reopening cleared the metadata
+        assert!(reopened.verified_by.is_none());
+        assert!(reopened.verified_at.is_none());
+        assert!(reopened.owner_agent_id.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reopen_blocked_task_preserves_verification_metadata() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task(
+            "Test Task",
+            Some("Test description"),
+            agent_id,
+            "/test",
+            None,
+        )?;
+
+        // Assign the task
+        let _assigned = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Assigned,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: None,
+            },
+        )?;
+
+        // Block the task
+        let _blocked = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Blocked,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: Some("Waiting for dependency"),
+                closure_summary: None,
+                event_note: None,
+            },
+        )?;
+
+        // Reopen from blocked (non-terminal)
+        let reopened = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Open,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: Some("Dependency resolved"),
+            },
+        )?;
+
+        // Verify that reopening from blocked PRESERVES metadata (non-terminal transition)
+        assert_eq!(
+            reopened.verified_by,
+            Some(agent_id.to_string()),
+            "verified_by should be preserved for non-terminal reopening"
+        );
+        assert!(
+            reopened.verified_at.is_some(),
+            "verified_at should be preserved for non-terminal reopening"
+        );
+        // owner_agent_id is cleared when exiting Blocked, not affected by this change
+        assert_eq!(reopened.status, TaskStatus::Open);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reopen_cancelled_task_clears_verification_metadata() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task(
+            "Test Task",
+            Some("Test description"),
+            agent_id,
+            "/test",
+            None,
+        )?;
+
+        // Assign, then cancel the task
+        let _assigned = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Assigned,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: None,
+            },
+        )?;
+
+        let cancelled = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Cancelled,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: Some("Task cancelled"),
+                event_note: None,
+            },
+        )?;
+
+        // Verify that cancellation set the metadata
+        assert!(cancelled.verified_by.is_some());
+        assert!(cancelled.verified_at.is_some());
+
+        // Reopen from cancelled
+        let reopened = store.update_task_status(
+            &task.task_id,
+            TaskStatus::Open,
+            agent_id,
+            TaskStatusUpdate {
+                verification_state: None,
+                blocked_reason: None,
+                closure_summary: None,
+                event_note: Some("Reopening from cancelled"),
+            },
+        )?;
+
+        // Verify that reopening cleared the metadata
+        assert!(reopened.verified_by.is_none());
+        assert!(reopened.verified_at.is_none());
+        assert!(reopened.owner_agent_id.is_none());
+
         Ok(())
     }
 }

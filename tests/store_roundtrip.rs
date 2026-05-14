@@ -194,6 +194,7 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
             &agent.agent_id,
             "operator",
             Some("best available host for implementation"),
+            false,
         )
         .expect("assign task");
     assert_eq!(assigned.status, TaskStatus::Assigned);
@@ -224,7 +225,13 @@ fn store_roundtrip_covers_agents_tasks_and_council_messages() {
         .expect("create second task");
     assert!(
         store
-            .assign_task(&second_task.task_id, &agent.agent_id, "operator", None)
+            .assign_task(
+                &second_task.task_id,
+                &agent.agent_id,
+                "operator",
+                None,
+                false
+            )
             .is_err()
     );
 
@@ -679,7 +686,7 @@ fn assign_task_enforces_required_role_when_both_task_and_agent_define_it() {
     assert_eq!(task.required_role, Some(AgentRole::Validator));
 
     let error = store
-        .assign_task(&task.task_id, "codex-1", "operator", None)
+        .assign_task(&task.task_id, "codex-1", "operator", None, false)
         .expect_err("reject mismatched assignee role");
     assert!(
         error
@@ -688,7 +695,7 @@ fn assign_task_enforces_required_role_when_both_task_and_agent_define_it() {
     );
 
     let assigned = store
-        .assign_task(&task.task_id, "claude-1", "operator", None)
+        .assign_task(&task.task_id, "claude-1", "operator", None, false)
         .expect("assign validator task");
     assert_eq!(assigned.owner_agent_id.as_deref(), Some("claude-1"));
     assert_eq!(assigned.required_role, Some(AgentRole::Validator));
@@ -752,7 +759,7 @@ fn assign_task_remains_backward_compatible_when_role_is_missing_on_one_side() {
         .expect("create validator task");
 
     let legacy_agent_target = store
-        .assign_task(&validator_task.task_id, "codex-1", "operator", None)
+        .assign_task(&validator_task.task_id, "codex-1", "operator", None, false)
         .expect("allow missing agent role");
     assert_eq!(
         legacy_agent_target.owner_agent_id.as_deref(),
@@ -760,7 +767,7 @@ fn assign_task_remains_backward_compatible_when_role_is_missing_on_one_side() {
     );
 
     let validator_assignment = store
-        .assign_task(&legacy_task.task_id, "claude-1", "operator", None)
+        .assign_task(&legacy_task.task_id, "claude-1", "operator", None, false)
         .expect("allow missing task role");
     assert_eq!(
         validator_assignment.owner_agent_id.as_deref(),
@@ -840,7 +847,7 @@ fn assign_and_claim_task_enforce_required_capabilities_when_both_sides_declare_t
         .expect("create capability-gated task");
 
     let error = store
-        .assign_task(&task.task_id, "codex-2", "operator", None)
+        .assign_task(&task.task_id, "codex-2", "operator", None, false)
         .expect_err("reject missing capability on assign");
     assert!(
         error
@@ -935,7 +942,13 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
         )
         .expect("create unscoped task");
     store
-        .assign_task(&no_requirement_task.task_id, "codex-2", "operator", None)
+        .assign_task(
+            &no_requirement_task.task_id,
+            "codex-2",
+            "operator",
+            None,
+            false,
+        )
         .expect("allow empty required capability list");
 
     let no_agent_capability_task = store
@@ -958,6 +971,7 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
             "codex-1",
             "operator",
             None,
+            false,
         )
         .expect("allow empty agent capability list");
 
@@ -976,7 +990,13 @@ fn assign_task_capabilities_stay_backward_compatible_for_empty_lists_and_case_se
         )
         .expect("create case-sensitive task");
     let error = store
-        .assign_task(&case_sensitive_task.task_id, "codex-3", "operator", None)
+        .assign_task(
+            &case_sensitive_task.task_id,
+            "codex-3",
+            "operator",
+            None,
+            false,
+        )
         .expect_err("reject capability mismatch with different casing");
     assert!(
         error
@@ -1221,7 +1241,7 @@ fn store_requires_prior_execution_before_resume_task() {
         .create_task("Resume execution", None, "operator", "/tmp/project", None)
         .expect("create task");
     let assigned = store
-        .assign_task(&task.task_id, &agent.agent_id, "operator", None)
+        .assign_task(&task.task_id, &agent.agent_id, "operator", None, false)
         .expect("assign task");
     assert_eq!(assigned.status, TaskStatus::Assigned);
 
@@ -1358,7 +1378,13 @@ fn task_creation_actions_create_artifacts_and_record_history() {
         )
         .expect("create task");
     let _ = store
-        .assign_task(&task.task_id, "codex-1", "operator", Some("initial owner"))
+        .assign_task(
+            &task.task_id,
+            "codex-1",
+            "operator",
+            Some("initial owner"),
+            false,
+        )
         .expect("assign task");
 
     let _ = store
@@ -2070,7 +2096,7 @@ fn handoff_operator_actions_cover_resolution_paths() {
         .create_task("Transfer owner", None, "operator", "/tmp/project", None)
         .expect("create transfer task");
     store
-        .assign_task(&transfer_task.task_id, "codex-1", "operator", None)
+        .assign_task(&transfer_task.task_id, "codex-1", "operator", None, false)
         .expect("assign transfer task");
     let transfer_handoff = store
         .create_handoff(
@@ -3587,4 +3613,204 @@ fn handoff_disposition_crash_survives_roundtrip() {
         listed[0].disposition_reason.as_deref(),
         Some("agent panicked during review step")
     );
+}
+
+#[test]
+fn evidence_attachment_to_terminal_task_rejected() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    // Create a task and complete it
+    let task = store
+        .create_task("terminal task test", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("completed"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move to in progress");
+
+    let completed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Completed,
+            "operator",
+            TaskStatusUpdate {
+                verification_state: Some(VerificationState::Passed),
+                closure_summary: Some("completed"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("move to completed");
+
+    assert_eq!(completed.status, TaskStatus::Completed);
+
+    // Attempt to attach evidence to completed task — should fail
+    let result = store.add_evidence(
+        &task.task_id,
+        EvidenceSourceKind::ManualNote,
+        "ref-123",
+        "evidence label",
+        Some("summary"),
+        EvidenceLinkRefs::default(),
+    );
+
+    assert!(result.is_err());
+    if let Err(StoreError::Validation(msg)) = result {
+        assert!(msg.contains("terminal state"));
+        assert!(msg.contains("Completed"));
+    } else {
+        panic!("Expected validation error for evidence on completed task");
+    }
+}
+
+#[test]
+fn evidence_attachment_to_closed_task_rejected() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("closed task test", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    // Transition to InProgress → ReviewRequired → Closed (allowed path)
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("move to in progress");
+
+    store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::ReviewRequired,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("move to review required");
+
+    let closed = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Closed,
+            "operator",
+            TaskStatusUpdate {
+                closure_summary: Some("closed without completion"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("close task");
+
+    assert_eq!(closed.status, TaskStatus::Closed);
+
+    // Attempt to attach evidence to closed task — should fail
+    let result = store.add_evidence(
+        &task.task_id,
+        EvidenceSourceKind::ManualNote,
+        "ref-123",
+        "evidence label",
+        Some("summary"),
+        EvidenceLinkRefs::default(),
+    );
+
+    assert!(result.is_err());
+    if let Err(StoreError::Validation(msg)) = result {
+        assert!(msg.contains("terminal state"));
+        assert!(msg.contains("Closed"));
+    } else {
+        panic!("Expected validation error for evidence on closed task");
+    }
+}
+
+#[test]
+fn evidence_attachment_to_cancelled_task_rejected() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("cancelled task test", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    let cancelled = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::Cancelled,
+            "operator",
+            TaskStatusUpdate {
+                closure_summary: Some("cancelled"),
+                ..TaskStatusUpdate::default()
+            },
+        )
+        .expect("cancel task");
+
+    assert_eq!(cancelled.status, TaskStatus::Cancelled);
+
+    // Attempt to attach evidence to cancelled task — should fail
+    let result = store.add_evidence(
+        &task.task_id,
+        EvidenceSourceKind::ManualNote,
+        "ref-123",
+        "evidence label",
+        Some("summary"),
+        EvidenceLinkRefs::default(),
+    );
+
+    assert!(result.is_err());
+    if let Err(StoreError::Validation(msg)) = result {
+        assert!(msg.contains("terminal state"));
+        assert!(msg.contains("Cancelled"));
+    } else {
+        panic!("Expected validation error for evidence on cancelled task");
+    }
+}
+
+#[test]
+fn evidence_attachment_to_in_progress_task_succeeds() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task("in-progress task test", None, "op", "/tmp/project", None)
+        .expect("create task");
+
+    let in_progress = store
+        .update_task_status(
+            &task.task_id,
+            TaskStatus::InProgress,
+            "operator",
+            TaskStatusUpdate::default(),
+        )
+        .expect("move to in progress");
+
+    assert_eq!(in_progress.status, TaskStatus::InProgress);
+
+    // Attach evidence to in-progress task — should succeed
+    let evidence = store
+        .add_evidence(
+            &task.task_id,
+            EvidenceSourceKind::ManualNote,
+            "ref-123",
+            "Test Evidence",
+            Some("Summary"),
+            EvidenceLinkRefs::default(),
+        )
+        .expect("attach evidence");
+
+    assert_eq!(evidence.task_id, task.task_id);
+    assert_eq!(evidence.label, "Test Evidence");
 }

@@ -430,6 +430,7 @@ fn process_assignment(
                     agent_id,
                     "handoff-import",
                     Some("assigned during handoff import"),
+                    false,
                 ) {
                     warn!(
                         "import succeeded but assignment to '{}' failed: {e}",
