@@ -3,7 +3,8 @@ use rusqlite::{OptionalExtension, params};
 
 use super::helpers::{
     get_agent_in_connection, map_agent, map_agent_heartbeat, parse_database_timestamp,
-    record_agent_heartbeat_in_connection, serialize_capabilities, sync_task_workflow_in_connection,
+    record_agent_heartbeat_in_connection, serialize_capabilities,
+    sync_task_workflow_by_id_in_connection,
     validate_agent_registration, validate_agent_task_link,
 };
 use super::{AgentHeartbeatWrite, Store, StoreError, StoreResult};
@@ -66,7 +67,7 @@ impl Store {
                 },
             )?;
             if let Some(task_id) = agent.current_task_id.as_deref() {
-                sync_task_workflow_in_connection(conn, task_id)?;
+                sync_task_workflow_by_id_in_connection(conn, task_id)?;
             }
             get_agent_in_connection(conn, &agent.agent_id)
         })
@@ -157,7 +158,7 @@ impl Store {
                 },
             )?;
             if let Some(task_id) = current_task_id {
-                sync_task_workflow_in_connection(conn, task_id)?;
+                sync_task_workflow_by_id_in_connection(conn, task_id)?;
             }
             get_agent_in_connection(conn, agent_id)
         })

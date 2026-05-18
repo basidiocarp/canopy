@@ -7,7 +7,8 @@ use super::helpers::{
     has_passing_script_verification_in_connection, is_open_task_status,
     list_open_children_in_connection, map_task, maybe_auto_complete_task_tree_in_connection,
     record_parent_relationship_in_connection, record_task_event_in_connection,
-    sync_owner_for_task_status, sync_task_workflow_in_connection,
+    sync_owner_for_task_status, sync_task_workflow_by_id_in_connection,
+    sync_task_workflow_in_connection,
 };
 use super::operator_actions::{
     task_operator_deadline_update, task_operator_status_update, task_operator_triage_update,
@@ -505,7 +506,7 @@ impl Store {
             )?;
 
             sync_owner_for_task_status(conn, task_id, status)?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_by_id_in_connection(conn, task_id)?;
 
             // Emit notification for status transitions
             if matches!(
@@ -684,7 +685,7 @@ impl Store {
                 },
             )?;
             // Resync queue state after triage changes (priority/severity may affect queue position).
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_in_connection(conn, &updated)?;
             Ok(updated)
         })
     }
@@ -845,31 +846,32 @@ impl Store {
                         "close_task requires a current-cycle decision context".to_string(),
                     ));
                 }
-                if self
-                    .list_related_tasks(task_id)?
-                    .into_iter()
-                    .any(|related| {
-                        (related.relationship_role == TaskRelationshipRole::BlockedBy
+                // Hoist list_related_tasks and list_handoffs once so both
+                // graph-pressure and handoff-follow-through checks share the same fetch.
+                let related = self.list_related_tasks(task_id)?;
+                let handoffs_for_task = self.list_handoffs(Some(task_id))?;
+                if related.iter().any(|r| {
+                        (r.relationship_role == TaskRelationshipRole::BlockedBy
                             && matches!(
-                                related.status,
+                                r.status,
                                 TaskStatus::Open
                                     | TaskStatus::Assigned
                                     | TaskStatus::InProgress
                                     | TaskStatus::Blocked
                                     | TaskStatus::ReviewRequired
                             ))
-                            || (related.relationship_role == TaskRelationshipRole::FollowUpChild
+                            || (r.relationship_role == TaskRelationshipRole::FollowUpChild
                                 && matches!(
-                                    related.status,
+                                    r.status,
                                     TaskStatus::Open
                                         | TaskStatus::Assigned
                                         | TaskStatus::InProgress
                                         | TaskStatus::Blocked
                                         | TaskStatus::ReviewRequired
                                 ))
-                            || (related.relationship_role == TaskRelationshipRole::Child
+                            || (r.relationship_role == TaskRelationshipRole::Child
                                 && matches!(
-                                    related.status,
+                                    r.status,
                                     TaskStatus::Open
                                         | TaskStatus::Assigned
                                         | TaskStatus::InProgress
@@ -883,8 +885,7 @@ impl Store {
                             .to_string(),
                     ));
                 }
-                if self
-                    .list_handoffs(Some(task_id))?
+                if handoffs_for_task
                     .into_iter()
                     .any(|handoff| {
                         matches!(
@@ -1132,7 +1133,7 @@ impl Store {
                 "UPDATE tasks SET owner_agent_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
                 params![task_id],
             )?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_by_id_in_connection(conn, task_id)?;
             Ok(())
         })
     }
@@ -1178,7 +1179,7 @@ impl Store {
                 // Lock the body hash on first dispatch. This path bypasses
                 // update_task_status, so we record it here explicitly.
                 record_body_hash_if_needed(conn, task_id)?;
-                sync_task_workflow_in_connection(conn, task_id)?;
+                sync_task_workflow_by_id_in_connection(conn, task_id)?;
                 let task = get_task_in_connection(conn, task_id)?;
                 Ok(Some(task))
             } else {
@@ -1263,7 +1264,7 @@ impl Store {
                 // Lock the body hash on first dispatch. This path bypasses
                 // update_task_status, so we record it here explicitly.
                 record_body_hash_if_needed(conn, task_id)?;
-                sync_task_workflow_in_connection(conn, task_id)?;
+                sync_task_workflow_by_id_in_connection(conn, task_id)?;
                 let task = get_task_in_connection(conn, task_id)?;
                 Ok(Some(task))
             } else {
@@ -1318,15 +1319,18 @@ impl Store {
             rows.collect::<Result<Vec<_>, _>>()?
         };
 
+        // Parse the role filter string once rather than calling to_string() on
+        // every task's required_role inside the closure.
+        let role_filter: Option<AgentRole> = role
+            .and_then(|r| r.parse().ok());
+
         // Post-filter by role and capabilities since those require enum parsing
         let filtered = tasks
             .into_iter()
             .filter(|task| {
-                if let Some(role_filter) = role {
-                    if let Some(required_role) = &task.required_role {
-                        if required_role.to_string() != role_filter {
-                            return false;
-                        }
+                if let Some(r) = role_filter {
+                    if task.required_role != Some(r) {
+                        return false;
                     }
                 }
                 capabilities_match(capabilities, &task.required_capabilities)

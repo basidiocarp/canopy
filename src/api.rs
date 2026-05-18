@@ -146,23 +146,26 @@ struct OverdueTaskSlaQueues {
 /// - Consecutive test failure events
 /// - Gaps in evidence collection
 fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
+    // Precompute lowercased labels once so both loops below avoid repeated allocations.
+    let lower_labels: Vec<String> = evidence.iter().map(|e| e.label.to_lowercase()).collect();
+
     let high_correction_rate = {
         // Check the last 50 evidence refs for correction-related labels.
-        let recent = if evidence.len() > 50 {
-            &evidence[evidence.len() - 50..]
+        let recent_lower = if lower_labels.len() > 50 {
+            &lower_labels[lower_labels.len() - 50..]
         } else {
-            evidence
+            &lower_labels
         };
-        let correction_count = recent
+        let correction_count = recent_lower
             .iter()
-            .filter(|e| e.label.to_lowercase().contains("correction"))
+            .filter(|label| label.contains("correction"))
             .count();
-        let rate = if recent.is_empty() {
+        let rate = if recent_lower.is_empty() {
             0.0
         } else {
             #[allow(clippy::cast_precision_loss)]
             {
-                correction_count as f64 / recent.len() as f64
+                correction_count as f64 / recent_lower.len() as f64
             }
         };
         rate > 0.30
@@ -171,9 +174,9 @@ fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
     let test_failure_streak = {
         // Walk evidence refs from newest to oldest, counting consecutive test-failure events.
         let mut streak = 0u32;
-        for evidence in evidence.iter().rev() {
-            let is_test_failure = evidence.label.to_lowercase().contains("test_failure")
-                || evidence.label.to_lowercase().contains("test-failure");
+        for label in lower_labels.iter().rev() {
+            let is_test_failure =
+                label.contains("test_failure") || label.contains("test-failure");
             if is_test_failure {
                 streak += 1;
             } else {
@@ -462,7 +465,6 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     let review_annotations = store.list_review_annotations_for_task(task_id)?;
     let workflow_context = Some(store.get_task_workflow_context(task_id)?);
     let heartbeats = store.list_task_heartbeats(task_id, 25)?;
-    let agents = store.list_agents()?;
     let now = Utc::now();
     let execution_summary =
         derive_task_execution_summaries(std::slice::from_ref(&task), &events, now)
@@ -471,39 +473,32 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
             .ok_or(StoreError::Validation(
                 "task execution summary could not be derived".to_string(),
             ))?;
-    let related_handoff_agents: HashSet<_> = handoffs
+    // Collect agent IDs referenced by this task's handoffs and heartbeats so we
+    // can fetch only those agents rather than pulling every registered agent.
+    let related_handoff_agent_ids: HashSet<&str> = handoffs
         .iter()
         .flat_map(|handoff| [handoff.from_agent_id.as_str(), handoff.to_agent_id.as_str()])
         .collect();
+    let heartbeat_agent_ids: HashSet<&str> = heartbeats
+        .iter()
+        .map(|hb| hb.agent_id.as_str())
+        .collect();
+    let agents = store.list_agents_filtered(Some(task.project_root.as_str()))?;
     let agent_attention = derive_agent_attention(&agents, now)
         .into_iter()
         .filter(|attention| {
             attention.current_task_id.as_deref() == Some(task_id)
                 || task.owner_agent_id.as_deref() == Some(attention.agent_id.as_str())
-                || related_handoff_agents.contains(attention.agent_id.as_str())
-                || heartbeats
-                    .iter()
-                    .any(|heartbeat| heartbeat.agent_id == attention.agent_id)
+                || related_handoff_agent_ids.contains(attention.agent_id.as_str())
+                || heartbeat_agent_ids.contains(attention.agent_id.as_str())
         })
         .collect::<Vec<_>>();
     let handoff_attention = derive_handoff_attention(&handoffs, now);
-    let project_tasks = store
-        .list_tasks()?
-        .into_iter()
-        .filter(|candidate| candidate.project_root == task.project_root)
-        .collect::<Vec<_>>();
-    let project_task_ids: HashSet<_> = project_tasks
-        .iter()
-        .map(|candidate| candidate.task_id.clone())
-        .collect();
-    let project_relationships = store
-        .list_task_relationships(None)?
-        .into_iter()
-        .filter(|relationship| {
-            project_task_ids.contains(&relationship.source_task_id)
-                && project_task_ids.contains(&relationship.target_task_id)
-        })
-        .collect::<Vec<_>>();
+    // Use project-scoped queries rather than full table scans.
+    let project_root_filter = Some(task.project_root.as_str());
+    let project_tasks = store.list_tasks_filtered(project_root_filter, None, None)?;
+    let project_relationships =
+        store.list_task_relationships_for_project(project_root_filter)?;
     let relationship_summary =
         derive_task_relationship_summaries(&project_tasks, &project_relationships, now)
             .into_iter()

@@ -35,7 +35,7 @@ pub(crate) fn create_task_in_connection(
             note: description,
         },
     )?;
-    sync_task_workflow_in_connection(conn, &task.task_id)?;
+    sync_task_workflow_in_connection(conn, &task)?;
     get_task_in_connection(conn, &task.task_id)
 }
 
@@ -282,7 +282,7 @@ pub(crate) fn add_council_message_in_connection(
         params![task_id, message.message_type.to_string()],
     )?;
     touch_task_in_connection(conn, task_id)?;
-    sync_task_workflow_in_connection(conn, task_id)?;
+    sync_task_workflow_by_id_in_connection(conn, task_id)?;
     Ok(message)
 }
 
@@ -365,10 +365,11 @@ pub(crate) fn add_evidence_in_connection(
         ],
     )?;
     touch_task_in_connection(conn, task_id)?;
-    sync_task_workflow_in_connection(conn, task_id)?;
+    // Load the task once after touch so sync can use it and the event record below can reuse it.
+    let task = get_task_in_connection(conn, task_id)?;
+    sync_task_workflow_in_connection(conn, &task)?;
 
     // Emit task event for evidence attachment.
-    let task = get_task_in_connection(conn, task_id)?;
     record_task_event_in_connection(
         conn,
         &TaskEventWrite {

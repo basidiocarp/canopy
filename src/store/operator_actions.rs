@@ -754,7 +754,7 @@ impl Store {
                     note: event_note.as_deref(),
                 },
             )?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_in_connection(conn, &updated)?;
             get_task_in_connection(conn, task_id)
         })
     }
@@ -818,7 +818,7 @@ impl Store {
                     note: event_note.as_deref(),
                 },
             )?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_in_connection(conn, &updated)?;
             get_task_in_connection(conn, task_id)
         })
     }
@@ -890,7 +890,7 @@ impl Store {
                     note: event_note.as_deref(),
                 },
             )?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_in_connection(conn, &updated)?;
             get_task_in_connection(conn, task_id)
         })
     }
@@ -967,7 +967,7 @@ impl Store {
                     note: event_note.as_deref(),
                 },
             )?;
-            sync_task_workflow_in_connection(conn, task_id)?;
+            sync_task_workflow_in_connection(conn, &updated)?;
             get_task_in_connection(conn, task_id)
         })
     }

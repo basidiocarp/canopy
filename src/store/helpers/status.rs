@@ -433,7 +433,7 @@ pub(crate) fn assign_task_in_connection(
         reason,
     )?;
     update_agent_phases(conn, task_id, assigned_to, previous_owner.as_deref())?;
-    sync_task_workflow_in_connection(conn, task_id)?;
+    sync_task_workflow_by_id_in_connection(conn, task_id)?;
     Ok(())
 }
 

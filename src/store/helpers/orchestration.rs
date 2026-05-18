@@ -463,12 +463,13 @@ fn upsert_review_cycle(
     Ok(())
 }
 
+/// Syncs the workflow state records for a task using an already-loaded task
+/// object, avoiding a redundant DB read at the call site.
 pub(crate) fn sync_task_workflow_in_connection(
     conn: &Connection,
-    task_id: &str,
+    task: &Task,
 ) -> StoreResult<()> {
-    let task = get_task_in_connection(conn, task_id)?;
-    let queue_state = upsert_task_queue_state_in_connection(conn, &task)?;
+    let queue_state = upsert_task_queue_state_in_connection(conn, task)?;
     let worktree_binding = upsert_task_worktree_binding_in_connection(conn, &task)?;
     let review_cycle = sync_task_review_cycle_in_connection(conn, &task)?;
     conn.execute(
@@ -481,7 +482,7 @@ pub(crate) fn sync_task_workflow_in_connection(
         WHERE task_id = ?1
         ",
         params![
-            task_id,
+            task.task_id,
             queue_state.queue_state_id,
             worktree_binding.worktree_binding_id,
             worktree_binding.execution_session_ref,
@@ -489,4 +490,16 @@ pub(crate) fn sync_task_workflow_in_connection(
         ],
     )?;
     Ok(())
+}
+
+/// Loads the task by id and syncs its workflow state records.
+///
+/// Use [`sync_task_workflow_in_connection`] directly when the task is already
+/// loaded at the call site to avoid the extra DB read.
+pub(crate) fn sync_task_workflow_by_id_in_connection(
+    conn: &Connection,
+    task_id: &str,
+) -> StoreResult<()> {
+    let task = get_task_in_connection(conn, task_id)?;
+    sync_task_workflow_in_connection(conn, &task)
 }

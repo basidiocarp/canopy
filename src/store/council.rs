@@ -196,7 +196,7 @@ pub(crate) fn summon_task_council_in_connection(
     )?;
 
     super::helpers::touch_task_in_connection(conn, &task.task_id)?;
-    sync_task_workflow_in_connection(conn, &task.task_id)?;
+    sync_task_workflow_in_connection(conn, task)?;
     Ok(())
 }
 
