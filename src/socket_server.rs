@@ -15,7 +15,7 @@
 //! - `canopy_task_action` — apply an operator action to a task
 //! - `canopy_handoff_action` — apply an operator action to a handoff
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -24,6 +24,7 @@ use tracing::{debug, error};
 
 const CAPABILITY_ID: &str = "coordination.read.v1";
 const PING_METHOD: &str = "PING";
+const MAX_REQUEST_LINE_BYTES: u64 = 1024 * 1024;
 
 fn write_endpoint_descriptor(socket_path: &Path) -> Result<()> {
     let config_dir = spore::paths::config_dir("canopy");
@@ -75,7 +76,7 @@ fn write_response(writer: &mut (impl Write + ?Sized), response: &Value) {
 // canopy_snapshot handler
 // ---------------------------------------------------------------------------
 
-fn handle_snapshot(params: &Value) -> Value {
+fn handle_snapshot(store: &canopy::store::Store, params: &Value) -> Value {
     use canopy::api::{self, SnapshotOptions};
     use canopy::models::{
         AttentionLevel, SnapshotPreset, TaskPriority, TaskSeverity, TaskSort, TaskView,
@@ -98,11 +99,6 @@ fn handle_snapshot(params: &Value) -> Value {
         Err(e) => return json!({ "error": format!("param parse: {e}") }),
     };
 
-    let store = match crate::db::open(None) {
-        Ok(s) => s,
-        Err(e) => return json!({ "error": format!("store open: {e}") }),
-    };
-
     let options = SnapshotOptions {
         project_root: params.project_root.as_deref(),
         preset: params.preset,
@@ -114,7 +110,7 @@ fn handle_snapshot(params: &Value) -> Value {
         attention_at_least: params.attention_at_least,
     };
 
-    match api::snapshot(&store, options) {
+    match api::snapshot(store, options) {
         Ok(snapshot) => serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({})),
         Err(e) => json!({ "error": format!("snapshot: {e}") }),
     }
@@ -124,7 +120,7 @@ fn handle_snapshot(params: &Value) -> Value {
 // canopy_task handler
 // ---------------------------------------------------------------------------
 
-fn handle_task(params: &Value) -> Value {
+fn handle_task(store: &canopy::store::Store, params: &Value) -> Value {
     use canopy::api;
 
     #[derive(serde::Deserialize)]
@@ -137,12 +133,7 @@ fn handle_task(params: &Value) -> Value {
         Err(e) => return json!({ "error": format!("param parse: {e}") }),
     };
 
-    let store = match crate::db::open(None) {
-        Ok(s) => s,
-        Err(e) => return json!({ "error": format!("store open: {e}") }),
-    };
-
-    match api::task_detail(&store, &params.task_id) {
+    match api::task_detail(store, &params.task_id) {
         Ok(detail) => {
             let wire: canopy::models::TaskDetailWire = detail.into();
             serde_json::to_value(&wire).unwrap_or_else(|_| json!({}))
@@ -155,7 +146,7 @@ fn handle_task(params: &Value) -> Value {
 // canopy_agents handler
 // ---------------------------------------------------------------------------
 
-fn handle_agents(params: &Value) -> Value {
+fn handle_agents(store: &canopy::store::Store, params: &Value) -> Value {
     #[derive(serde::Deserialize, Default)]
     struct AgentsParams {
         project_root: Option<String>,
@@ -164,11 +155,6 @@ fn handle_agents(params: &Value) -> Value {
     let params: AgentsParams = match serde_json::from_value(params.clone()) {
         Ok(p) => p,
         Err(e) => return json!({ "error": format!("param parse: {e}") }),
-    };
-
-    let store = match crate::db::open(None) {
-        Ok(s) => s,
-        Err(e) => return json!({ "error": format!("store open: {e}") }),
     };
 
     let agents = if let Some(project_root) = params.project_root.as_deref() {
@@ -193,7 +179,7 @@ fn handle_agents(params: &Value) -> Value {
 // canopy_task_action handler
 // ---------------------------------------------------------------------------
 
-fn handle_task_action(params: &Value) -> Value {
+fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
     use canopy::models::{OperatorActionKind, TaskAction};
 
     #[derive(serde::Deserialize)]
@@ -247,11 +233,6 @@ fn handle_task_action(params: &Value) -> Value {
     let params: TaskActionParams = match serde_json::from_value(params.clone()) {
         Ok(p) => p,
         Err(e) => return json!({ "error": format!("param parse: {e}") }),
-    };
-
-    let store = match crate::db::open(None) {
-        Ok(s) => s,
-        Err(e) => return json!({ "error": format!("store open: {e}") }),
     };
 
     // Parse action string to OperatorActionKind
@@ -640,7 +621,7 @@ fn handle_task_action(params: &Value) -> Value {
 // canopy_handoff_action handler
 // ---------------------------------------------------------------------------
 
-fn handle_handoff_action(params: &Value) -> Value {
+fn handle_handoff_action(store: &canopy::store::Store, params: &Value) -> Value {
     use canopy::models::OperatorActionKind;
     use canopy::store::HandoffOperatorActionInput;
 
@@ -656,11 +637,6 @@ fn handle_handoff_action(params: &Value) -> Value {
     let params: HandoffActionParams = match serde_json::from_value(params.clone()) {
         Ok(p) => p,
         Err(e) => return json!({ "error": format!("param parse: {e}") }),
-    };
-
-    let store = match crate::db::open(None) {
-        Ok(s) => s,
-        Err(e) => return json!({ "error": format!("store open: {e}") }),
     };
 
     // Parse action string to OperatorActionKind
@@ -706,13 +682,22 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
     let mut line = String::new();
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return,
-            Ok(_) => {}
+        // Use take() to limit the read to MAX_REQUEST_LINE_BYTES
+        let bytes_read = match reader.by_ref().take(MAX_REQUEST_LINE_BYTES).read_line(&mut line) {
+            Ok(n) => n,
             Err(e) => {
                 error!("socket read error: {e}");
                 return;
             }
+        };
+
+        if bytes_read == 0 {
+            return;
+        }
+
+        if !line.ends_with('\n') {
+            error!("socket request line exceeds max size: {} bytes", MAX_REQUEST_LINE_BYTES);
+            return;
         }
 
         let trimmed = line.trim();
@@ -723,9 +708,8 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
         let msg: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                let resp = err_response(&Value::Null, -32700, format!("parse error: {e}"));
-                write_response(&mut writer, &resp);
-                return;
+                tracing::warn!("socket parse error: {e}");
+                continue;
             }
         };
 
@@ -739,13 +723,23 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
 
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
+        // Open database once per request
+        let store = match crate::db::open(None) {
+            Ok(s) => s,
+            Err(e) => {
+                let resp = err_response(&id, -32603, format!("internal error: {e}"));
+                write_response(&mut writer, &resp);
+                continue;
+            }
+        };
+
         let response = match method {
             m if m == PING_METHOD || m == "ping" => {
                 let empty = json!({});
                 ok_response(&id, &empty)
             }
             "canopy_snapshot" => {
-                let result = handle_snapshot(&params);
+                let result = handle_snapshot(&store, &params);
                 if result.get("error").is_some() {
                     let msg = result["error"]
                         .as_str()
@@ -757,7 +751,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
                 }
             }
             "canopy_task" => {
-                let result = handle_task(&params);
+                let result = handle_task(&store, &params);
                 if result.get("error").is_some() {
                     let msg = result["error"].as_str().unwrap_or("task error").to_string();
                     err_response(&id, -32000, msg)
@@ -766,7 +760,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
                 }
             }
             "canopy_agents" => {
-                let result = handle_agents(&params);
+                let result = handle_agents(&store, &params);
                 if result.get("error").is_some() {
                     let msg = result["error"]
                         .as_str()
@@ -778,7 +772,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
                 }
             }
             "canopy_task_action" => {
-                let result = handle_task_action(&params);
+                let result = handle_task_action(&store, &params);
                 if result.get("error").is_some() {
                     let msg = result["error"]
                         .as_str()
@@ -790,7 +784,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
                 }
             }
             "canopy_handoff_action" => {
-                let result = handle_handoff_action(&params);
+                let result = handle_handoff_action(&store, &params);
                 if result.get("error").is_some() {
                     let msg = result["error"]
                         .as_str()
@@ -857,7 +851,7 @@ pub fn run_socket_server() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use tempfile::TempDir;
 
     fn temp_socket_path(dir: &TempDir) -> PathBuf {

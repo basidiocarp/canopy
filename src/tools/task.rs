@@ -453,14 +453,16 @@ pub fn tool_task_complete(
         Err(e) => return e,
     };
 
-    let _ = record_completion_evidence(
+    if let Err(e) = record_completion_evidence(
         store,
         task_id,
         summary,
         &residual_work_warning,
         &task_record,
         force,
-    );
+    ) {
+        tracing::warn!("failed to record completion evidence: {e:?}");
+    }
 
     persist_task_output(store, task_id, args);
 
@@ -599,47 +601,55 @@ fn record_completion_evidence(
 ) -> std::result::Result<(), ToolResult> {
     if let Some(warning) = residual_work_warning {
         tracing::warn!(task_id = %task_id, "{warning}");
-        let _ = store.add_evidence(
+        if let Err(e) = store.add_evidence(
             task_id,
             crate::models::EvidenceSourceKind::ManualNote,
             task_id,
             "residual_work_warning",
             Some(warning.as_str()),
             EvidenceLinkRefs::default(),
-        );
+        ) {
+            tracing::warn!("failed to record residual_work_warning evidence: {e}");
+        }
     }
 
-    let _ = store.add_evidence(
+    if let Err(e) = store.add_evidence(
         task_id,
         crate::models::EvidenceSourceKind::ManualNote,
         task_id,
         "completion_summary",
         Some(summary),
         EvidenceLinkRefs::default(),
-    );
+    ) {
+        tracing::warn!("failed to record completion_summary evidence: {e}");
+    }
 
     if force && task_record.verification_required {
-        let _ = store.add_evidence(
+        if let Err(e) = store.add_evidence(
             task_id,
             crate::models::EvidenceSourceKind::ManualNote,
             task_id,
             "verification_override",
             Some("completion allowed with --force override despite missing verification"),
             EvidenceLinkRefs::default(),
-        );
+        ) {
+            tracing::warn!("failed to record verification_override evidence: {e}");
+        }
     }
 
     if force {
         if let Ok(open_children) = store.list_open_child_tasks(task_id) {
             if !open_children.is_empty() {
-                let _ = store.add_evidence(
+                if let Err(e) = store.add_evidence(
                     task_id,
                     crate::models::EvidenceSourceKind::ManualNote,
                     task_id,
                     "children_override",
                     Some("completion allowed with --force override despite open sub-tasks"),
                     EvidenceLinkRefs::default(),
-                );
+                ) {
+                    tracing::warn!("failed to record children_override evidence: {e}");
+                }
             }
         }
     }
