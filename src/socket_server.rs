@@ -858,7 +858,7 @@ pub fn run_socket_server() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{BufRead, BufReader, Write};
     use tempfile::TempDir;
 
     fn temp_socket_path(dir: &TempDir) -> PathBuf {

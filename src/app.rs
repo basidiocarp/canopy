@@ -1150,7 +1150,7 @@ fn validate_parallel_groups(steps: &[ParsedHandoffStep]) {
 
 fn create_parent_task(store: &Store, title: &str, path: &Path, project_root: &str) -> Result<Task> {
     let parent_description = Some(format!("Imported from {}", path.display()));
-    Ok(store
+    store
         .create_task_with_options(
             title,
             parent_description.as_deref(),
@@ -1170,7 +1170,7 @@ fn create_parent_task(store: &Store, title: &str, path: &Path, project_root: &st
                 branch_outcome: None,
             },
         )
-        .map_err(|e| anyhow::anyhow!("{:?}", e))?)
+        .map_err(|e| anyhow::anyhow!("{:?}", e))
 }
 
 fn add_parent_verification_evidence(
