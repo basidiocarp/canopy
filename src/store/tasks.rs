@@ -851,7 +851,16 @@ impl Store {
                 let related = self.list_related_tasks(task_id)?;
                 let handoffs_for_task = self.list_handoffs(Some(task_id))?;
                 if related.iter().any(|r| {
-                        (r.relationship_role == TaskRelationshipRole::BlockedBy
+                    (r.relationship_role == TaskRelationshipRole::BlockedBy
+                        && matches!(
+                            r.status,
+                            TaskStatus::Open
+                                | TaskStatus::Assigned
+                                | TaskStatus::InProgress
+                                | TaskStatus::Blocked
+                                | TaskStatus::ReviewRequired
+                        ))
+                        || (r.relationship_role == TaskRelationshipRole::FollowUpChild
                             && matches!(
                                 r.status,
                                 TaskStatus::Open
@@ -860,50 +869,37 @@ impl Store {
                                     | TaskStatus::Blocked
                                     | TaskStatus::ReviewRequired
                             ))
-                            || (r.relationship_role == TaskRelationshipRole::FollowUpChild
-                                && matches!(
-                                    r.status,
-                                    TaskStatus::Open
-                                        | TaskStatus::Assigned
-                                        | TaskStatus::InProgress
-                                        | TaskStatus::Blocked
-                                        | TaskStatus::ReviewRequired
-                                ))
-                            || (r.relationship_role == TaskRelationshipRole::Child
-                                && matches!(
-                                    r.status,
-                                    TaskStatus::Open
-                                        | TaskStatus::Assigned
-                                        | TaskStatus::InProgress
-                                        | TaskStatus::Blocked
-                                        | TaskStatus::ReviewRequired
-                                ))
-                    })
-                {
+                        || (r.relationship_role == TaskRelationshipRole::Child
+                            && matches!(
+                                r.status,
+                                TaskStatus::Open
+                                    | TaskStatus::Assigned
+                                    | TaskStatus::InProgress
+                                    | TaskStatus::Blocked
+                                    | TaskStatus::ReviewRequired
+                            ))
+                }) {
                     return Err(StoreError::Validation(
                         "close_task requires review tasks without unresolved graph pressure"
                             .to_string(),
                     ));
                 }
-                if handoffs_for_task
-                    .into_iter()
-                    .any(|handoff| {
-                        matches!(
-                            handoff.handoff_type,
-                            HandoffType::RequestReview
-                                | HandoffType::RequestVerification
-                                | HandoffType::RecordDecision
-                                | HandoffType::CloseTask
-                        ) && match handoff.status {
-                            HandoffStatus::Open => !handoff_is_expired(&handoff).unwrap_or(false),
-                            HandoffStatus::Accepted => true,
-                            HandoffStatus::Rejected
-                            | HandoffStatus::Expired
-                            | HandoffStatus::Cancelled
-                            | HandoffStatus::Completed => false,
-                        }
-                    })
-                {
+                if handoffs_for_task.into_iter().any(|handoff| {
+                    matches!(
+                        handoff.handoff_type,
+                        HandoffType::RequestReview
+                            | HandoffType::RequestVerification
+                            | HandoffType::RecordDecision
+                            | HandoffType::CloseTask
+                    ) && match handoff.status {
+                        HandoffStatus::Open => !handoff_is_expired(&handoff).unwrap_or(false),
+                        HandoffStatus::Accepted => true,
+                        HandoffStatus::Rejected
+                        | HandoffStatus::Expired
+                        | HandoffStatus::Cancelled
+                        | HandoffStatus::Completed => false,
+                    }
+                }) {
                     return Err(StoreError::Validation(
                         "close_task requires review handoff follow-through to resolve first"
                             .to_string(),
@@ -1321,8 +1317,7 @@ impl Store {
 
         // Parse the role filter string once rather than calling to_string() on
         // every task's required_role inside the closure.
-        let role_filter: Option<AgentRole> = role
-            .and_then(|r| r.parse().ok());
+        let role_filter: Option<AgentRole> = role.and_then(|r| r.parse().ok());
 
         // Post-filter by role and capabilities since those require enum parsing
         let filtered = tasks

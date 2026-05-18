@@ -465,10 +465,7 @@ fn upsert_review_cycle(
 
 /// Syncs the workflow state records for a task using an already-loaded task
 /// object, avoiding a redundant DB read at the call site.
-pub(crate) fn sync_task_workflow_in_connection(
-    conn: &Connection,
-    task: &Task,
-) -> StoreResult<()> {
+pub(crate) fn sync_task_workflow_in_connection(conn: &Connection, task: &Task) -> StoreResult<()> {
     let queue_state = upsert_task_queue_state_in_connection(conn, task)?;
     let worktree_binding = upsert_task_worktree_binding_in_connection(conn, &task)?;
     let review_cycle = sync_task_review_cycle_in_connection(conn, &task)?;

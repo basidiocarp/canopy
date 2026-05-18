@@ -683,7 +683,11 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
     loop {
         line.clear();
         // Use take() to limit the read to MAX_REQUEST_LINE_BYTES
-        let bytes_read = match reader.by_ref().take(MAX_REQUEST_LINE_BYTES).read_line(&mut line) {
+        let bytes_read = match reader
+            .by_ref()
+            .take(MAX_REQUEST_LINE_BYTES)
+            .read_line(&mut line)
+        {
             Ok(n) => n,
             Err(e) => {
                 error!("socket read error: {e}");
@@ -696,7 +700,10 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
         }
 
         if !line.ends_with('\n') {
-            error!("socket request line exceeds max size: {} bytes", MAX_REQUEST_LINE_BYTES);
+            error!(
+                "socket request line exceeds max size: {} bytes",
+                MAX_REQUEST_LINE_BYTES
+            );
             return;
         }
 

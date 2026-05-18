@@ -175,8 +175,7 @@ fn compute_drift_signals(evidence: &[EvidenceRef]) -> DriftSignals {
         // Walk evidence refs from newest to oldest, counting consecutive test-failure events.
         let mut streak = 0u32;
         for label in lower_labels.iter().rev() {
-            let is_test_failure =
-                label.contains("test_failure") || label.contains("test-failure");
+            let is_test_failure = label.contains("test_failure") || label.contains("test-failure");
             if is_test_failure {
                 streak += 1;
             } else {
@@ -479,10 +478,8 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         .iter()
         .flat_map(|handoff| [handoff.from_agent_id.as_str(), handoff.to_agent_id.as_str()])
         .collect();
-    let heartbeat_agent_ids: HashSet<&str> = heartbeats
-        .iter()
-        .map(|hb| hb.agent_id.as_str())
-        .collect();
+    let heartbeat_agent_ids: HashSet<&str> =
+        heartbeats.iter().map(|hb| hb.agent_id.as_str()).collect();
     let agents = store.list_agents_filtered(Some(task.project_root.as_str()))?;
     let agent_attention = derive_agent_attention(&agents, now)
         .into_iter()
@@ -497,8 +494,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
     // Use project-scoped queries rather than full table scans.
     let project_root_filter = Some(task.project_root.as_str());
     let project_tasks = store.list_tasks_filtered(project_root_filter, None, None)?;
-    let project_relationships =
-        store.list_task_relationships_for_project(project_root_filter)?;
+    let project_relationships = store.list_task_relationships_for_project(project_root_filter)?;
     let relationship_summary =
         derive_task_relationship_summaries(&project_tasks, &project_relationships, now)
             .into_iter()

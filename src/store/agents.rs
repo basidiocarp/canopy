@@ -4,8 +4,7 @@ use rusqlite::{OptionalExtension, params};
 use super::helpers::{
     get_agent_in_connection, map_agent, map_agent_heartbeat, parse_database_timestamp,
     record_agent_heartbeat_in_connection, serialize_capabilities,
-    sync_task_workflow_by_id_in_connection,
-    validate_agent_registration, validate_agent_task_link,
+    sync_task_workflow_by_id_in_connection, validate_agent_registration, validate_agent_task_link,
 };
 use super::{AgentHeartbeatWrite, Store, StoreError, StoreResult};
 use crate::models::{AgentHeartbeatEvent, AgentHeartbeatSource, AgentRegistration, AgentStatus};
