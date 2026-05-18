@@ -730,7 +730,27 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
 
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
-        // Open database once per request
+        // Handle stateless methods before opening the database.
+        if method == PING_METHOD || method == "ping" {
+            let resp = ok_response(&id, &json!({}));
+            write_response(&mut writer, &resp);
+            continue;
+        }
+
+        let known_methods = [
+            "canopy_snapshot",
+            "canopy_task",
+            "canopy_agents",
+            "canopy_task_action",
+            "canopy_handoff_action",
+        ];
+        if !known_methods.contains(&method) {
+            let resp = err_response(&id, -32601, format!("method not found: {method}"));
+            write_response(&mut writer, &resp);
+            continue;
+        }
+
+        // Open database once per request (only reached for methods that need it)
         let store = match crate::db::open(None) {
             Ok(s) => s,
             Err(e) => {
@@ -741,10 +761,6 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
         };
 
         let response = match method {
-            m if m == PING_METHOD || m == "ping" => {
-                let empty = json!({});
-                ok_response(&id, &empty)
-            }
             "canopy_snapshot" => {
                 let result = handle_snapshot(&store, &params);
                 if result.get("error").is_some() {
@@ -802,7 +818,8 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
                     ok_response(&id, &result)
                 }
             }
-            _ => err_response(&id, -32601, format!("method not found: {method}")),
+            // All other methods were rejected above before reaching this point.
+            _ => unreachable!("unknown method should have been rejected before db open"),
         };
 
         write_response(&mut writer, &response);
