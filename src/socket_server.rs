@@ -876,7 +876,8 @@ pub fn run_socket_server() -> Result<()> {
                 // We treat EPERM as alive since the process exists but we lack permission.
                 #[allow(unsafe_code)]
                 let rc = unsafe { libc::kill(pid, 0) };
-                let is_running = rc == 0 || (rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM));
+                let errno_val = std::io::Error::last_os_error().raw_os_error();
+                let is_running = rc == 0 || (rc == -1 && errno_val == Some(libc::EPERM));
                 if is_running {
                     eprintln!("canopy socket server is already running (PID {pid}) — exiting");
                     return Ok(());

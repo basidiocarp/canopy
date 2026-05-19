@@ -11,7 +11,7 @@ use crate::store::Store;
 use super::protocol::{JsonRpcMessage, JsonRpcResponse};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-const DEFAULT_IDLE_SECS: u64 = 600;
+const DEFAULT_IDLE_SECS: u64 = 1800;
 
 /// Run the MCP server on stdio. Blocks until stdin is closed or idle timeout is reached.
 ///
