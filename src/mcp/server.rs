@@ -1,16 +1,19 @@
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use spore::logging::{SpanContext, request_span, root_span, tool_span};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::store::Store;
 
 use super::protocol::{JsonRpcMessage, JsonRpcResponse};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+const DEFAULT_IDLE_SECS: u64 = 600;
 
-/// Run the MCP server on stdio. Blocks until stdin is closed.
+/// Run the MCP server on stdio. Blocks until stdin is closed or idle timeout is reached.
 ///
 /// # Errors
 ///
@@ -22,14 +25,37 @@ pub fn run_server(
     worktree: Option<&str>,
 ) -> anyhow::Result<()> {
     let _root_span = root_span(&server_span_context(project)).entered();
-    let stdin = io::stdin();
+
+    let idle_timeout = Duration::from_secs(
+        std::env::var("CANOPY_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_IDLE_SECS),
+    );
+
+    // Spawn a thread to read stdin lines and send them over a channel
+    let (tx, rx) = mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else {
+                let _ = tx.send(None); // EOF or error
+                break;
+            };
+            if tx.send(Some(line)).is_err() {
+                break; // Main thread dropped receiver
+            }
+        }
+    });
+
     let mut stdout = io::stdout();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                error!("stdin read error: {e}");
+    loop {
+        let line = match rx.recv_timeout(idle_timeout) {
+            Ok(Some(l)) => l,
+            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => break, // EOF or disconnected
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                info!("canopy: idle timeout — exiting");
                 break;
             }
         };

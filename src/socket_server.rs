@@ -22,6 +22,27 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use tracing::{debug, error};
 
+/// Guard that cleans up the PID file on drop.
+///
+/// Note: the release profile sets `panic = "abort"`, so Drop does not run on
+/// panic. A stale PID file after a crash is handled by the liveness check in
+/// `run_socket_server` at the next startup.
+struct PidFileGuard {
+    pid_path: PathBuf,
+}
+
+impl PidFileGuard {
+    fn new(pid_path: PathBuf) -> Self {
+        Self { pid_path }
+    }
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.pid_path);
+    }
+}
+
 const CAPABILITY_ID: &str = "coordination.read.v1";
 const PING_METHOD: &str = "PING";
 const MAX_REQUEST_LINE_BYTES: u64 = 1024 * 1024;
@@ -844,6 +865,27 @@ pub fn run_socket_server() -> Result<()> {
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+
+    // PID-aware singleton guard: check if another process owns the socket
+    let pid_path = socket_path.with_extension("pid");
+    if pid_path.exists() {
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // SAFETY: we only call kill with signal 0 (test if process exists).
+                // This is a portable way to check if a PID is still running.
+                // We treat EPERM as alive since the process exists but we lack permission.
+                #[allow(unsafe_code)]
+                let rc = unsafe { libc::kill(pid, 0) };
+                let is_running = rc == 0 || (rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM));
+                if is_running {
+                    eprintln!("canopy socket server is already running (PID {pid}) — exiting");
+                    return Ok(());
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&pid_path);
+    }
+
     remove_stale_socket(&socket_path);
 
     let listener = std::os::unix::net::UnixListener::bind(&socket_path).map_err(|e| {
@@ -852,6 +894,11 @@ pub fn run_socket_server() -> Result<()> {
             socket_path.display()
         )
     })?;
+
+    // Write PID file for singleton coordination
+    let current_pid = std::process::id();
+    std::fs::write(&pid_path, format!("{}\n", current_pid))?;
+    let _pid_guard = PidFileGuard::new(pid_path);
 
     write_endpoint_descriptor(&socket_path)?;
 
