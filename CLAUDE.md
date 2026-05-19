@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Canopy is a local-first coordination runtime for multi-agent work. It is a single Rust binary with a CLI, an MCP server, and a 31-tool MCP surface backed by SQLite for tasks, handoffs, evidence, and operator views. That surface includes `canopy_check_handoff_completeness` for handoff validation. Canopy owns coordination state; it does not own long-term memory, lifecycle capture, or installation.
+Canopy is a local-first coordination runtime for multi-agent work. It is a single Rust binary with a CLI, an MCP server, and a 53-tool MCP surface backed by SQLite for tasks, handoffs, evidence, and operator views. That surface includes `canopy_check_handoff_completeness` for handoff validation. Canopy owns coordination state; it does not own long-term memory, lifecycle capture, or installation.
 
 ---
 

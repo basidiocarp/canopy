@@ -127,7 +127,7 @@ When a CLI command or MCP tool call arrives:
 
 1. **Open the ledger** (`main::main`)
    Parses CLI arguments, resolves the SQLite path, and opens `Store`.
-   Example: `canopy task create ...` opens `.canopy/canopy.db` unless
+   Example: `canopy task create ...` opens `~/.local/share/canopy/canopy.db` unless
    overridden.
 
 2. **Route the command** (`main::run_command` or `mcp::server::run_server`)
