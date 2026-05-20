@@ -53,7 +53,10 @@ pub fn run_server(
     loop {
         let line = match rx.recv_timeout(idle_timeout) {
             Ok(Some(l)) => l,
-            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => break, // EOF or disconnected
+            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("canopy: MCP transport closed — stdin EOF");
+                break;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 info!("canopy: idle timeout — exiting");
                 break;
