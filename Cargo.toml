@@ -23,7 +23,7 @@ rusqlite_migration = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
-spore = { git = "https://github.com/basidiocarp/spore", rev = "967e10c43a1052c9e57e226227621a83e6ac20e4", features = ["otel"] }
+spore = { git = "https://github.com/basidiocarp/spore", rev = "960f5aeb1d479149b3cdbeb2f850912c52521214", features = ["otel"] }
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"

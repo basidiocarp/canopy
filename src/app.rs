@@ -46,6 +46,7 @@ pub fn run() -> Result<()> {
             .with_output(LogOutput::Stderr)
             .with_span_events(SpanEvents::Lifecycle),
     );
+    spore::logging::install_panic_hook("canopy");
     let _telemetry = spore::telemetry::init_tracer("canopy").unwrap_or_else(|e| {
         tracing::debug!("OTel init skipped: {}", e);
         spore::telemetry::TelemetryInit::disabled("canopy")

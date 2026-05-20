@@ -39,6 +39,7 @@ pub struct HandoffSession {
 /// Get the sessions directory, creating it if needed.
 fn sessions_dir() -> HResult<PathBuf> {
     let dir = spore::paths::data_dir("basidiocarp")
+        .map_err(|e| e.to_string())?
         .join("canopy")
         .join("sessions");
     fs::create_dir_all(&dir).map_err(|e| format!("create sessions dir: {e}"))?;
