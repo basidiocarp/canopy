@@ -248,6 +248,8 @@ mod tests {
             branch_of: None,
             branch_at: None,
             branch_outcome: None,
+            score: None,
+            score_reasons: Vec::new(),
         }
     }
 

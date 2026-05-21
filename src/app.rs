@@ -809,6 +809,13 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         } => {
             handle_task_complete(store, &agent_id, &task_id, &summary, force)?;
         }
+        TaskCommand::Score {
+            task_id,
+            score,
+            reason,
+        } => {
+            print_json(&store.score_task(&task_id, score, &reason)?)?;
+        }
     }
 
     Ok(())

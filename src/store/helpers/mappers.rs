@@ -73,6 +73,10 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         branch_of: row.get(38)?,
         branch_at: row.get(39)?,
         branch_outcome: parse_optional_enum_column(row, 40)?,
+        score: row.get::<_, Option<f64>>(41)?,
+        score_reasons: row
+            .get::<_, Option<String>>(42)?
+            .map_or_else(Vec::new, |json| serde_json::from_str(&json).unwrap_or_default()),
     })
 }
 

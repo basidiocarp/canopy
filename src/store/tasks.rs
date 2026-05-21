@@ -326,7 +326,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome
+                   branch_of, branch_at, branch_outcome, score, score_reasons
             FROM tasks
             ORDER BY rowid
 ",
@@ -1004,7 +1004,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome
+                   branch_of, branch_at, branch_outcome, score, score_reasons
             FROM tasks
         ";
 
@@ -1131,6 +1131,32 @@ impl Store {
             )?;
             sync_task_workflow_by_id_in_connection(conn, task_id)?;
             Ok(())
+        })
+    }
+
+    /// Updates task score and appends a reason to the `score_reasons` list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn score_task(&self, task_id: &str, score: f64, reason: &str) -> StoreResult<Task> {
+        if !score.is_finite() {
+            return Err(StoreError::Validation(
+                "score must be a finite number".to_owned(),
+            ));
+        }
+        self.in_transaction(|conn| {
+            let task = get_task_in_connection(conn, task_id)?;
+            let mut reasons = task.score_reasons;
+            if !reason.is_empty() {
+                reasons.push(reason.to_owned());
+            }
+            let reasons_json = serde_json::to_string(&reasons).unwrap_or_else(|_| "[]".to_owned());
+            conn.execute(
+                "UPDATE tasks SET score = ?2, score_reasons = ?3, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+                params![task_id, score, reasons_json],
+            )?;
+            get_task_in_connection(conn, task_id)
         })
     }
 
@@ -1291,7 +1317,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome
+                   branch_of, branch_at, branch_outcome, score, score_reasons
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1350,7 +1376,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome
+                   branch_of, branch_at, branch_outcome, score, score_reasons
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC
@@ -1545,6 +1571,74 @@ mod tests {
             heartbeat_at: Some(chrono::Utc::now().to_rfc3339()),
         };
         store.register_agent(&agent)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_score_task_sets_score_and_appends_reason() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task("Score Task", None, agent_id, "/test", None)?;
+
+        let scored = store.score_task(&task.task_id, 0.8, "first reason")?;
+        assert_eq!(scored.score, Some(0.8));
+        assert_eq!(scored.score_reasons, vec!["first reason"]);
+
+        // A second call with a different reason appends, not replaces.
+        let scored2 = store.score_task(&task.task_id, 0.9, "second reason")?;
+        assert_eq!(scored2.score, Some(0.9));
+        assert_eq!(scored2.score_reasons, vec!["first reason", "second reason"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_score_task_not_found_returns_error() -> StoreResult<()> {
+        let store = create_test_store()?;
+
+        let result = store.score_task("nonexistent-task-id", 0.5, "reason");
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "expected NotFound, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_score_task_empty_reason_not_appended() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task("Score Task Empty Reason", None, agent_id, "/test", None)?;
+
+        let scored = store.score_task(&task.task_id, 0.5, "")?;
+        assert_eq!(scored.score, Some(0.5));
+        assert!(
+            scored.score_reasons.is_empty(),
+            "empty reason should not be appended"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_score_task_nan_returns_error() -> StoreResult<()> {
+        let store = create_test_store()?;
+        let agent_id = "test_agent";
+        register_test_agent(&store, agent_id)?;
+
+        let task = store.create_task("Score Task NaN", None, agent_id, "/test", None)?;
+
+        let result = store.score_task(&task.task_id, f64::NAN, "nan reason");
+        assert!(
+            matches!(result, Err(StoreError::Validation(_))),
+            "expected Validation error for NaN score, got {result:?}"
+        );
+
         Ok(())
     }
 

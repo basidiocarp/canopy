@@ -12,7 +12,7 @@ use crate::scope::{ScopeGap, classify_scope_gap, extract_step_scope, scope_overl
 use crate::store::{CanopyStore, StoreResult, TaskCreationOptions, TaskStatusUpdate};
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeGapOutcome {
     InScope {

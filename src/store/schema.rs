@@ -61,7 +61,9 @@ pub(crate) const BASE_SCHEMA: &str = r"
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         output TEXT NULL,
         claimed_at TEXT NULL,
-        files_hint TEXT NULL
+        files_hint TEXT NULL,
+        score REAL NULL,
+        score_reasons TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS task_queue_states (
@@ -420,6 +422,14 @@ fn migrations() -> Migrations<'static> {
             ALTER TABLE tasks ADD COLUMN branch_outcome TEXT NULL;
         ",
         ),
+        // score / score_reasons may already exist in databases bootstrapped from
+        // BASE_SCHEMA (which includes them). ALTER TABLE has no IF NOT EXISTS in
+        // SQLite, so we use a hook that silently ignores duplicate-column errors.
+        M::up_with_hook("", |tx| {
+            let _ = tx.execute("ALTER TABLE tasks ADD COLUMN score REAL NULL", []);
+            let _ = tx.execute("ALTER TABLE tasks ADD COLUMN score_reasons TEXT NULL", []);
+            Ok(())
+        }),
     ])
 }
 
@@ -496,6 +506,8 @@ fn add_tasks_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workflow_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN phase_id TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workspace TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN score REAL NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN score_reasons TEXT NULL", []);
     Ok(())
 }
 

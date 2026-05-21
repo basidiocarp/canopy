@@ -579,6 +579,9 @@ pub(super) fn sort_tasks(
         TaskSort::Status => status_rank(left.status)
             .cmp(&status_rank(right.status))
             .then_with(|| left.title.cmp(&right.title)),
+        TaskSort::ByScore => right.score.partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.title.cmp(&right.title)),
     });
 }
 

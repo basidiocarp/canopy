@@ -446,6 +446,14 @@ pub enum TaskCommand {
         #[arg(long)]
         task_id: String,
     },
+    Score {
+        #[arg(long)]
+        task_id: String,
+        #[arg(long)]
+        score: f64,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -282,6 +282,7 @@ pub enum TaskSort {
     Priority,
     Severity,
     Attention,
+    ByScore,
 }
 
 #[derive(
@@ -955,7 +956,7 @@ pub struct AgentHeartbeatEvent {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     pub task_id: String,
     pub title: String,
@@ -1011,6 +1012,9 @@ pub struct Task {
     pub branch_at: Option<String>,
     /// Outcome of this branch after parallel exploration.
     pub branch_outcome: Option<BranchOutcome>,
+    pub score: Option<f64>,
+    #[serde(default)]
+    pub score_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1648,7 +1652,7 @@ pub struct TaskDetail {
     pub tool_adoption_score: Option<ToolAdoptionScore>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkQueueResult {
     pub schema_version: String,
     pub available_tasks: Vec<Task>,
@@ -1657,7 +1661,7 @@ pub struct WorkQueueResult {
     pub my_capabilities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WhoAmIResult {
     pub schema_version: String,
     pub agent: AgentRegistration,
