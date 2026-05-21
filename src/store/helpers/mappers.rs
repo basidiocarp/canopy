@@ -76,7 +76,9 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         score: row.get::<_, Option<f64>>(41)?,
         score_reasons: row
             .get::<_, Option<String>>(42)?
-            .map_or_else(Vec::new, |json| serde_json::from_str(&json).unwrap_or_default()),
+            .map_or_else(Vec::new, |json| {
+                serde_json::from_str(&json).unwrap_or_default()
+            }),
     })
 }
 

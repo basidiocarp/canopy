@@ -95,8 +95,8 @@ fn build_new_task(
 }
 
 fn persist_task_to_db(conn: &Connection, task: &Task) -> StoreResult<()> {
-    let score_reasons_json = serde_json::to_string(&task.score_reasons)
-        .unwrap_or_else(|_| "[]".to_string());
+    let score_reasons_json =
+        serde_json::to_string(&task.score_reasons).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         r"
         INSERT INTO tasks (
