@@ -216,6 +216,22 @@ fn handle_task_status(
     Ok(())
 }
 
+fn handle_task_cancel(store: &Store, task_id: &str, cancelled_by: &str, reason: Option<String>) -> Result<()> {
+    let task = store.update_task_status(
+        task_id,
+        TaskStatus::Cancelled,
+        cancelled_by,
+        TaskStatusUpdate {
+            verification_state: None,
+            blocked_reason: None,
+            closure_summary: reason.as_deref(),
+            event_note: None,
+        },
+    )?;
+    print_json(&task)?;
+    Ok(())
+}
+
 fn handle_task_triage(
     store: &Store,
     task_id: &str,
@@ -809,6 +825,9 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
             force,
         } => {
             handle_task_complete(store, &agent_id, &task_id, &summary, force)?;
+        }
+        TaskCommand::Cancel { task_id, cancelled_by, reason } => {
+            handle_task_cancel(store, &task_id, &cancelled_by, reason)?;
         }
         TaskCommand::Score {
             task_id,

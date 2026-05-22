@@ -297,6 +297,14 @@ pub enum TaskCommand {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    Cancel {
+        #[arg(value_name = "TASK_ID")]
+        task_id: String,
+        #[arg(long, required = true)]
+        cancelled_by: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
     Status {
         #[arg(long)]
         task_id: String,
