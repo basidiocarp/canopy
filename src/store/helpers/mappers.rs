@@ -79,6 +79,7 @@ pub(crate) fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .map_or_else(Vec::new, |json| {
                 serde_json::from_str(&json).unwrap_or_default()
             }),
+        contract_path: row.get(43)?,
     })
 }
 

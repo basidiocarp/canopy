@@ -107,6 +107,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: GraphCommand,
     },
+    /// Generate a machine-readable sprint contract from a task's handoff document.
+    Contract {
+        #[command(subcommand)]
+        command: ContractCommand,
+    },
     /// Start local unix-socket service endpoint (for cap and other local clients)
     #[cfg(unix)]
     #[command(hide = true)]
@@ -662,5 +667,18 @@ pub enum GraphCommand {
         /// Emit JSON output instead of human-readable text.
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContractCommand {
+    /// Extract `DoD` from a handoff markdown and write a sprint contract JSON file.
+    Generate {
+        /// Canopy task ID for the contract
+        #[arg(long, required = true)]
+        task_id: String,
+        /// Path to the handoff markdown document
+        #[arg(long, required = true)]
+        handoff: PathBuf,
     },
 }

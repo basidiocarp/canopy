@@ -5,10 +5,11 @@ use crate::db;
 use anyhow::{Context, Result};
 use canopy::api;
 use canopy::cli::{
-    AgentCommand, ApiCommand, Cli, Commands, CouncilCommand, DispatchCommand, EvidenceCommand,
-    FilesCommand, GraphCommand, HandoffCommand, NotificationCommand, OutcomeCommand, PolicyCommand,
-    TaskCommand,
+    AgentCommand, ApiCommand, Cli, Commands, ContractCommand, CouncilCommand, DispatchCommand,
+    EvidenceCommand, FilesCommand, GraphCommand, HandoffCommand, NotificationCommand,
+    OutcomeCommand, PolicyCommand, TaskCommand,
 };
+use canopy::contract::SprintContract;
 use canopy::models::{
     AgentRegistration, AgentRole, AgentStatus, CouncilSession, EvidenceRef, EvidenceSourceKind,
     EvidenceVerificationReport, EvidenceVerificationResult, EvidenceVerificationStatus, Task,
@@ -1484,6 +1485,40 @@ fn handle_handoff_command(store: &Store, command: HandoffCommand) -> Result<()> 
     Ok(())
 }
 
+fn handle_contract_command(store: &Store, command: ContractCommand) -> Result<()> {
+    match command {
+        ContractCommand::Generate { task_id, handoff } => {
+            if handoff.extension().and_then(|e| e.to_str()) != Some("md") {
+                anyhow::bail!(
+                    "handoff file must have a .md extension: {}",
+                    handoff.display()
+                );
+            }
+            store
+                .get_task(&task_id)
+                .with_context(|| format!("task '{task_id}' not found"))?;
+            let content = fs::read_to_string(&handoff)
+                .with_context(|| format!("read handoff file {}", handoff.display()))?;
+            let handoff_path = handoff.display().to_string();
+            let contract = SprintContract::from_handoff(&task_id, &handoff_path, &content);
+            let db_path = spore::paths::db_path("canopy", "canopy.db", "CANOPY_DB_PATH", None)
+                .context("resolve canopy database path")?;
+            let contracts_dir = db_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("failed to determine canopy data directory"))?
+                .join("contracts");
+            let path = contract
+                .write_to_dir(&contracts_dir)
+                .context("write sprint contract")?;
+            store
+                .set_contract_path(&task_id, &path.display().to_string())
+                .context("update task contract_path")?;
+            println!("{}", path.display());
+            Ok(())
+        }
+    }
+}
+
 fn handle_evidence_command(store: &Store, command: EvidenceCommand) -> Result<()> {
     match command {
         EvidenceCommand::Add {
@@ -1917,6 +1952,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Policy { .. } => "policy",
         Commands::Dispatch { .. } => "dispatch",
         Commands::Graph { .. } => "graph",
+        Commands::Contract { .. } => "contract",
         #[cfg(unix)]
         Commands::ServeSocket => "serve_socket",
     }

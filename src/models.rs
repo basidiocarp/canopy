@@ -1015,6 +1015,7 @@ pub struct Task {
     pub score: Option<f64>,
     #[serde(default)]
     pub score_reasons: Vec<String>,
+    pub contract_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

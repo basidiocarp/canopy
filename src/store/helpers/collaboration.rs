@@ -91,6 +91,7 @@ fn build_new_task(
         branch_outcome: options.branch_outcome,
         score: None,
         score_reasons: Vec::new(),
+        contract_path: None,
     }
 }
 
@@ -106,8 +107,8 @@ fn persist_task_to_db(conn: &Connection, task: &Task) -> StoreResult<()> {
             verification_state, priority, severity, owner_agent_id, owner_note,
             acknowledged_by, acknowledged_at, blocked_reason, verified_by, verified_at,
             closed_by, closure_summary, closed_at, due_at, review_due_at, scope, created_at, updated_at,
-            immutable_once_dispatched, body_hash, branch_of, branch_at, branch_outcome, score, score_reasons
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?35, ?36, ?37, ?38, ?39, ?40, ?41)
+            immutable_once_dispatched, body_hash, branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)
         ",
         params![
             task.task_id,
@@ -151,6 +152,7 @@ fn persist_task_to_db(conn: &Connection, task: &Task) -> StoreResult<()> {
             task.branch_outcome.map(|v| v.to_string()),
             task.score,
             score_reasons_json,
+            task.contract_path,
         ],
     )?;
     Ok(())

@@ -250,6 +250,7 @@ mod tests {
             branch_outcome: None,
             score: None,
             score_reasons: Vec::new(),
+            contract_path: None,
         }
     }
 

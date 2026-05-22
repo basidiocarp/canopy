@@ -326,7 +326,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome, score, score_reasons
+                   branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
             FROM tasks
             ORDER BY rowid
 ",
@@ -1004,7 +1004,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome, score, score_reasons
+                   branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
             FROM tasks
         ";
 
@@ -1155,6 +1155,21 @@ impl Store {
             conn.execute(
                 "UPDATE tasks SET score = ?2, score_reasons = ?3, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
                 params![task_id, score, reasons_json],
+            )?;
+            get_task_in_connection(conn, task_id)
+        })
+    }
+
+    /// Set the `contract_path` on a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn set_contract_path(&self, task_id: &str, contract_path: &str) -> StoreResult<Task> {
+        self.in_transaction(|conn| {
+            conn.execute(
+                "UPDATE tasks SET contract_path = ?2, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?1",
+                params![task_id, contract_path],
             )?;
             get_task_in_connection(conn, task_id)
         })
@@ -1317,7 +1332,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome, score, score_reasons
+                   branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
             FROM tasks
             WHERE status = 'open' AND owner_agent_id IS NULL
             ",
@@ -1376,7 +1391,7 @@ impl Store {
                    acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                    verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                    scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-                   branch_of, branch_at, branch_outcome, score, score_reasons
+                   branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
             FROM tasks
             WHERE owner_agent_id = ?1
             ORDER BY created_at ASC

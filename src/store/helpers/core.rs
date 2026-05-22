@@ -13,7 +13,7 @@ pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreR
                acknowledged_by, acknowledged_at, blocked_reason, verified_by,
                verified_at, closed_by, closure_summary, closed_at, due_at, review_due_at,
                scope, created_at, updated_at, immutable_once_dispatched, body_hash,
-               branch_of, branch_at, branch_outcome, score, score_reasons
+               branch_of, branch_at, branch_outcome, score, score_reasons, contract_path
         FROM tasks
         WHERE task_id = ?1
         ",

@@ -63,7 +63,8 @@ pub(crate) const BASE_SCHEMA: &str = r"
         claimed_at TEXT NULL,
         files_hint TEXT NULL,
         score REAL NULL,
-        score_reasons TEXT NULL
+        score_reasons TEXT NULL,
+        contract_path TEXT NULL
     );
 
     CREATE TABLE IF NOT EXISTS task_queue_states (
@@ -430,6 +431,10 @@ fn migrations() -> Migrations<'static> {
             let _ = tx.execute("ALTER TABLE tasks ADD COLUMN score_reasons TEXT NULL", []);
             Ok(())
         }),
+        M::up_with_hook("", |tx| {
+            let _ = tx.execute("ALTER TABLE tasks ADD COLUMN contract_path TEXT NULL", []);
+            Ok(())
+        }),
     ])
 }
 
@@ -508,6 +513,7 @@ fn add_tasks_columns(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN workspace TEXT NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN score REAL NULL", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN score_reasons TEXT NULL", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN contract_path TEXT NULL", []);
     Ok(())
 }
 
