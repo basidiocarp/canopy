@@ -47,6 +47,13 @@ use thiserror::Error;
 use schema::migrate_schema;
 
 pub(crate) const EVIDENCE_REF_SCHEMA_VERSION: &str = "1.0";
+/// Maximum age of an agent's last heartbeat before it is ineligible to claim a task.
+///
+/// Agents must call `canopy_heartbeat` at least once within this window to stay claim-eligible.
+/// The MCP server instructs agents to heartbeat every ~10 tool calls, which keeps them well
+/// within this threshold during active work. The deliberate gap with `DEFAULT_IDLE_SECS` (in mcp/server.rs)
+/// ensures that truly idle agents — those not making tool calls — lose claim-eligibility before
+/// their MCP connection drops, preventing ghost claims on tasks they are not actively working.
 pub const CLAIM_STALE_THRESHOLD_SECS: i64 = 300;
 pub const HEARTBEAT_AGING_THRESHOLD_SECS: i64 = 15 * 60;
 pub const HEARTBEAT_STALE_THRESHOLD_SECS: i64 = 60 * 60;

@@ -11,6 +11,10 @@ use crate::store::Store;
 use super::protocol::{JsonRpcMessage, JsonRpcResponse};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+/// MCP session idle timeout. Connections that receive no tool calls for this duration are closed.
+///
+/// Intentionally larger than `CLAIM_STALE_THRESHOLD_SECS` (in store/mod.rs): agents must
+/// send explicit heartbeats to stay claim-eligible — an open connection alone does not suffice.
 const DEFAULT_IDLE_SECS: u64 = 1800;
 
 /// Run the MCP server on stdio. Blocks until stdin is closed or idle timeout is reached.
