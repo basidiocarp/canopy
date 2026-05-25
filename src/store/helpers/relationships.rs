@@ -16,7 +16,9 @@ pub(crate) fn create_task_relationship_in_connection(
             "task relationships must link two different tasks".to_string(),
         ));
     }
-    if source_task.project_root != target_task.project_root {
+    if normalize_project_root(&source_task.project_root)
+        != normalize_project_root(&target_task.project_root)
+    {
         return Err(StoreError::Validation(
             "task relationships must stay within the same project".to_string(),
         ));

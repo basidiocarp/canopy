@@ -2,6 +2,10 @@
 
 use super::*;
 
+pub(crate) fn normalize_project_root(path: &str) -> &str {
+    path.trim_end_matches('/')
+}
+
 pub(crate) fn get_task_in_connection(conn: &Connection, task_id: &str) -> StoreResult<Task> {
     conn.query_row(
         r"
@@ -227,7 +231,7 @@ pub(crate) fn validate_agent_task_link(
     let task = get_task_in_connection(conn, task_id)?;
     let agent = get_agent_in_connection(conn, agent_id)?;
 
-    if task.project_root != agent.project_root {
+    if normalize_project_root(&task.project_root) != normalize_project_root(&agent.project_root) {
         return Err(StoreError::Validation(
             "heartbeat task must belong to the same project as the agent".to_string(),
         ));
@@ -274,7 +278,7 @@ pub(crate) fn validate_agent_registration(
     };
     let task = get_task_in_connection(conn, task_id)?;
 
-    if task.project_root != agent.project_root {
+    if normalize_project_root(&task.project_root) != normalize_project_root(&agent.project_root) {
         return Err(StoreError::Validation(
             "registration task must belong to the same project as the agent".to_string(),
         ));
@@ -287,6 +291,25 @@ pub(crate) fn validate_agent_registration(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_project_root_strips_trailing_slash() {
+        assert_eq!(normalize_project_root("/tmp/project/"), "/tmp/project");
+        assert_eq!(normalize_project_root("/tmp/project"), "/tmp/project");
+        assert_eq!(normalize_project_root("/tmp/project//"), "/tmp/project");
+    }
+
+    #[test]
+    fn normalize_project_root_preserves_root_slash() {
+        // Single "/" normalizes to "" — two agents on "/" compare equal to each other.
+        assert_eq!(normalize_project_root("/"), "");
+        assert_eq!(normalize_project_root(""), "");
+    }
 }
 
 pub(crate) fn get_task_relationship_in_connection(
