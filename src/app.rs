@@ -1365,21 +1365,6 @@ fn run_task_verification(
     )?;
 
     if passed && task.status != TaskStatus::Completed && store.get_children(task_id)?.is_empty() {
-        if !matches!(
-            task.status,
-            TaskStatus::InProgress | TaskStatus::ReviewRequired
-        ) {
-            store.update_task_status(
-                task_id,
-                TaskStatus::InProgress,
-                "canopy",
-                TaskStatusUpdate {
-                    verification_state: Some(VerificationState::Passed),
-                    event_note: Some(note.as_str()),
-                    ..TaskStatusUpdate::default()
-                },
-            )?;
-        }
         let closure_summary = match step {
             Some(step) => format!("verification passed for {step} via {script_display}"),
             None => format!("verification passed via {script_display}"),

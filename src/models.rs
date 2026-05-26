@@ -132,6 +132,7 @@ impl TaskStatus {
                 Self::InProgress,
                 Self::Blocked,
                 Self::ReviewRequired,
+                Self::Completed,
                 Self::Cancelled,
             ],
             Self::Assigned => &[
@@ -139,6 +140,7 @@ impl TaskStatus {
                 Self::InProgress,
                 Self::Blocked,
                 Self::ReviewRequired,
+                Self::Completed,
                 Self::Cancelled,
             ],
             Self::InProgress => &[
@@ -152,6 +154,7 @@ impl TaskStatus {
                 Self::Assigned,
                 Self::InProgress,
                 Self::ReviewRequired,
+                Self::Completed,
                 Self::Cancelled,
             ],
             Self::ReviewRequired => &[
