@@ -216,7 +216,12 @@ fn handle_task_status(
     Ok(())
 }
 
-fn handle_task_cancel(store: &Store, task_id: &str, cancelled_by: &str, reason: Option<String>) -> Result<()> {
+fn handle_task_cancel(
+    store: &Store,
+    task_id: &str,
+    cancelled_by: &str,
+    reason: Option<String>,
+) -> Result<()> {
     let task = store.update_task_status(
         task_id,
         TaskStatus::Cancelled,
@@ -826,7 +831,11 @@ fn handle_task_command(store: &Store, command: TaskCommand) -> Result<()> {
         } => {
             handle_task_complete(store, &agent_id, &task_id, &summary, force)?;
         }
-        TaskCommand::Cancel { task_id, cancelled_by, reason } => {
+        TaskCommand::Cancel {
+            task_id,
+            cancelled_by,
+            reason,
+        } => {
             handle_task_cancel(store, &task_id, &cancelled_by, reason)?;
         }
         TaskCommand::Score {

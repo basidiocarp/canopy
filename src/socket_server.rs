@@ -339,7 +339,8 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "set_task_priority requires priority" });
             }
             TaskAction::SetPriority {
-                priority: priority.expect("set_task_priority: priority is None after is_none() guard"),
+                priority: priority
+                    .expect("set_task_priority: priority is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -348,7 +349,8 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "set_task_severity requires severity" });
             }
             TaskAction::SetSeverity {
-                severity: severity.expect("set_task_severity: severity is None after is_none() guard"),
+                severity: severity
+                    .expect("set_task_severity: severity is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -362,7 +364,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "set_task_due_at requires due_at" });
             }
             TaskAction::SetDueAt {
-                due_at: params.due_at.as_deref().expect("set_task_due_at: due_at is None after is_none() guard"),
+                due_at: params
+                    .due_at
+                    .as_deref()
+                    .expect("set_task_due_at: due_at is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -374,7 +379,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "set_review_due_at requires review_due_at" });
             }
             TaskAction::SetReviewDueAt {
-                review_due_at: params.review_due_at.as_deref().expect("set_review_due_at: review_due_at is None after is_none() guard"),
+                review_due_at: params
+                    .review_due_at
+                    .as_deref()
+                    .expect("set_review_due_at: review_due_at is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -386,7 +394,8 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "verify_task requires verification_state" });
             }
             TaskAction::Verify {
-                verification_state: verification_state.expect("verify_task: verification_state is None after is_none() guard"),
+                verification_state: verification_state
+                    .expect("verify_task: verification_state is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -395,7 +404,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "close_task requires closure_summary" });
             }
             TaskAction::Close {
-                closure_summary: params.closure_summary.as_deref().expect("close_task: closure_summary is None after is_none() guard"),
+                closure_summary: params
+                    .closure_summary
+                    .as_deref()
+                    .expect("close_task: closure_summary is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -404,7 +416,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "block_task requires blocked_reason" });
             }
             TaskAction::Block {
-                blocked_reason: params.blocked_reason.as_deref().expect("block_task: blocked_reason is None after is_none() guard"),
+                blocked_reason: params
+                    .blocked_reason
+                    .as_deref()
+                    .expect("block_task: blocked_reason is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -421,7 +436,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "claim_task requires acting_agent_id" });
             }
             TaskAction::Claim {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("claim_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("claim_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -430,7 +448,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "start_task requires acting_agent_id" });
             }
             TaskAction::Start {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("start_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("start_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -439,7 +460,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "resume_task requires acting_agent_id" });
             }
             TaskAction::Resume {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("resume_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("resume_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -448,7 +472,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "pause_task requires acting_agent_id" });
             }
             TaskAction::Pause {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("pause_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("pause_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -457,7 +484,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "yield_task requires acting_agent_id" });
             }
             TaskAction::Yield {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("yield_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("yield_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -466,7 +496,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "complete_task requires acting_agent_id" });
             }
             TaskAction::Complete {
-                acting_agent_id: params.acting_agent_id.as_deref().expect("complete_task: acting_agent_id is None after is_none() guard"),
+                acting_agent_id: params
+                    .acting_agent_id
+                    .as_deref()
+                    .expect("complete_task: acting_agent_id is None after is_none() guard"),
                 note: params.note.as_deref(),
             }
         }
@@ -475,7 +508,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "reassign_task requires assigned_to" });
             }
             TaskAction::Reassign {
-                assigned_to: params.assigned_to.as_deref().expect("reassign_task: assigned_to is None after is_none() guard"),
+                assigned_to: params
+                    .assigned_to
+                    .as_deref()
+                    .expect("reassign_task: assigned_to is None after is_none() guard"),
                 note: params.note.as_deref(),
                 force: params.force.unwrap_or(false),
             }
@@ -488,8 +524,14 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "record_decision requires message_body" });
             }
             TaskAction::RecordDecision {
-                author_agent_id: params.author_agent_id.as_deref().expect("record_decision: author_agent_id is None after is_none() guard"),
-                message_body: params.message_body.as_deref().expect("record_decision: message_body is None after is_none() guard"),
+                author_agent_id: params
+                    .author_agent_id
+                    .as_deref()
+                    .expect("record_decision: author_agent_id is None after is_none() guard"),
+                message_body: params
+                    .message_body
+                    .as_deref()
+                    .expect("record_decision: message_body is None after is_none() guard"),
             }
         }
         canopy::models::OperatorActionKind::CreateHandoff => {
@@ -506,10 +548,20 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "create_handoff requires handoff_summary" });
             }
             TaskAction::CreateHandoff {
-                from_agent_id: params.from_agent_id.as_deref().expect("create_handoff: from_agent_id is None after is_none() guard"),
-                to_agent_id: params.to_agent_id.as_deref().expect("create_handoff: to_agent_id is None after is_none() guard"),
-                handoff_type: handoff_type.expect("create_handoff: handoff_type is None after is_none() guard"),
-                handoff_summary: params.handoff_summary.as_deref().expect("create_handoff: handoff_summary is None after is_none() guard"),
+                from_agent_id: params
+                    .from_agent_id
+                    .as_deref()
+                    .expect("create_handoff: from_agent_id is None after is_none() guard"),
+                to_agent_id: params
+                    .to_agent_id
+                    .as_deref()
+                    .expect("create_handoff: to_agent_id is None after is_none() guard"),
+                handoff_type: handoff_type
+                    .expect("create_handoff: handoff_type is None after is_none() guard"),
+                handoff_summary: params
+                    .handoff_summary
+                    .as_deref()
+                    .expect("create_handoff: handoff_summary is None after is_none() guard"),
                 requested_action: params.requested_action.as_deref(),
                 due_at: params.due_at.as_deref(),
                 expires_at: params.expires_at.as_deref(),
@@ -529,9 +581,16 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "post_council_message requires message_body" });
             }
             TaskAction::PostCouncilMessage {
-                author_agent_id: params.author_agent_id.as_deref().expect("post_council_message: author_agent_id is None after is_none() guard"),
-                message_type: message_type.expect("post_council_message: message_type is None after is_none() guard"),
-                message_body: params.message_body.as_deref().expect("post_council_message: message_body is None after is_none() guard"),
+                author_agent_id: params
+                    .author_agent_id
+                    .as_deref()
+                    .expect("post_council_message: author_agent_id is None after is_none() guard"),
+                message_type: message_type
+                    .expect("post_council_message: message_type is None after is_none() guard"),
+                message_body: params
+                    .message_body
+                    .as_deref()
+                    .expect("post_council_message: message_body is None after is_none() guard"),
             }
         }
         canopy::models::OperatorActionKind::AttachEvidence => {
@@ -545,9 +604,16 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "attach_evidence requires evidence_label" });
             }
             TaskAction::AttachEvidence {
-                source_kind: evidence_source_kind.expect("attach_evidence: evidence_source_kind is None after is_none() guard"),
-                source_ref: params.evidence_source_ref.as_deref().expect("attach_evidence: evidence_source_ref is None after is_none() guard"),
-                label: params.evidence_label.as_deref().expect("attach_evidence: evidence_label is None after is_none() guard"),
+                source_kind: evidence_source_kind
+                    .expect("attach_evidence: evidence_source_kind is None after is_none() guard"),
+                source_ref: params
+                    .evidence_source_ref
+                    .as_deref()
+                    .expect("attach_evidence: evidence_source_ref is None after is_none() guard"),
+                label: params
+                    .evidence_label
+                    .as_deref()
+                    .expect("attach_evidence: evidence_label is None after is_none() guard"),
                 summary: params.evidence_summary.as_deref(),
                 related_handoff_id: params.related_handoff_id.as_deref(),
                 related_session_id: params.related_session_id.as_deref(),
@@ -588,7 +654,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "create_follow_up_task requires follow_up_title" });
             }
             TaskAction::CreateFollowUp {
-                title: params.follow_up_title.as_deref().expect("create_follow_up_task: follow_up_title is None after is_none() guard"),
+                title: params
+                    .follow_up_title
+                    .as_deref()
+                    .expect("create_follow_up_task: follow_up_title is None after is_none() guard"),
                 description: params.follow_up_description.as_deref(),
             }
         }
@@ -600,8 +669,13 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "link_task_dependency requires relationship_role" });
             }
             TaskAction::LinkDependency {
-                related_task_id: params.related_task_id.as_deref().expect("link_task_dependency: related_task_id is None after is_none() guard"),
-                relationship_role: relationship_role.expect("link_task_dependency: relationship_role is None after is_none() guard"),
+                related_task_id: params
+                    .related_task_id
+                    .as_deref()
+                    .expect("link_task_dependency: related_task_id is None after is_none() guard"),
+                relationship_role: relationship_role.expect(
+                    "link_task_dependency: relationship_role is None after is_none() guard",
+                ),
             }
         }
         canopy::models::OperatorActionKind::ResolveDependency => {
@@ -609,7 +683,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "resolve_dependency requires related_task_id" });
             }
             TaskAction::ResolveDependency {
-                related_task_id: params.related_task_id.as_deref().expect("resolve_dependency: related_task_id is None after is_none() guard"),
+                related_task_id: params
+                    .related_task_id
+                    .as_deref()
+                    .expect("resolve_dependency: related_task_id is None after is_none() guard"),
             }
         }
         canopy::models::OperatorActionKind::PromoteFollowUp => {
@@ -617,7 +694,10 @@ fn handle_task_action(store: &canopy::store::Store, params: &Value) -> Value {
                 return json!({ "error": "promote_follow_up requires related_task_id" });
             }
             TaskAction::PromoteFollowUp {
-                related_task_id: params.related_task_id.as_deref().expect("promote_follow_up: related_task_id is None after is_none() guard"),
+                related_task_id: params
+                    .related_task_id
+                    .as_deref()
+                    .expect("promote_follow_up: related_task_id is None after is_none() guard"),
             }
         }
         canopy::models::OperatorActionKind::CloseFollowUpChain => TaskAction::CloseFollowUpChain,

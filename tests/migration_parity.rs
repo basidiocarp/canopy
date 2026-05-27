@@ -155,10 +155,7 @@ fn fresh_install_and_bootstrap_migration_produce_same_schema() {
     // Column parity per table (set comparison — column order may differ between paths).
     for table in &fresh.tables {
         let fresh_cols = fresh.columns.get(table).expect("fresh columns for table");
-        let legacy_cols = legacy
-            .columns
-            .get(table)
-            .expect("legacy columns for table");
+        let legacy_cols = legacy.columns.get(table).expect("legacy columns for table");
         let fresh_only_cols: Vec<_> = fresh_cols.difference(legacy_cols).collect();
         let legacy_only_cols: Vec<_> = legacy_cols.difference(fresh_cols).collect();
         assert!(

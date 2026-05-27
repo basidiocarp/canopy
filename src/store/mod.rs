@@ -540,7 +540,8 @@ impl Store {
         let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        let actual_mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        let actual_mode: String =
+            conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
         if actual_mode != "wal" {
             tracing::warn!(mode = %actual_mode, "journal_mode is not WAL — WAL was requested but not applied; concurrent write safety may be reduced");
         }
