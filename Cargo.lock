@@ -151,7 +151,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "canopy"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1396,8 +1396,8 @@ dependencies = [
 
 [[package]]
 name = "spore"
-version = "0.6.0"
-source = "git+https://github.com/basidiocarp/spore?rev=960f5aeb1d479149b3cdbeb2f850912c52521214#960f5aeb1d479149b3cdbeb2f850912c52521214"
+version = "0.6.2"
+source = "git+https://github.com/basidiocarp/spore?rev=85414a54afc16597297f6cd42edec5985474d767#85414a54afc16597297f6cd42edec5985474d767"
 dependencies = [
  "anyhow",
  "chrono",

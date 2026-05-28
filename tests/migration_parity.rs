@@ -1,8 +1,8 @@
 /// Schema parity test: fresh install vs bootstrap migration.
 ///
-/// A fresh canopy install (empty DB → migrate_schema) and a bootstrapped
-/// legacy install (pre-migration-framework DB → migrate_schema) can silently
-/// diverge if a column is added to BASE_SCHEMA but not to the bootstrap
+/// A fresh canopy install (empty DB → `migrate_schema`) and a bootstrapped
+/// legacy install (pre-migration-framework DB → `migrate_schema`) can silently
+/// diverge if a column is added to `BASE_SCHEMA` but not to the bootstrap
 /// column-patch functions, or vice versa. This test catches that drift.
 use canopy::store::Store;
 use rusqlite::Connection;

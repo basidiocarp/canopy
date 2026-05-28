@@ -293,6 +293,23 @@ pub(crate) fn validate_agent_registration(
     Ok(())
 }
 
+pub(crate) fn get_task_relationship_in_connection(
+    conn: &Connection,
+    relationship_id: &str,
+) -> StoreResult<TaskRelationship> {
+    conn.query_row(
+        r"
+        SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
+        FROM task_relationships
+        WHERE relationship_id = ?1
+        ",
+        [relationship_id],
+        map_task_relationship,
+    )
+    .optional()?
+    .ok_or(StoreError::NotFound("task relationship"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,21 +327,4 @@ mod tests {
         assert_eq!(normalize_project_root("/"), "");
         assert_eq!(normalize_project_root(""), "");
     }
-}
-
-pub(crate) fn get_task_relationship_in_connection(
-    conn: &Connection,
-    relationship_id: &str,
-) -> StoreResult<TaskRelationship> {
-    conn.query_row(
-        r"
-        SELECT relationship_id, source_task_id, target_task_id, kind, created_by, created_at, updated_at
-        FROM task_relationships
-        WHERE relationship_id = ?1
-        ",
-        [relationship_id],
-        map_task_relationship,
-    )
-    .optional()?
-    .ok_or(StoreError::NotFound("task relationship"))
 }
