@@ -19,6 +19,7 @@ struct CompletenessCheckResult {
     verify_passed: Option<bool>,
     verify_output: Option<String>,
     summary: String,
+    already_complete: Option<String>,
 }
 
 /// Check whether a handoff document meets completion criteria.
@@ -75,6 +76,7 @@ pub fn tool_check_handoff_completeness(
         verify_passed,
         verify_output,
         summary,
+        already_complete: report.already_complete,
     };
 
     ToolResult::json(&result)

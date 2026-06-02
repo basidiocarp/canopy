@@ -23,6 +23,9 @@ pub struct CompletenessReport {
     /// Dispatch blockers found: `[NEEDS CLARIFICATION]`, `[TBD]`, or `[OPEN QUESTION]`.
     /// Handoffs with these markers cannot be dispatched.
     pub blocking_markers: Vec<String>,
+    /// Content of the `## Already Complete` section if present (for tracking
+    /// what work was completed in prior dispatch cycles to avoid blind-start problems).
+    pub already_complete: Option<String>,
 }
 
 /// Result of running a verification script.
@@ -53,6 +56,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
     let empty_paste_markers = find_empty_paste_markers(&content);
     let residual_work_warning = check_residual_work_section(&content);
     let blocking_markers = find_dispatch_blockers(&content);
+    let already_complete = find_already_complete_section(&content);
 
     let verify_script = derive_verify_script_path(handoff_path);
     let has_verify_script = verify_script.exists();
@@ -93,6 +97,7 @@ pub fn check_completeness(handoff_path: &Path) -> Result<CompletenessReport> {
         verify_script_path,
         residual_work_warning,
         blocking_markers,
+        already_complete,
     })
 }
 
@@ -333,6 +338,75 @@ fn check_residual_work_section(content: &str) -> Option<String> {
     )
 }
 
+/// Check if a line is a Markdown separator row.
+/// A separator row contains only `|`, `-`, `:`, spaces, and tabs.
+/// After removing these chars, if nothing remains (or only dashes/colons), it's a separator.
+fn is_markdown_separator_row(line: &str) -> bool {
+    let cells: String = line
+        .chars()
+        .filter(|c| !matches!(c, '|' | ' ' | '\t'))
+        .collect();
+    !cells.is_empty() && cells.chars().all(|c| c == '-' || c == ':')
+}
+
+/// Parse the `## Already Complete` section if present.
+///
+/// Returns the content of the section (excluding the heading and any template rows)
+/// if it exists and contains real content. Returns `None` if the section is absent
+/// or contains only template placeholders.
+///
+/// **Assumption:** The `## Already Complete` section is expected to be a Markdown table
+/// WITH a header row. The first data-bearing row is treated as the header and skipped.
+fn find_already_complete_section(content: &str) -> Option<String> {
+    let section_start = content
+        .find("## Already Complete")
+        .filter(|&pos| pos == 0 || content.as_bytes()[pos - 1] == b'\n')?;
+
+    // Validate right boundary: the heading must be followed by end-of-content, a newline,
+    // or only spaces/tabs then a newline.
+    let after_heading = &content[section_start + "## Already Complete".len()..];
+    let heading_terminated = after_heading.is_empty()
+        || after_heading.starts_with('\n')
+        || after_heading.starts_with('\r')
+        || after_heading
+            .trim_start_matches([' ', '\t'])
+            .starts_with('\n');
+    if !heading_terminated {
+        return None;
+    }
+
+    // Slice from the section heading to the next same-level heading or end-of-doc.
+    let section_end = after_heading.find("\n## ").unwrap_or(after_heading.len());
+    let section = &after_heading[..section_end];
+
+    // Collect real table rows in a single pipeline.
+    // A "real" table row: starts with `|`, has 3+ pipes, is not a separator row,
+    // is not the column-header row (always the first pipe row), and is not the
+    // template example placeholder.
+    let mut header_skipped = false;
+    let real_lines: Vec<&str> = section
+        .lines()
+        .filter(|line| line.trim_start().starts_with('|'))
+        .filter(|line| !is_markdown_separator_row(line))
+        .filter(|_line| {
+            if !header_skipped {
+                header_skipped = true;
+                return false; // skip the column-header row, whatever it says
+            }
+            true
+        })
+        .filter(|line| !line.trim_start().starts_with("| _(example:"))
+        .filter(|line| line.chars().filter(|&c| c == '|').count() >= 3)
+        .collect();
+
+    if real_lines.is_empty() {
+        return None;
+    }
+
+    let joined = real_lines.join("\n").trim().to_string();
+    Some(joined)
+}
+
 /// Find dispatch blocker markers in the content.
 /// Returns a list of markers found: `[NEEDS CLARIFICATION]`, `[TBD]`, or `[OPEN QUESTION]`.
 fn find_dispatch_blockers(content: &str) -> Vec<String> {
@@ -562,6 +636,7 @@ filled output
             verify_script_path: None,
             residual_work_warning: None,
             blocking_markers: vec![],
+            already_complete: None,
         };
         let msg = format_incomplete_report(&report);
         assert!(msg.contains("2 of 5 checklist items remain unchecked"));
@@ -594,6 +669,7 @@ filled output
             verify_script_path: None,
             residual_work_warning: None,
             blocking_markers: vec![],
+            already_complete: None,
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
@@ -628,6 +704,7 @@ filled output
             verify_script_path: Some(script),
             residual_work_warning: None,
             blocking_markers: vec![],
+            already_complete: None,
         };
         let result = run_verify_script(&report).unwrap();
         assert!(result.success);
@@ -670,6 +747,86 @@ filled output
             |---------|-------------|-------------|\n\
             \n## Completion\n";
         assert!(check_residual_work_section(content).is_some());
+    }
+
+    #[test]
+    fn already_complete_absent_returns_none() {
+        let content = "## Completion\n\n- **Disposition:** keep\n";
+        assert!(find_already_complete_section(content).is_none());
+    }
+
+    #[test]
+    fn already_complete_with_real_entry_returns_some() {
+        let content = "## Already Complete\n\n\
+            | Item | Status |\n\
+            |------|--------|\n\
+            | Initial setup | PASS |\n\
+            \n## Completion\n";
+        let result = find_already_complete_section(content);
+        assert!(result.is_some());
+        let content_str = result.unwrap();
+        assert!(content_str.contains("Initial setup"));
+        assert!(content_str.contains("PASS"));
+    }
+
+    #[test]
+    fn already_complete_placeholder_only_returns_none() {
+        let content = "## Already Complete\n\n\
+            | Item | Status |\n\
+            |------|--------|\n\
+            | _(example: feature A)_ | PASS |\n\
+            \n## Completion\n";
+        assert!(find_already_complete_section(content).is_none());
+    }
+
+    #[test]
+    fn already_complete_substring_heading_returns_none() {
+        // Regression test for Fix 1: ensure substring headings like "## Tasks Already Complete"
+        // do not match the "## Already Complete" section anchor.
+        let content = "## Tasks Already Complete\n\n\
+            | Item | Status |\n\
+            |------|--------|\n\
+            | Feature A | DONE |\n\
+            \n## Completion\n";
+        assert!(find_already_complete_section(content).is_none());
+    }
+
+    #[test]
+    fn already_complete_suffix_heading_returns_none() {
+        // Fix A regression test: ensure suffix headings like "## Already Completeness"
+        // and "## Already Complete Stuff" do not match "## Already Complete".
+        let content1 = "## Already Completeness\n\n\
+            | Item | Status |\n\
+            |------|--------|\n\
+            | Feature A | DONE |\n\
+            \n## Completion\n";
+        assert!(find_already_complete_section(content1).is_none());
+
+        let content2 = "## Already Complete Stuff\n\n\
+            | Item | Status |\n\
+            |------|--------|\n\
+            | Feature B | PASS |\n\
+            \n## Completion\n";
+        assert!(find_already_complete_section(content2).is_none());
+    }
+
+    #[test]
+    fn already_complete_three_dash_separator_excluded() {
+        // Fix B regression test: ensure 3-dash separators (|---|---|) are dropped,
+        // not leaked into the returned content.
+        let content = "## Already Complete\n\n\
+            | Item | Status |\n\
+            |---|---|\n\
+            | Setup | DONE |\n\
+            \n## Completion\n";
+        let result = find_already_complete_section(content);
+        assert!(result.is_some());
+        let returned = result.unwrap();
+        // Must contain the real row data
+        assert!(returned.contains("Setup"));
+        assert!(returned.contains("DONE"));
+        // Must NOT contain the separator row (the dashes)
+        assert!(!returned.contains("---"));
     }
 
     #[test]

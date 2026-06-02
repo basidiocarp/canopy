@@ -380,7 +380,7 @@ fn canopy_check_handoff_completeness() -> Value {
     tool_def(
         "canopy_check_handoff_completeness",
         "Check Handoff Completeness",
-        "Check whether a handoff document meets completion criteria. Returns checkbox counts, paste marker status, and optional verify script results. Use before requesting task completion.",
+        "Check whether a handoff document meets completion criteria. Returns checkbox counts, paste marker status, already-completed work (if present), and optional verify script results. Use before requesting task completion.",
         json!({"type": "object", "properties": {"handoff_path": {"type": "string", "description": "Absolute path to the handoff markdown document"}, "run_verify_script": {"type": "boolean", "description": "When true, execute the paired verify script and include its output. Default: false."}}, "required": ["handoff_path"]}),
     )
 }
