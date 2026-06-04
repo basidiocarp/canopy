@@ -47,6 +47,29 @@ all workflow lifecycle decisions (phase gating, dispatch, escalation) to
 Hymenium. This separation keeps coordination semantics clear: Canopy is the ledger
 and operator surface, not a second workflow engine.
 
+### Orchestration Context Boundary
+
+Coordination ledger state is visible across the session boundary, but the
+*tools* used to orchestrate are not. This is an environmental invariant of the
+Claude Code runtime, not a rule Canopy enforces:
+
+- **Parent (orchestrator) session** — agents running in the parent Claude Code
+  session have access to MCP tools (Hyphae, Rhizome, Canopy) and to Skill-tool
+  invocations.
+- **Subagents** — agents spawned via the Agent tool start fresh sessions with
+  no inherited MCP connections and cannot invoke Skill tools. An attempt
+  produces a silent no-op or an error that is invisible to the orchestrator, so
+  Canopy's ledger records no failure.
+- **Avoiding the deadlock class** — orchestrators must keep all MCP tool calls
+  and Skill invocations in the parent session, passing only file paths or task
+  IDs to subagents. Never delegate an operation that requires the Skill tool or
+  the MCP registry.
+
+Because violating this invariant produces no error in Canopy's ledger, it must
+be documented at the architectural boundary rather than caught at runtime. The
+authoritative runtime statement is the **Agent delegation** rule in the
+workspace `CLAUDE.md`.
+
 ### Hyphae owns
 
 - Memory, recall logging, and outcome signals
