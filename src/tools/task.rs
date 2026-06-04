@@ -267,6 +267,161 @@ mod tests {
     }
 
     #[test]
+    fn completion_signal_conforms_to_contract_with_defaults() {
+        let signal = build_completion_signal("task-1", "agent-1", "did the thing", &json!({}));
+        // Required fields of canopy-task-completion-signal-v1.
+        assert_eq!(signal["schema_version"], "1.0");
+        assert_eq!(signal["task_id"], "task-1");
+        assert_eq!(signal["agent_id"], "agent-1");
+        assert_eq!(signal["status"], "completed");
+        assert_eq!(signal["summary"], "did the thing");
+        // should_continue is optional; absent when the agent does not supply it
+        // (the contract treats absence as "stop"), so it must not be emitted.
+        assert!(signal.get("should_continue").is_none());
+        // next_action is omitted when not provided.
+        assert!(signal.get("next_action").is_none());
+    }
+
+    #[test]
+    fn completion_signal_carries_should_continue_and_next_action() {
+        let args = json!({
+            "should_continue": true,
+            "next_action": { "follow_up_task_id": "task-2", "directive": "dispatch consumer" }
+        });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        assert_eq!(signal["should_continue"], true);
+        assert_eq!(signal["next_action"]["follow_up_task_id"], "task-2");
+        assert_eq!(signal["next_action"]["directive"], "dispatch consumer");
+    }
+
+    #[test]
+    fn completion_signal_emits_explicit_should_continue_false() {
+        let args = json!({ "should_continue": false });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        // An explicit false is preserved (distinct from absence, though both mean stop).
+        assert_eq!(signal["should_continue"], false);
+    }
+
+    #[test]
+    fn completion_signal_strips_unknown_next_action_keys() {
+        let args = json!({
+            "should_continue": true,
+            "next_action": {
+                "follow_up_task_id": "task-2",
+                "directive": "go",
+                "injected": "should-be-dropped"
+            }
+        });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        // Only the two contract-allowed keys survive (additionalProperties: false).
+        assert_eq!(signal["next_action"]["follow_up_task_id"], "task-2");
+        assert_eq!(signal["next_action"]["directive"], "go");
+        assert!(signal["next_action"].get("injected").is_none());
+    }
+
+    #[test]
+    fn completion_signal_drops_wrong_typed_next_action_values() {
+        let args = json!({
+            "next_action": { "follow_up_task_id": 123, "directive": false }
+        });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        // Wrong-typed inner values are dropped, leaving an empty (contract-valid) object.
+        assert!(signal["next_action"].get("follow_up_task_id").is_none());
+        assert!(signal["next_action"].get("directive").is_none());
+    }
+
+    #[test]
+    fn completion_signal_allows_null_follow_up_task_id() {
+        let args = json!({ "next_action": { "follow_up_task_id": null, "directive": "go" } });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        // null is contract-valid for follow_up_task_id and is preserved.
+        assert!(signal["next_action"]["follow_up_task_id"].is_null());
+        assert_eq!(signal["next_action"]["directive"], "go");
+    }
+
+    #[test]
+    fn completion_signal_ignores_non_object_next_action() {
+        let args = json!({ "should_continue": true, "next_action": "not-an-object" });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        // A malformed next_action is dropped rather than emitted off-contract.
+        assert!(signal.get("next_action").is_none());
+        // should_continue still propagates alongside the dropped next_action.
+        assert_eq!(signal["should_continue"], true);
+    }
+
+    /// Structurally validate the emitted signal against the septa schema:
+    /// every required field present, no key outside the schema's `properties`,
+    /// and `status` inside the declared enum. Mirrors `tests/contract_alignment.rs`
+    /// (no jsonschema crate; skip gracefully when septa is not checked out).
+    #[test]
+    fn completion_signal_conforms_to_septa_schema() {
+        let schema_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("canopy should be inside basidiocarp workspace")
+            .join("septa")
+            .join("canopy-task-completion-signal-v1.schema.json");
+        let Ok(schema_text) = std::fs::read_to_string(&schema_path) else {
+            eprintln!("Skipping: {} not found", schema_path.display());
+            return;
+        };
+        let schema: Value = serde_json::from_str(&schema_text).expect("schema must parse");
+
+        // Exercise the richest path so optional fields are present too.
+        let args = json!({
+            "should_continue": true,
+            "next_action": { "follow_up_task_id": "task-2", "directive": "go" }
+        });
+        let signal = build_completion_signal("task-1", "agent-1", "done", &args);
+        let obj = signal.as_object().expect("signal must be an object");
+
+        // (a) every required field is present
+        for req in schema["required"].as_array().expect("required array") {
+            let name = req.as_str().expect("required entry is a string");
+            assert!(obj.contains_key(name), "missing required field {name}");
+        }
+
+        // (b) top-level additionalProperties:false → no key outside properties
+        let props = schema["properties"].as_object().expect("properties object");
+        for key in obj.keys() {
+            assert!(
+                props.contains_key(key),
+                "signal emits off-contract key {key}"
+            );
+        }
+
+        // (c) status is inside the declared enum
+        let status_enum = extract_str_set(&schema["properties"]["status"]["enum"]);
+        let status = signal["status"].as_str().expect("status is a string");
+        assert!(
+            status_enum.contains(status),
+            "status {status} not in schema enum {status_enum:?}"
+        );
+
+        // (d) next_action carries only its two contract-allowed keys
+        let na = signal["next_action"]
+            .as_object()
+            .expect("next_action object");
+        for key in na.keys() {
+            assert!(
+                ["follow_up_task_id", "directive"].contains(&key.as_str()),
+                "next_action emits off-contract key {key}"
+            );
+        }
+    }
+
+    fn extract_str_set(value: &Value) -> std::collections::HashSet<String> {
+        value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
     fn test_compute_body_hash_deterministic() {
         let title = "Test task";
         let description = Some("Test description");
@@ -469,7 +624,58 @@ pub fn tool_task_complete(
 
     persist_task_output(store, task_id, args);
 
-    ToolResult::json(&task)
+    // Emit the canopy-task-completion-signal-v1 payload alongside the task. The
+    // signal rides as a sibling `completion_signal` key so existing top-level
+    // task fields stay put (additive); TaskStatus and ToolResult are unchanged.
+    let signal = build_completion_signal(task_id, agent_id, summary, args);
+    match serde_json::to_value(&task) {
+        Ok(Value::Object(mut body)) => {
+            body.insert("completion_signal".to_string(), signal);
+            ToolResult::json(&Value::Object(body))
+        }
+        // Task always serializes to an object; fall back to the bare task if not.
+        _ => ToolResult::json(&task),
+    }
+}
+
+/// Build the `canopy-task-completion-signal-v1` payload emitted on completion.
+///
+/// `should_continue` is the agent's stated intent; it is emitted only when the
+/// agent supplies it, matching the contract's optional semantic (absent → stop).
+/// `next_action` is an optional follow-on hint reconstructed from only the two
+/// contract-allowed keys so a caller cannot inject fields that would violate the
+/// schema's `additionalProperties: false`. This tool always reports
+/// `status: "completed"` since it is the terminal-completion path.
+fn build_completion_signal(task_id: &str, agent_id: &str, summary: &str, args: &Value) -> Value {
+    let mut signal = serde_json::json!({
+        "schema_version": "1.0",
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "status": "completed",
+        "summary": summary,
+    });
+    if let Some(should_continue) = get_bool(args, "should_continue") {
+        signal["should_continue"] = Value::Bool(should_continue);
+    }
+    if let Some(next_action) = args.get("next_action").and_then(|v| v.as_object()) {
+        // Allowlist the two contract-defined keys; drop anything else so the
+        // emitted next_action honors the schema's additionalProperties: false.
+        let mut allowed = serde_json::Map::new();
+        // Type-gate as well as key-gate: follow_up_task_id is string|null and
+        // directive is string in the contract. Drop wrong-typed values so a
+        // caller cannot emit a schema-violating signal.
+        if let Some(id) = next_action
+            .get("follow_up_task_id")
+            .filter(|v| v.is_string() || v.is_null())
+        {
+            allowed.insert("follow_up_task_id".to_string(), id.clone());
+        }
+        if let Some(directive) = next_action.get("directive").filter(|v| v.is_string()) {
+            allowed.insert("directive".to_string(), directive.clone());
+        }
+        signal["next_action"] = Value::Object(allowed);
+    }
+    signal
 }
 
 fn check_handoff_completeness(
