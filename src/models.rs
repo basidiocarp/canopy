@@ -1550,6 +1550,25 @@ pub struct TaskAttentionWire {
     pub reasons: Vec<TaskAttentionReason>,
 }
 
+/// Wire-format wrapper around `Task` that adds derived boolean signals required
+/// by consumers (e.g. hymenium's phase gate). Uses `#[serde(flatten)]` so all
+/// existing `Task` fields appear at the same JSON level — the two added booleans
+/// are the only new keys. Do NOT add these booleans to `Task` itself; they are
+/// derivations computed at the wire boundary, not stored coordination state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskWire {
+    #[serde(flatten)]
+    pub task: Task,
+    /// True when the task has at least one piece of evidence that carries a
+    /// code diff (`RhizomeExport`, `RhizomeImpact`, or any record with a
+    /// `related_file`). Derived from `TaskDetail.evidence` at serialisation
+    /// time.
+    pub has_code_diff: bool,
+    /// True when `task.verification_state == VerificationState::Passed`.
+    /// Derived at serialisation time; not stored in `SQLite`.
+    pub has_verification_passed: bool,
+}
+
 /// Wire-format representation of a task-detail payload. Contains ONLY the
 /// fields declared in `septa/canopy-task-detail-v1.schema.json` so that the
 /// emitted JSON satisfies the schema's `additionalProperties: false`
@@ -1562,7 +1581,7 @@ pub struct TaskAttentionWire {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskDetailWire {
     pub schema_version: String,
-    pub task: Task,
+    pub task: TaskWire,
     pub attention: TaskAttentionWire,
     pub sla_summary: TaskSlaSummary,
     pub allowed_actions: Vec<OperatorAction>,
@@ -1596,9 +1615,25 @@ impl From<TaskDetail> for TaskDetailWire {
         // agent_attention, deadline_summary, execution_summary, messages,
         // council_session, tool_adoption_score. These live on TaskDetail
         // for in-memory bookkeeping but never flow over the wire.
+
+        // Derive the wire booleans BEFORE detail.task / detail.evidence are
+        // moved so we can read them without cloning either vec.
+        let has_verification_passed =
+            detail.task.verification_state == VerificationState::Passed;
+        let has_code_diff = detail.evidence.iter().any(|e| {
+            matches!(
+                e.source_kind,
+                EvidenceSourceKind::RhizomeExport | EvidenceSourceKind::RhizomeImpact
+            ) || e.related_file.is_some()
+        });
+
         Self {
             schema_version: detail.schema_version,
-            task: detail.task,
+            task: TaskWire {
+                task: detail.task,
+                has_code_diff,
+                has_verification_passed,
+            },
             attention: TaskAttentionWire {
                 task_id: detail.attention.task_id,
                 level: detail.attention.level,
@@ -1979,7 +2014,13 @@ pub struct KnownFact {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolAdoptionScore, ToolAdoptionStatus, capabilities_match, parse_capabilities};
+    use super::{
+        AttentionLevel, BreachSeverity, DeadlineState, EvidenceRef, EvidenceSourceKind,
+        Freshness, Task, TaskAttention, TaskDeadlineSummary, TaskDetail, TaskDetailWire,
+        TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
+        TaskRelationshipSummary, TaskSeverity, TaskSlaSummary, TaskStatus, ToolAdoptionScore,
+        ToolAdoptionStatus, VerificationState, capabilities_match, parse_capabilities,
+    };
 
     #[test]
     fn parse_capabilities_reads_json_arrays_and_falls_back_to_empty() {
@@ -2045,5 +2086,257 @@ mod tests {
         );
         assert!((score.score - 0.0).abs() < 0.001);
         assert_eq!(score.details[0].status, ToolAdoptionStatus::RelevantUnused);
+    }
+
+    // ---------------------------------------------------------------------------
+    // TaskWire derivation tests
+    // ---------------------------------------------------------------------------
+
+    fn stub_task(verification_state: VerificationState) -> Task {
+        Task {
+            task_id: "t1".into(),
+            title: "test".into(),
+            description: None,
+            requested_by: "agent".into(),
+            project_root: "/tmp".into(),
+            workspace: None,
+            parent_task_id: None,
+            queue_state_id: None,
+            worktree_binding_id: None,
+            execution_session_ref: None,
+            review_cycle_id: None,
+            workflow_id: None,
+            phase_id: None,
+            required_role: None,
+            required_capabilities: vec![],
+            auto_review: false,
+            verification_required: false,
+            status: TaskStatus::Open,
+            verification_state,
+            priority: TaskPriority::Medium,
+            severity: TaskSeverity::None,
+            owner_agent_id: None,
+            owner_note: None,
+            acknowledged_by: None,
+            acknowledged_at: None,
+            blocked_reason: None,
+            verified_by: None,
+            verified_at: None,
+            closed_by: None,
+            closure_summary: None,
+            closed_at: None,
+            due_at: None,
+            review_due_at: None,
+            created_at: "2024-01-01T00:00:00Z".into(),
+            updated_at: "2024-01-01T00:00:00Z".into(),
+            scope: vec![],
+            prior_task_id: None,
+            immutable_once_dispatched: false,
+            body_hash: None,
+            branch_of: None,
+            branch_at: None,
+            branch_outcome: None,
+            score: None,
+            score_reasons: vec![],
+            contract_path: None,
+        }
+    }
+
+    fn stub_evidence(
+        source_kind: EvidenceSourceKind,
+        related_file: Option<String>,
+    ) -> EvidenceRef {
+        EvidenceRef {
+            schema_version: "1.0".into(),
+            evidence_id: "e1".into(),
+            task_id: "t1".into(),
+            source_kind,
+            source_ref: "ref".into(),
+            label: "label".into(),
+            summary: None,
+            related_handoff_id: None,
+            related_session_id: None,
+            related_memory_query: None,
+            related_symbol: None,
+            related_file,
+        }
+    }
+
+    fn stub_detail(task: Task, evidence: Vec<EvidenceRef>) -> TaskDetail {
+        TaskDetail {
+            schema_version: "1.0".into(),
+            attention: TaskAttention {
+                task_id: task.task_id.clone(),
+                level: AttentionLevel::Normal,
+                freshness: Freshness::Fresh,
+                acknowledged: false,
+                owner_heartbeat_freshness: None,
+                open_handoff_freshness: None,
+                reasons: vec![],
+            },
+            sla_summary: TaskSlaSummary {
+                task_id: task.task_id.clone(),
+                due_soon_count: 0,
+                overdue_count: 0,
+                oldest_overdue_seconds: None,
+                highest_risk_queue: None,
+                breach_severity: BreachSeverity::None,
+            },
+            agent_attention: vec![],
+            agent_heartbeat_summaries: vec![],
+            deadline_summary: TaskDeadlineSummary {
+                task_id: task.task_id.clone(),
+                due_at: None,
+                review_due_at: None,
+                execution_state: DeadlineState::None,
+                review_state: DeadlineState::None,
+                active_deadline_kind: None,
+                active_deadline_at: None,
+                active_deadline_state: DeadlineState::None,
+                due_in_seconds: None,
+                overdue_by_seconds: None,
+            },
+            ownership: TaskOwnershipSummary {
+                task_id: task.task_id.clone(),
+                current_owner_agent_id: None,
+                assignment_count: 0,
+                reassignment_count: 0,
+                last_assigned_to: None,
+                last_assigned_by: None,
+                last_assigned_at: None,
+                last_assignment_reason: None,
+            },
+            heartbeat_summary: TaskHeartbeatSummary {
+                task_id: task.task_id.clone(),
+                heartbeat_count: 0,
+                related_agent_count: 0,
+                fresh_agents: 0,
+                aging_agents: 0,
+                stale_agents: 0,
+                missing_agents: 0,
+                last_heartbeat_at: None,
+            },
+            execution_summary: TaskExecutionSummary {
+                task_id: task.task_id.clone(),
+                claim_count: 0,
+                run_count: 0,
+                pause_count: 0,
+                yield_count: 0,
+                completion_count: 0,
+                claimed_at: None,
+                started_at: None,
+                last_execution_at: None,
+                last_execution_action: None,
+                last_execution_agent_id: None,
+                total_execution_seconds: 0,
+                active_execution_seconds: None,
+            },
+            task,
+            assignments: vec![],
+            events: vec![],
+            heartbeats: vec![],
+            handoffs: vec![],
+            handoff_attention: vec![],
+            operator_actions: vec![],
+            allowed_actions: vec![],
+            council_session: None,
+            messages: vec![],
+            evidence,
+            relationships: vec![],
+            relationship_summary: TaskRelationshipSummary {
+                task_id: "t1".into(),
+                blocker_count: 0,
+                active_blocker_count: 0,
+                stale_blocker_count: 0,
+                blocking_count: 0,
+                follow_up_parent_count: 0,
+                follow_up_child_count: 0,
+                open_follow_up_child_count: 0,
+                parent_count: 0,
+                child_count: 0,
+                open_child_count: 0,
+                children_complete: false,
+            },
+            workflow_context: None,
+            related_tasks: vec![],
+            children: vec![],
+            children_complete: false,
+            parent_id: None,
+            review_annotations: vec![],
+            tool_adoption_score: None,
+            completion_signal: None,
+        }
+    }
+
+    #[test]
+    fn task_wire_both_true_when_passed_and_rhizome_export_evidence() {
+        let task = stub_task(VerificationState::Passed);
+        let evidence = vec![stub_evidence(EvidenceSourceKind::RhizomeExport, None)];
+        let detail = stub_detail(task, evidence);
+
+        let wire: TaskDetailWire = detail.into();
+        assert!(wire.task.has_verification_passed);
+        assert!(wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn task_wire_both_false_when_unknown_and_no_evidence() {
+        let task = stub_task(VerificationState::Unknown);
+        let detail = stub_detail(task, vec![]);
+
+        let wire: TaskDetailWire = detail.into();
+        assert!(!wire.task.has_verification_passed);
+        assert!(!wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn task_wire_code_diff_true_from_related_file() {
+        let task = stub_task(VerificationState::Unknown);
+        // ManualNote but with a related_file — should still set has_code_diff
+        let evidence = vec![stub_evidence(
+            EvidenceSourceKind::ManualNote,
+            Some("src/lib.rs".into()),
+        )];
+        let detail = stub_detail(task, evidence);
+
+        let wire: TaskDetailWire = detail.into();
+        assert!(!wire.task.has_verification_passed);
+        assert!(wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn task_wire_code_diff_true_from_rhizome_impact() {
+        let task = stub_task(VerificationState::Unknown);
+        let evidence = vec![stub_evidence(EvidenceSourceKind::RhizomeImpact, None)];
+        let detail = stub_detail(task, evidence);
+
+        let wire: TaskDetailWire = detail.into();
+        assert!(wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn task_wire_serializes_booleans_nested_under_task_key() {
+        let task = stub_task(VerificationState::Passed);
+        let evidence = vec![stub_evidence(EvidenceSourceKind::RhizomeExport, None)];
+        let detail = stub_detail(task, evidence);
+
+        let wire: TaskDetailWire = detail.into();
+        let v = serde_json::to_value(&wire).expect("serialization must not fail");
+
+        assert_eq!(
+            v["task"]["has_code_diff"],
+            serde_json::Value::Bool(true),
+            "has_code_diff must appear nested under \"task\" key"
+        );
+        assert_eq!(
+            v["task"]["has_verification_passed"],
+            serde_json::Value::Bool(true),
+            "has_verification_passed must appear nested under \"task\" key"
+        );
+        // Existing Task fields must still be present at the same level
+        assert!(
+            v["task"]["task_id"].is_string(),
+            "task_id must remain under \"task\" key"
+        );
     }
 }
