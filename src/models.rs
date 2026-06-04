@@ -1583,6 +1583,11 @@ pub struct TaskDetailWire {
     pub children: Vec<TaskSummary>,
     pub children_complete: bool,
     pub parent_id: Option<String>,
+    /// The agent's `canopy-task-completion-signal-v1` payload, persisted when
+    /// the task is closed via `canopy_task_complete`. `None` (serialized as
+    /// `null`) until the task is completed. Surfaced so hymenium's dispatch
+    /// loop can read `should_continue` / `next_action` over its task-detail poll.
+    pub completion_signal: Option<serde_json::Value>,
 }
 
 impl From<TaskDetail> for TaskDetailWire {
@@ -1618,6 +1623,7 @@ impl From<TaskDetail> for TaskDetailWire {
             children: detail.children,
             children_complete: detail.children_complete,
             parent_id: detail.parent_id,
+            completion_signal: detail.completion_signal,
         }
     }
 }
@@ -1654,6 +1660,13 @@ pub struct TaskDetail {
     pub review_annotations: Vec<ReviewAnnotation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_adoption_score: Option<ToolAdoptionScore>,
+    /// Persisted `canopy-task-completion-signal-v1` payload, surfaced on the
+    /// wire so hymenium's dispatch loop can read it over its task-detail poll.
+    /// `#[serde(default)]` lets older task-detail JSON that predates this field
+    /// deserialize to `None`; the wire copy on `TaskDetailWire` always emits the
+    /// key (null when `None`) to match the contract fixture.
+    #[serde(default)]
+    pub completion_signal: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

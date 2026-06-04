@@ -1531,6 +1531,43 @@ impl Store {
         Ok(result)
     }
 
+    /// Persist the agent's completion signal JSON to a task's
+    /// `completion_signal` column.
+    ///
+    /// The stored value is the serialized `canopy-task-completion-signal-v1`
+    /// payload built at completion time; it is surfaced unchanged on the
+    /// task-detail read model so the hymenium dispatch loop can read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn set_completion_signal(&self, task_id: &str, signal_json: &str) -> StoreResult<()> {
+        self.conn.execute(
+            "UPDATE tasks SET completion_signal = ?1, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?2",
+            params![signal_json, task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve the persisted completion signal JSON from a task's
+    /// `completion_signal` column.
+    ///
+    /// Returns `None` if the task has not been completed (column is NULL).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
+    pub fn get_completion_signal(&self, task_id: &str) -> StoreResult<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT completion_signal FROM tasks WHERE task_id = ?1")?;
+        let result = stmt
+            .query_row([task_id], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten();
+        Ok(result)
+    }
+
     /// Delete a task and all its related records via foreign-key cascade.
     ///
     /// Tables with `ON DELETE CASCADE` on `task_id` are removed automatically

@@ -628,6 +628,25 @@ pub fn tool_task_complete(
     // signal rides as a sibling `completion_signal` key so existing top-level
     // task fields stay put (additive); TaskStatus and ToolResult are unchanged.
     let signal = build_completion_signal(task_id, agent_id, summary, args);
+
+    // Persist the signal so the task-detail read model can surface it. The
+    // tool-return above only reaches the calling agent; hymenium polls
+    // `canopy api task` and never sees that return, so the durable copy on the
+    // task is what its dispatch loop reads (canopy-task-detail-v1.completion_signal).
+    match serde_json::to_string(&signal) {
+        Ok(signal_json) => {
+            if let Err(e) = store.set_completion_signal(task_id, &signal_json) {
+                tracing::warn!("failed to persist completion signal for {task_id}: {e:?}");
+            }
+        }
+        // build_completion_signal yields a plain JSON object so this is
+        // unreachable in practice, but a silent drop here would leave hymenium
+        // polling a null signal forever — log it rather than swallow it.
+        Err(e) => {
+            tracing::warn!("failed to serialize completion signal for {task_id}: {e:?}");
+        }
+    }
+
     match serde_json::to_value(&task) {
         Ok(Value::Object(mut body)) => {
             body.insert("completion_signal".to_string(), signal);

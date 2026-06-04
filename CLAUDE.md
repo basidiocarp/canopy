@@ -121,7 +121,7 @@ src/
 | `evidence-ref-v1` | Cap and other readers | Local SQLite refs | `septa/evidence-ref-v1.schema.json` |
 | `handoff-context-v1` | Receiving agent, Canopy, Cap | Handoff creation flow | `septa/handoff-context-v1.schema.json` |
 | `canopy-snapshot-v1` | Cap | Unix socket (`canopy_snapshot` JSON-RPC method) — CLI fallback | `septa/canopy-snapshot-v1.schema.json` |
-| `canopy-task-detail-v1` | Cap | Unix socket (`canopy_task` JSON-RPC method) — CLI fallback | `septa/canopy-task-detail-v1.schema.json` |
+| `canopy-task-detail-v1` | Cap and Hymenium | Unix socket (`canopy_task` JSON-RPC method) — CLI fallback | `septa/canopy-task-detail-v1.schema.json` |
 | `canopy-notification-v1` | Cap and Annulus | Notification events | `septa/canopy-notification-v1.schema.json` |
 | `task-output-v1` | Hymenium | Stored in SQLite via `set_task_output`, read via `get_task_output` | `septa/task-output-v1.schema.json` |
 
@@ -130,6 +130,8 @@ src/
 - `src/api.rs`: snapshot and task-detail read models
 - `src/store/`: persistence for those records
 - `src/socket_server.rs`: Unix socket endpoint (JSON-RPC 2.0) for snapshot, task, and agents
+
+`canopy-task-detail-v1` also carries `completion_signal`: the `canopy-task-completion-signal-v1` payload is persisted on the task when it is closed via `canopy_task_complete` and surfaced on task detail (null until completion). Hymenium's dispatch loop reads `completion_signal.should_continue` / `next_action` over its existing task-detail poll rather than over the tool-return, which it never sees.
 
 Breaking change impact: Cap and any other reader will misparse task, handoff, or evidence data.
 

@@ -593,6 +593,17 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
 
     let children_complete = relationship_summary.children_complete;
     let tool_adoption_score = store.get_tool_adoption_score(task_id)?;
+    // The completion signal is persisted as a JSON string when the task is
+    // closed via canopy_task_complete. Parse it back to a value so the
+    // read model surfaces the structured payload (or null when absent).
+    let completion_signal = store.get_completion_signal(task_id)?.and_then(|raw| {
+        // A corrupt stored signal degrades to null (task reads as not-yet-signaled)
+        // rather than failing the whole read model — but log it, since a silent
+        // null would otherwise look identical to an uncompleted task to hymenium.
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .map_err(|e| tracing::warn!("completion_signal for {task_id} failed to parse: {e:?}"))
+            .ok()
+    });
 
     Ok(TaskDetail {
         schema_version: CANOPY_API_SCHEMA_VERSION.to_string(),
@@ -624,6 +635,7 @@ pub fn task_detail(store: &(impl CanopyStore + ?Sized), task_id: &str) -> StoreR
         parent_id: store.get_parent_id(task_id)?,
         review_annotations,
         tool_adoption_score,
+        completion_signal,
     })
 }
 

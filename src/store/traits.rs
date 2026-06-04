@@ -135,6 +135,8 @@ pub trait TaskMutationStore {
     fn clear_task_assignment(&self, task_id: &str) -> StoreResult<()>;
     fn set_task_output(&self, task_id: &str, output_json: &str) -> StoreResult<()>;
     fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>>;
+    fn set_completion_signal(&self, task_id: &str, signal_json: &str) -> StoreResult<()>;
+    fn get_completion_signal(&self, task_id: &str) -> StoreResult<Option<String>>;
     /// Delete a task and cascade-remove all related records.
     /// Intended only for rollback of partially-created task trees.
     fn delete_task(&self, task_id: &str) -> StoreResult<()>;
@@ -677,6 +679,14 @@ impl TaskMutationStore for super::Store {
 
     fn get_task_output(&self, task_id: &str) -> StoreResult<Option<String>> {
         self.get_task_output(task_id)
+    }
+
+    fn set_completion_signal(&self, task_id: &str, signal_json: &str) -> StoreResult<()> {
+        self.set_completion_signal(task_id, signal_json)
+    }
+
+    fn get_completion_signal(&self, task_id: &str) -> StoreResult<Option<String>> {
+        self.get_completion_signal(task_id)
     }
 
     fn delete_task(&self, task_id: &str) -> StoreResult<()> {

@@ -685,6 +685,49 @@ fn api_snapshot_includes_agent_capabilities_and_task_required_capabilities() {
 }
 
 #[test]
+fn api_task_detail_surfaces_completion_signal_after_completion() {
+    let temp = tempdir().expect("create tempdir");
+    let db_path = temp.path().join("canopy.db");
+    let store = Store::open(&db_path).expect("open store");
+
+    let task = store
+        .create_task_with_options(
+            "Completion signal task",
+            None,
+            "operator",
+            "/tmp/project",
+            &TaskCreationOptions::default(),
+        )
+        .expect("create task");
+
+    // Before completion the read model carries no signal (null on the wire).
+    let detail_before = api::task_detail(&store, &task.task_id).expect("detail before");
+    assert!(detail_before.completion_signal.is_none());
+
+    let args = serde_json::json!({
+        "task_id": task.task_id,
+        "summary": "did the thing",
+        "force": true,
+        "should_continue": true,
+        "next_action": { "follow_up_task_id": "task-2", "directive": "dispatch consumer" }
+    });
+    let result = canopy::tools::task::tool_task_complete(&store, "agent-1", &args);
+    assert!(!result.is_error, "completion failed: {result:?}");
+
+    // The gap fix: the completion signal is persisted and surfaced on the
+    // task-detail read model so hymenium can read should_continue / next_action
+    // over its existing poll — the tool-return never reaches hymenium.
+    let detail = api::task_detail(&store, &task.task_id).expect("detail after");
+    let signal = detail
+        .completion_signal
+        .expect("completion_signal present after completion");
+    assert_eq!(signal["should_continue"], true);
+    assert_eq!(signal["next_action"]["follow_up_task_id"], "task-2");
+    assert_eq!(signal["next_action"]["directive"], "dispatch consumer");
+    assert_eq!(signal["status"], "completed");
+}
+
+#[test]
 fn api_task_detail_exposes_handoff_resolution_actions_for_open_handoffs() {
     let temp = tempdir().expect("create tempdir");
     let db_path = temp.path().join("canopy.db");
