@@ -63,6 +63,15 @@ impl From<DispatchAgentTier> for AgentRole {
 }
 
 /// Deserialised `dispatch-request-v1` payload.
+///
+/// `handoff_path` and `project_root` carry file-system paths that are passed to
+/// subagents by reference; callers must never substitute file contents for these
+/// fields. Passing a path (not inline content) is the empirically-validated
+/// pattern that avoids redundant tool-call fan-out — the subagent resolves the
+/// file itself rather than receiving its bytes inline.
+///
+/// This invariant is enforced when the struct is built via [`read_request`];
+/// constructing a `DispatchRequest` directly (e.g. in tests) bypasses validation.
 #[derive(Debug, Deserialize)]
 pub struct DispatchRequest {
     pub schema_version: String,
@@ -85,9 +94,17 @@ pub struct DispatchResponse {
 
 /// Read a `dispatch-request-v1` payload from a file or stdin (`-`).
 ///
+/// Subagents receive a `handoff_path` and resolve the file themselves rather than
+/// receiving the file's content inline — this is the empirically-validated pattern
+/// that avoids redundant tool-call fan-out. To keep that contract intact, the parsed
+/// `handoff_path` and `project_root` are validated as plausible path strings
+/// (non-empty, no embedded newline) before the request is returned, so file contents
+/// accidentally substituted for a path are rejected at the boundary.
+///
 /// # Errors
 ///
-/// Returns an error if the file cannot be read or the JSON is malformed.
+/// Returns an error if the file cannot be read, the JSON is malformed, or
+/// `handoff_path`/`project_root` is empty or contains a newline character.
 pub fn read_request(path: &str) -> Result<DispatchRequest> {
     let raw = if path == "-" {
         std::io::read_to_string(std::io::stdin()).context("reading dispatch request from stdin")?
@@ -95,7 +112,25 @@ pub fn read_request(path: &str) -> Result<DispatchRequest> {
         std::fs::read_to_string(path)
             .with_context(|| format!("reading dispatch request from {path}"))?
     };
-    serde_json::from_str(&raw).context("parsing dispatch-request-v1 JSON")
+    let request: DispatchRequest =
+        serde_json::from_str(&raw).context("parsing dispatch-request-v1 JSON")?;
+    validate_path_field("handoff_path", &request.handoff_path)?;
+    validate_path_field("project_root", &request.project_root)?;
+    Ok(request)
+}
+
+/// Reject a `dispatch-request-v1` path field that is empty or carries an embedded
+/// newline — both signal that file contents were substituted for a file-system path.
+fn validate_path_field(field: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("{field} must be a file-system path, not file contents (was empty)");
+    }
+    if value.contains('\n') {
+        bail!(
+            "{field} must be a file-system path, not file contents (contains an embedded newline)"
+        );
+    }
+    Ok(())
 }
 
 /// Accept a `dispatch-request-v1` payload, create a Canopy task, and apply
@@ -278,5 +313,78 @@ mod tests {
             TaskPriority::from(DispatchPriority::Critical),
             TaskPriority::Critical
         );
+    }
+
+    #[test]
+    fn validate_path_field_accepts_plausible_path() {
+        validate_path_field("handoff_path", ".handoffs/hymenium/handoff-parser.md")
+            .expect("a non-empty newline-free path must be accepted");
+        validate_path_field("project_root", "/Users/williamnewton/projects/basidiocarp")
+            .expect("a non-empty newline-free path must be accepted");
+    }
+
+    #[test]
+    fn validate_path_field_rejects_empty() {
+        let err =
+            validate_path_field("handoff_path", "").expect_err("empty path field must be rejected");
+        assert!(err.to_string().contains("handoff_path"));
+        assert!(err.to_string().contains("not file contents"));
+    }
+
+    #[test]
+    fn validate_path_field_rejects_embedded_newline() {
+        // A multi-line value is the signature of file contents substituted for a path.
+        let err = validate_path_field("project_root", "# Handoff\n\nsome file body")
+            .expect_err("path field with a newline must be rejected");
+        assert!(err.to_string().contains("project_root"));
+        assert!(err.to_string().contains("newline"));
+    }
+
+    // Unique temp path for an end-to-end `read_request` test, isolated per process
+    // and call site so parallel tests do not collide.
+    fn temp_request_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "canopy-dispatch-{}-{}.json",
+            std::process::id(),
+            tag
+        ))
+    }
+
+    #[test]
+    fn read_request_accepts_septa_fixture_from_file() {
+        let fixture = r#"{
+            "schema_version": "1.0",
+            "handoff_path": ".handoffs/hymenium/handoff-parser.md",
+            "workflow_template": "impl-audit",
+            "project_root": "/Users/williamnewton/projects/basidiocarp",
+            "target_repo": "hymenium",
+            "priority": "high",
+            "depends_on": []
+        }"#;
+        let path = temp_request_path("valid");
+        std::fs::write(&path, fixture).expect("write fixture");
+        let result = read_request(path.to_str().expect("utf-8 path"));
+        let _ = std::fs::remove_file(&path);
+        let request = result.expect("valid septa fixture path must be accepted by read_request");
+        assert_eq!(request.handoff_path, ".handoffs/hymenium/handoff-parser.md");
+        assert_eq!(
+            request.project_root,
+            "/Users/williamnewton/projects/basidiocarp"
+        );
+    }
+
+    #[test]
+    fn read_request_rejects_content_substituted_for_path() {
+        // handoff_path carries multi-line file contents instead of a path: read_request
+        // must reject it (proves validation is wired into the real code path, not just
+        // the standalone helper).
+        let payload = "{\n            \"schema_version\": \"1.0\",\n            \"handoff_path\": \"# Handoff\\n\\nfile body not a path\",\n            \"workflow_template\": \"impl-audit\",\n            \"project_root\": \"/tmp/project\",\n            \"target_repo\": \"hymenium\",\n            \"priority\": \"high\",\n            \"depends_on\": []\n        }";
+        let path = temp_request_path("content-as-path");
+        std::fs::write(&path, payload).expect("write payload");
+        let result = read_request(path.to_str().expect("utf-8 path"));
+        let _ = std::fs::remove_file(&path);
+        let err = result.expect_err("content substituted for handoff_path must be rejected");
+        assert!(err.to_string().contains("handoff_path"));
+        assert!(err.to_string().contains("not file contents"));
     }
 }
