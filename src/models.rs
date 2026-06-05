@@ -1618,8 +1618,7 @@ impl From<TaskDetail> for TaskDetailWire {
 
         // Derive the wire booleans BEFORE detail.task / detail.evidence are
         // moved so we can read them without cloning either vec.
-        let has_verification_passed =
-            detail.task.verification_state == VerificationState::Passed;
+        let has_verification_passed = detail.task.verification_state == VerificationState::Passed;
         let has_code_diff = detail.evidence.iter().any(|e| {
             matches!(
                 e.source_kind,
@@ -2015,11 +2014,11 @@ pub struct KnownFact {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttentionLevel, BreachSeverity, DeadlineState, EvidenceRef, EvidenceSourceKind,
-        Freshness, Task, TaskAttention, TaskDeadlineSummary, TaskDetail, TaskDetailWire,
-        TaskExecutionSummary, TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority,
-        TaskRelationshipSummary, TaskSeverity, TaskSlaSummary, TaskStatus, ToolAdoptionScore,
-        ToolAdoptionStatus, VerificationState, capabilities_match, parse_capabilities,
+        AttentionLevel, BreachSeverity, DeadlineState, EvidenceRef, EvidenceSourceKind, Freshness,
+        Task, TaskAttention, TaskDeadlineSummary, TaskDetail, TaskDetailWire, TaskExecutionSummary,
+        TaskHeartbeatSummary, TaskOwnershipSummary, TaskPriority, TaskRelationshipSummary,
+        TaskSeverity, TaskSlaSummary, TaskStatus, ToolAdoptionScore, ToolAdoptionStatus,
+        VerificationState, capabilities_match, parse_capabilities,
     };
 
     #[test]
@@ -2142,10 +2141,7 @@ mod tests {
         }
     }
 
-    fn stub_evidence(
-        source_kind: EvidenceSourceKind,
-        related_file: Option<String>,
-    ) -> EvidenceRef {
+    fn stub_evidence(source_kind: EvidenceSourceKind, related_file: Option<String>) -> EvidenceRef {
         EvidenceRef {
             schema_version: "1.0".into(),
             evidence_id: "e1".into(),
