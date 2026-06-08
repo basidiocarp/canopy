@@ -1815,7 +1815,8 @@ where
         | EvidenceSourceKind::MyceliumExplain
         | EvidenceSourceKind::RhizomeImpact
         | EvidenceSourceKind::RhizomeExport
-        | EvidenceSourceKind::ReviewAnnotation => (
+        | EvidenceSourceKind::ReviewAnnotation
+        | EvidenceSourceKind::CodeDiff => (
             EvidenceVerificationStatus::Unsupported,
             format!(
                 "{} verification is not implemented yet",

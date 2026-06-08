@@ -799,7 +799,8 @@ pub(crate) fn normalize_evidence_navigation<'a>(
         | EvidenceSourceKind::RhizomeExport
         | EvidenceSourceKind::ScriptVerification
         | EvidenceSourceKind::MyceliumCommand
-        | EvidenceSourceKind::MyceliumExplain => EvidenceNavigation {
+        | EvidenceSourceKind::MyceliumExplain
+        | EvidenceSourceKind::CodeDiff => EvidenceNavigation {
             session_id,
             memory_query,
             symbol,

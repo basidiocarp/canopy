@@ -515,6 +515,13 @@ pub enum EvidenceSourceKind {
     ScriptVerification,
     ManualNote,
     ReviewAnnotation,
+    /// First-class, agent-emitted reference to a committed code change (commit
+    /// hash or diff ref). Canopy derives `has_code_diff` on `TaskDetailWire`
+    /// from its presence; emitted by the orchestrator after each implementer
+    /// commit rather than inferred from rhizome export/impact proxies.
+    /// `source_ref` holds the commit/diff ref and `related_file` may hold a path;
+    /// the `symbol`/`memory_query` navigation hints carry no meaning for this kind.
+    CodeDiff,
 }
 
 #[derive(
@@ -1619,11 +1626,17 @@ impl From<TaskDetail> for TaskDetailWire {
         // Derive the wire booleans BEFORE detail.task / detail.evidence are
         // moved so we can read them without cloning either vec.
         let has_verification_passed = detail.task.verification_state == VerificationState::Passed;
+        // Union derivation: a first-class CodeDiff reference is authoritative,
+        // with the legacy rhizome-export/impact + related_file proxy retained as
+        // a fallback so has_code_diff does not go dark while agents adopt the
+        // explicit CodeDiff kind.
         let has_code_diff = detail.evidence.iter().any(|e| {
-            matches!(
-                e.source_kind,
-                EvidenceSourceKind::RhizomeExport | EvidenceSourceKind::RhizomeImpact
-            ) || e.related_file.is_some()
+            e.source_kind == EvidenceSourceKind::CodeDiff
+                || matches!(
+                    e.source_kind,
+                    EvidenceSourceKind::RhizomeExport | EvidenceSourceKind::RhizomeImpact
+                )
+                || e.related_file.is_some()
         });
 
         Self {
@@ -2308,6 +2321,46 @@ mod tests {
 
         let wire: TaskDetailWire = detail.into();
         assert!(wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn task_wire_code_diff_true_from_first_class_code_diff_kind() {
+        let task = stub_task(VerificationState::Unknown);
+        // First-class CodeDiff with no related_file and a non-rhizome kind:
+        // the Union derivation must set has_code_diff on the explicit kind alone.
+        let evidence = vec![stub_evidence(EvidenceSourceKind::CodeDiff, None)];
+        let detail = stub_detail(task, evidence);
+
+        let wire: TaskDetailWire = detail.into();
+        assert!(wire.task.has_code_diff);
+    }
+
+    #[test]
+    fn code_diff_kind_serializes_to_schema_enum_value() {
+        // The septa evidence-ref-v1 schema lists "code_diff"; serde, FromStr,
+        // and Display must all agree on that snake_case spelling.
+        let json = serde_json::to_value(EvidenceSourceKind::CodeDiff).expect("serialize");
+        assert_eq!(json, serde_json::Value::String("code_diff".into()));
+
+        let parsed: EvidenceSourceKind =
+            serde_json::from_value(serde_json::Value::String("code_diff".into())).expect("parse");
+        assert_eq!(parsed, EvidenceSourceKind::CodeDiff);
+
+        assert_eq!(EvidenceSourceKind::CodeDiff.to_string(), "code_diff");
+        assert_eq!(
+            "code_diff".parse::<EvidenceSourceKind>().expect("fromstr"),
+            EvidenceSourceKind::CodeDiff
+        );
+
+        // The CLI emitter path (`--evidence-source-kind code_diff`) resolves
+        // through clap's ValueEnum, which must agree on the same snake_case
+        // spelling as serde/Display/FromStr.
+        assert_eq!(
+            clap::ValueEnum::to_possible_value(&EvidenceSourceKind::CodeDiff)
+                .expect("value variant")
+                .get_name(),
+            "code_diff"
+        );
     }
 
     #[test]
