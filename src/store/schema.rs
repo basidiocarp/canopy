@@ -443,6 +443,27 @@ fn migrations() -> Migrations<'static> {
             );
             Ok(())
         }),
+        // M7: back-patches all tables' columns onto DBs at user_version >= 1 that never ran
+        // the post-release BASE_SCHEMA additions. bootstrap_existing_db only patches DBs at
+        // user_version == 0, so any DB stamped >= 1 before these columns were added never
+        // received them. This migration re-applies every add_*_columns patch safely — each
+        // one ignores duplicate-column errors — so long-lived DBs converge to the full schema.
+        //
+        // Safety contract: this stays a no-op on fresh/up-to-date DBs only because every
+        // add_*_columns function swallows duplicate-column errors via `let _ = conn.execute(...)`.
+        // If one were changed to propagate ALTER errors, the `?` below would fail M7 on fresh
+        // DBs — the fresh-install parity test guards against that regression.
+        M::up_with_hook("", |tx| {
+            add_tasks_columns(tx)?;
+            add_handoffs_columns(tx)?;
+            add_agents_columns(tx)?;
+            add_council_sessions_columns(tx)?;
+            add_council_messages_columns(tx)?;
+            add_evidence_refs_columns(tx)?;
+            add_task_events_columns(tx)?;
+            add_agent_heartbeat_events_columns(tx)?;
+            Ok(())
+        }),
     ])
 }
 

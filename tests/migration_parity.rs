@@ -9,6 +9,95 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
+// Minimal seed for a DB that was already at user_version=1 when the handoff
+// and agent patch columns were introduced. Simulates an operator DB that
+// bootstrap_existing_db did NOT patch (because user_version != 0) and that
+// predates the new M7 back-patch migration.
+//
+// Tables are created with only the columns that existed before the add_*_columns
+// patches were added (later columns are intentionally absent so M7 has real work
+// to do). The seed then stamps user_version=1 so that bootstrap_existing_db
+// early-returns and to_latest() runs M1..M7 — M1 creates review_annotations from
+// scratch (not present in this seed), M2/M3 add tasks columns, M4..M7 are hooks.
+const LEGACY_V1_SEED_SQL: &str = r"
+    CREATE TABLE tasks (
+        task_id           TEXT PRIMARY KEY,
+        title             TEXT NOT NULL,
+        description       TEXT NULL,
+        requested_by      TEXT NOT NULL,
+        project_root      TEXT NOT NULL,
+        status            TEXT NOT NULL,
+        verification_state TEXT NOT NULL,
+        owner_agent_id    TEXT NULL
+    );
+    CREATE TABLE agents (
+        agent_id       TEXT PRIMARY KEY,
+        host_id        TEXT NOT NULL,
+        host_type      TEXT NOT NULL,
+        host_instance  TEXT NOT NULL,
+        model          TEXT NOT NULL,
+        project_root   TEXT NOT NULL,
+        worktree_id    TEXT NOT NULL,
+        status         TEXT NOT NULL,
+        heartbeat_at   TEXT NULL
+    );
+    CREATE TABLE handoffs (
+        handoff_id     TEXT PRIMARY KEY,
+        task_id        TEXT NOT NULL,
+        from_agent_id  TEXT NOT NULL,
+        to_agent_id    TEXT NOT NULL,
+        handoff_type   TEXT NOT NULL,
+        summary        TEXT NOT NULL,
+        requested_action TEXT NULL,
+        status         TEXT NOT NULL
+    );
+    CREATE TABLE council_sessions (
+        council_session_id TEXT PRIMARY KEY,
+        task_id            TEXT NOT NULL,
+        project_root       TEXT NOT NULL,
+        worktree_id        TEXT NULL,
+        participants_json  TEXT NOT NULL DEFAULT '[]',
+        state              TEXT NOT NULL,
+        transcript_ref     TEXT NULL,
+        timeline_ref       TEXT NOT NULL,
+        opened_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE council_messages (
+        message_id      TEXT PRIMARY KEY,
+        task_id         TEXT NOT NULL,
+        author_agent_id TEXT NOT NULL,
+        message_type    TEXT NOT NULL,
+        body            TEXT NOT NULL
+    );
+    CREATE TABLE evidence_refs (
+        evidence_id  TEXT PRIMARY KEY,
+        task_id      TEXT NOT NULL,
+        source_kind  TEXT NOT NULL,
+        source_ref   TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        summary      TEXT NULL
+    );
+    CREATE TABLE task_events (
+        event_id     TEXT PRIMARY KEY,
+        task_id      TEXT NOT NULL,
+        event_type   TEXT NOT NULL,
+        actor        TEXT NOT NULL,
+        from_status  TEXT NULL,
+        to_status    TEXT NOT NULL,
+        note         TEXT NULL,
+        created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE agent_heartbeat_events (
+        heartbeat_id    TEXT PRIMARY KEY,
+        agent_id        TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        current_task_id TEXT NULL,
+        source          TEXT NOT NULL,
+        created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    PRAGMA user_version = 1;
+";
+
 // Minimal seed representing a pre-migration-framework canopy install.
 //
 // bootstrap_existing_db (schema.rs:441) triggers when: tasks table exists AND
@@ -165,4 +254,73 @@ fn fresh_install_and_bootstrap_migration_produce_same_schema() {
             legacy_only_cols,
         );
     }
+}
+
+/// Regression test: M7 back-patches handoff and agent columns onto a DB that
+/// was already at `user_version=1` when those columns were introduced.
+///
+/// `bootstrap_existing_db` only patches DBs at `user_version==0`. A DB stamped >=1
+/// before the patch columns were added never received them, causing `canopy api task`
+/// to fail. M7 closes this gap by re-running all add_*_columns patches as a safe
+/// no-op for up-to-date DBs and a real repair for stale ones.
+#[test]
+fn migration_m7_back_patches_columns_on_user_version_1_db() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("v1legacy.db");
+
+    // Seed the DB with pre-patch tables and stamp user_version=1 so that
+    // bootstrap_existing_db returns early without patching.
+    {
+        let conn = Connection::open(&path).expect("seed connection");
+        conn.execute_batch(LEGACY_V1_SEED_SQL).expect("seed schema");
+    }
+
+    // Confirm the columns are absent before migration.
+    {
+        let conn = Connection::open(&path).expect("pre-check connection");
+        let handoff_cols_before: HashSet<String> = conn
+            .prepare("PRAGMA table_info('handoffs')")
+            .expect("prepare")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query")
+            .map(|r| r.expect("col name"))
+            .collect();
+        assert!(
+            !handoff_cols_before.contains("assignee_type"),
+            "assignee_type should be absent before migration"
+        );
+    }
+
+    // Run the full migration (bootstrap returns early; to_latest runs M1..M7).
+    Store::open(&path).expect("Store::open failed on v1 legacy DB");
+
+    let schema = read_schema(&path);
+
+    // Handoff columns added by add_handoffs_columns must now be present.
+    let handoff_cols = schema
+        .columns
+        .get("handoffs")
+        .expect("handoffs table not found");
+    for col in &[
+        "assignee_type",
+        "assignee_id",
+        "disposition",
+        "disposition_reason",
+    ] {
+        assert!(
+            handoff_cols.contains(*col),
+            "handoffs.{col} missing after M7 back-patch"
+        );
+    }
+
+    // At least one column from add_agents_columns must also be present, confirming
+    // the full patch suite ran and not just the handoffs patch.
+    let agent_cols = schema
+        .columns
+        .get("agents")
+        .expect("agents table not found");
+    assert!(
+        agent_cols.contains("last_heartbeat_at"),
+        "agents.last_heartbeat_at missing after M7 back-patch"
+    );
 }
